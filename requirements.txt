@@ -1,1 +1,9 @@
-rich
+# Core CLI
+rich>=13.0.0
+
+# Optional GUIs
+customtkinter>=5.2.0
+Pillow>=9.0.0
+
+# Optional Flask API (REMUX Python Scripts/backend.py)
+flask>=2.3.0

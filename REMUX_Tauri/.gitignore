@@ -1,0 +1,9 @@
+# Remux Pro (Tauri)
+node_modules/
+dist/
+.vite/
+src-tauri/target/
+src-tauri/target_*/
+*.log
+.DS_Store
+public/.DS_Store
