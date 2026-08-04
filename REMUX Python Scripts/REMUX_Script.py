@@ -26,6 +26,7 @@ console = Console()
 # ---------- Helpers ----------
 
 def find_mkvmerge() -> Optional[str]:
+    """Find mkvmerge executable in system PATH or common installation locations."""
     mk = shutil.which("mkvmerge") or shutil.which("mkvmerge.exe")
     if mk:
         return mk
@@ -33,14 +34,20 @@ def find_mkvmerge() -> Optional[str]:
     return candidate if Path(candidate).exists() else None
 
 def identify_tracks(mkvmerge_path: str, src: Path, timeout: float = 10.0):
+    """Identify tracks in an MKV file using mkvmerge."""
     cmd = [mkvmerge_path, "--identify", "--identification-format", "json", str(src)]
     try:
         res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=timeout, check=False)
         if res.returncode != 0:
-            return {"ok": False, "err": res.stderr.strip() or res.stdout.strip() or f"rc={res.returncode}"}
+            error_msg = res.stderr.strip() or res.stdout.strip() or f"Return code: {res.returncode}"
+            return {"ok": False, "err": f"Failed to identify tracks in {src.name}: {error_msg}"}
         return {"ok": True, "data": json.loads(res.stdout)}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "err": f"Timeout while identifying tracks in {src.name}"}
+    except json.JSONDecodeError as e:
+        return {"ok": False, "err": f"Invalid JSON response from mkvmerge for {src.name}: {e}"}
     except Exception as e:
-        return {"ok": False, "err": str(e)}
+        return {"ok": False, "err": f"Error identifying tracks in {src.name}: {str(e)}"}
 
 def get_available_languages(mkvmerge_path: str, files: list):
     """Scan all MKV files and return available audio and subtitle languages."""
@@ -98,12 +105,14 @@ def prompt_language_selection(audio_langs_available, sub_langs_available):
     return audio_langs, sub_langs
 
 def shorten(name: str, max_len: int = 40) -> str:
+    """Shorten a filename to fit within max_len characters, showing beginning and end."""
     if len(name) <= max_len:
         return name
     half = (max_len - 3) // 2
     return name[:half] + "..." + name[-half:]
 
 def fmt_time(sec: Optional[float]) -> str:
+    """Format seconds as MM:SS."""
     if sec is None:
         return "--:--"
     try:
@@ -114,7 +123,18 @@ def fmt_time(sec: Optional[float]) -> str:
     except Exception:
         return "--:--"
 
+def fmt_size(size_bytes: int) -> str:
+    """Format file size in human-readable format."""
+    if size_bytes == 0:
+        return "0 B"
+    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+        if size_bytes < 1024.0:
+            return f"{size_bytes:.1f} {unit}"
+        size_bytes /= 1024.0
+    return f"{size_bytes:.1f} PB"
+
 def _start_stdout_reader(stream, q: queue.Queue):
+    """Start a background thread to read from stream and put lines into queue."""
     def _reader():
         try:
             for ln in iter(stream.readline, ""):
@@ -136,17 +156,21 @@ def build_table(rows, batch_info):
     """Return a rich.Table based on current rows and batch_info dict."""
     table = Table(show_header=True, header_style="bold magenta", expand=False)
     table.add_column("SL No.", width=6, justify="right")
-    table.add_column("Filename", width=40, overflow="fold")
+    table.add_column("Filename", width=35, overflow="fold")
+    table.add_column("Size", width=10, justify="right")
     table.add_column("Progress", width=22)
     table.add_column("%", width=5, justify="right")
     table.add_column("Elapsed", width=8, justify="right")
     table.add_column("Remaining", width=10, justify="right")
-    table.add_column("Status", width=12)
+    table.add_column("Status", width=15)
     table.add_column("Result", width=8, justify="center")
 
     for i, r in enumerate(rows):
         # filename (without checkmark/cross - those go in Result column)
         fname_display = f"[cyan]{r['display_name']}[/cyan]"
+
+        # file size
+        size_str = fmt_size(r.get("size", 0))
 
         # progress bar - always show, regardless of completion status
         pct = int(r.get("pct", 0))
@@ -171,7 +195,8 @@ def build_table(rows, batch_info):
 
         table.add_row(
             str(r["no"]), 
-            fname_display, 
+            fname_display,
+            size_str,
             progress_cell, 
             pct_display,
             elapsed, 
@@ -182,7 +207,7 @@ def build_table(rows, batch_info):
         
         # Add separator row after each file (except the last one)
         if i < len(rows) - 1:
-            table.add_row("", "", "", "", "", "", "", "")
+            table.add_row("", "", "", "", "", "", "", "", "")
 
     # Add an empty row for separation before batch row
     table.add_row("", "", "", "", "", "", "", "")
@@ -205,6 +230,7 @@ def build_table(rows, batch_info):
     table.add_row(
         "",
         "[bold bright_yellow]Batch Progress[/bold bright_yellow]",
+        "",
         batch_progress_cell,
         batch_pct,
         batch_elapsed,
@@ -251,14 +277,16 @@ def remux_file_and_update(mkvmerge_path: str, src_path: Path, out_path: Path, ro
     # identify tracks
     ident = identify_tracks(mkvmerge_path, src_path)
     if not ident["ok"]:
+        error_msg = ident.get('err', 'Unknown error')
         row["finished"] = True
         row["success"] = False
-        row["status_text"] = f"FAILED identify"
+        row["status_text"] = f"ID Failed"
         row["pct"] = 0
         row["elapsed"] = 0.0
         row["remaining"] = 0.0
         live.update(build_table(rows, compute_batch(rows, batch_start, completed_times)))
-        return False, 0.0, f"identify failed: {ident.get('err')}"
+        console.print(f"[red]Error: {error_msg}[/red]")
+        return False, 0.0, error_msg
 
     # pick audio & subtitle ids
     audio_ids = []
@@ -266,7 +294,7 @@ def remux_file_and_update(mkvmerge_path: str, src_path: Path, out_path: Path, ro
     for t in ident["data"].get("tracks", []):
         ttype = (t.get("type") or "").lower()
         props = t.get("properties") or {}
-        lang = (props.get("language") or "").lower()
+        lang = (props.get("language") or "und").lower()
         tid = t.get("id")
         if ttype == "audio" and isinstance(tid, int) and lang in audio_langs:
             audio_ids.append(tid)
@@ -289,7 +317,7 @@ def remux_file_and_update(mkvmerge_path: str, src_path: Path, out_path: Path, ro
         cmd += ["--subtitle-tracks", ",".join(map(str, sub_ids))]
     else:
         cmd += ["--no-subtitles"]
-    cmd += ["--ui-language", "en", "--gui-mode", str(src_path)]
+    cmd += ["--ui-language", "en", str(src_path)]
     log_commands.append(" ".join(cmd))
 
     if dry_run:
@@ -306,6 +334,7 @@ def remux_file_and_update(mkvmerge_path: str, src_path: Path, out_path: Path, ro
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 text=True, bufsize=1, encoding="utf-8", errors="replace")
     except Exception as e:
+        error_msg = f"Failed to launch mkvmerge for {src_path.name}: {str(e)}"
         row["finished"] = True
         row["success"] = False
         row["status_text"] = f"Launch failed"
@@ -313,7 +342,8 @@ def remux_file_and_update(mkvmerge_path: str, src_path: Path, out_path: Path, ro
         row["elapsed"] = 0.0
         row["remaining"] = 0.0
         live.update(build_table(rows, compute_batch(rows, batch_start, completed_times)))
-        return False, 0.0, f"launch error: {e}"
+        console.print(f"[red]Error: {error_msg}[/red]")
+        return False, 0.0, error_msg
 
     q = queue.Queue()
     _start_stdout_reader(proc.stdout, q)
@@ -358,6 +388,11 @@ def remux_file_and_update(mkvmerge_path: str, src_path: Path, out_path: Path, ro
                     pct = int(min(99, (cur / src_size) * 100))
                 except Exception:
                     pct = 0
+                # Clamp percentage to valid range [0, 100] to prevent negative remaining time
+                if pct < 0:
+                    pct = 0
+                if pct > 100:
+                    pct = 100
                 if pct > row["pct"]:
                     row["pct"] = pct
                     now = time.time()
@@ -399,6 +434,7 @@ def remux_file_and_update(mkvmerge_path: str, src_path: Path, out_path: Path, ro
 # ---------- Batch helper ----------
 
 def compute_batch(rows, batch_start, completed_times):
+    """Compute batch progress information from individual file rows."""
     total = len(rows)
     done = sum(1 for r in rows if r.get("finished") and r.get("success"))
     # batch pct - average of per-file pct
@@ -414,6 +450,8 @@ def compute_batch(rows, batch_start, completed_times):
         for r in rows:
             if (not r.get("finished")) and r.get("pct", 0) > 0:
                 pct = r["pct"]
+                # Clamp percentage to valid range [0, 100] to prevent negative remaining time
+                pct = max(0, min(100, pct))
                 if pct > 0:
                     current_elapsed = r.get("elapsed", 0.0)
                     current_remaining = current_elapsed * (100 - pct) / pct
@@ -427,6 +465,8 @@ def compute_batch(rows, batch_start, completed_times):
         for r in rows:
             if (not r.get("finished")) and r.get("pct", 0) > 0:
                 pct = r["pct"]
+                # Clamp percentage to valid range [0, 100] to prevent negative remaining time
+                pct = max(0, min(100, pct))
                 if pct > 0:
                     current_elapsed = r.get("elapsed", 0.0)
                     current_remaining = current_elapsed * (100 - pct) / pct
@@ -444,28 +484,44 @@ def compute_batch(rows, batch_start, completed_times):
 # ---------- Main ----------
 
 def main():
+    """Main entry point for the CLI remuxing application."""
     console.print("[bold cyan]=== MKVToolNix batch remux ===[/]")
 
     inp = input("Enter input directory path: ").strip().strip('"')
     if not inp:
-        console.print("[red]Input directory required.[/]")
+        console.print("[red]Error: Input directory is required.[/]")
         return
     input_dir = Path(inp)
-    if not input_dir.exists() or not input_dir.is_dir():
-        console.print(f"[red]Directory not found: {input_dir}[/]")
+    if not input_dir.exists():
+        console.print(f"[red]Error: Input directory does not exist: {input_dir}[/]")
+        console.print("[yellow]Please check the path and try again.[/yellow]")
+        return
+    if not input_dir.is_dir():
+        console.print(f"[red]Error: Path is not a directory: {input_dir}[/]")
         return
 
     outp = input("Enter output directory path (blank = remuxed): ").strip().strip('"')
     output_dir = Path(outp) if outp else input_dir / "remuxed"
-    output_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+    except PermissionError:
+        console.print(f"[red]Error: Permission denied. Cannot create output directory: {output_dir}[/]")
+        console.print("[yellow]Please check permissions or choose a different location.[/yellow]")
+        return
+    except Exception as e:
+        console.print(f"[red]Error: Cannot create output directory: {e}[/]")
+        return
 
     skip_if_exists = (input("Skip files if output exists? (Y/n) [Y]: ").strip().lower() != "n")
     dry_run = (input("Dry-run only? (y/N) [N]: ").strip().lower() == "y")
 
     mkvmerge_path = find_mkvmerge()
     if not mkvmerge_path:
-        console.print("[red]✗ mkvmerge not found on PATH. Install MKVToolNix or add mkvmerge to PATH.[/]")
+        console.print("[red]Error: mkvmerge not found.[/]")
+        console.print("[yellow]Please install MKVToolNix from https://mkvtoolnix.download/[/yellow]")
+        console.print("[yellow]Or ensure mkvmerge is in your system's PATH.[/yellow]")
         return
+    console.print(f"[green]Found mkvmerge: {mkvmerge_path}[/green]\n")
 
     # collect mkv files
     mkv_files = sorted(input_dir.glob("*.mkv"))
@@ -493,10 +549,15 @@ def main():
     # prepare rows
     rows = []
     for i, f in enumerate(mkv_files, start=1):
+        try:
+            file_size = f.stat().st_size if f.exists() else 0
+        except Exception:
+            file_size = 0
         rows.append({
             "no": i,
             "fullname": f.name,
-            "display_name": shorten(f.name, 40),
+            "display_name": shorten(f.name, 35),
+            "size": file_size,
             "pct": 0,
             "elapsed": 0.0,
             "remaining": None,
@@ -531,7 +592,7 @@ def main():
 
     # write final plain-text summary table to log
     final_lines = []
-    final_lines.append("SL No.\tFilename\tProgress\tElapsed\tRemaining\tStatus\tResult")
+    final_lines.append("SL No.\tFilename\tSize\tProgress\tElapsed\tRemaining\tStatus\tResult")
     ok_count = 0
     fail_count = 0
     for r in rows:
@@ -543,8 +604,9 @@ def main():
         elif r.get("finished") and not r.get("success"):
             fail_count += 1
             result_text = "FAILED"
+        size_str = fmt_size(r.get("size", 0))
         final_lines.append(
-            f"{r['no']}\t{r['fullname']}\t{int(r.get('pct',0))}%\t"
+            f"{r['no']}\t{r['fullname']}\t{size_str}\t{int(r.get('pct',0))}%\t"
             f"{fmt_time(r.get('elapsed'))}\t{fmt_time(r.get('remaining')) if r.get('remaining') is not None else '--:--'}\t"
             f"{status_text}\t{result_text}"
         )

@@ -1,10 +1,48 @@
-# Python cache
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
 *.pyo
 *.pyd
+.Python
 
-# Virtual environment
+# Virtual environments
 .env
+.env.*
+!.env.example
 env/
 venv/
+.venv/
+
+# Logs / local runtime outputs
+*.log
+remux_log.txt
+backend_debug.log
+remux_gui.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/*
+!.vscode/settings.json
+
+# Node / frontend
+node_modules/
+dist/
+.vite/
+*.local
+
+# Rust / Tauri build artifacts
+**/target/
+**/target_*/
+*.exe
+*.msi
+*.AppImage
+*.dmg
+
+# Python tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
