@@ -2,7 +2,7 @@
 """
 remux_gui.py
 A GUI for the batch remuxing script with automatic language detection, built with tkinter.
-Modern dark mode UI with stylized logo and intuitive design.
+Modern dark mode Tkinter UI with progress table and log export.
 """
 
 import json
@@ -23,8 +23,8 @@ from tkinter import ttk, filedialog, messagebox, scrolledtext
 # --- Constants ---
 MKVMERGE_TIMEOUT = 10.0
 PROGRESS_UPDATE_INTERVAL = 100  # milliseconds
-DEFAULT_WINDOW_SIZE = "1100x800"
-MIN_WINDOW_SIZE = (900, 650)
+DEFAULT_WINDOW_SIZE = "1100x720"
+MIN_WINDOW_SIZE = (900, 600)
 
 # --- Dark Theme Colors ---
 DARK_BG = "#1e1e1e"  # Main background
@@ -377,44 +377,6 @@ class RemuxApp:
     def build_ui(self):
         """Construct the main application widgets."""
         root = self.root
-
-        # --- Header with Logo ---
-        header_frame = tk.Frame(root, bg=DARK_BG, height=100)
-        header_frame.pack(fill=tk.X, padx=0, pady=0)
-        header_frame.pack_propagate(False)
-        
-        # Logo and Title
-        logo_frame = tk.Frame(header_frame, bg=DARK_BG)
-        logo_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=15)
-        
-        # Stylized Logo (Unicode/ASCII art)
-        logo_text = """╔═══════════════════════════════════════╗
-║   ███╗   ███╗██╗  ██╗██╗   ██╗   ║
-║   ████╗ ████║██║ ██╔╝██║   ██║   ║
-║   ██╔████╔██║█████╔╝ ██║   ██║   ║
-║   ██║╚██╔╝██║██╔═██╗ ██║   ██║   ║
-║   ██║ ╚═╝ ██║██║  ██╗╚██████╔╝   ║
-║   ╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝    ║
-║      Batch Remuxer v2.0          ║
-╚═══════════════════════════════════════╝"""
-        
-        logo_label = tk.Label(logo_frame, text=logo_text, 
-                              font=("Consolas", "10", "bold"),
-                              bg=DARK_BG, fg=DARK_SELECT,
-                              justify=tk.LEFT)
-        logo_label.pack(side=tk.LEFT)
-        
-        # Subtitle
-        subtitle_label = tk.Label(logo_frame, 
-                                 text="Professional MKV Batch Processing\nwith Language Selection",
-                                 font=("Segoe UI", "10"),
-                                 bg=DARK_BG, fg=DARK_FG,
-                                 justify=tk.LEFT)
-        subtitle_label.pack(side=tk.LEFT, padx=(20, 0), pady=10)
-        
-        # Separator line
-        separator = tk.Frame(root, bg=DARK_BORDER, height=2)
-        separator.pack(fill=tk.X, padx=0, pady=0)
 
         # --- UI Setup ---
         main_frame = tk.Frame(root, bg=DARK_BG, padx=20, pady=15)
