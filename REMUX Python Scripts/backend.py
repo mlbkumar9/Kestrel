@@ -77,7 +77,7 @@ def normalize_langs(langs):
 @app.route('/')
 def index():
     return jsonify({
-        "name": "MKV Batch Remuxer API",
+        "name": "LangMux API",
         "status": "ok",
         "mkvmerge": bool(MKVMERGE_PATH),
         "endpoints": ["/api/scan", "/api/remux", "/api/cancel", "/api/stream", "/api/status"],

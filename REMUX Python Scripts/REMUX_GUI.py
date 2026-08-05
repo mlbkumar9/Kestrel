@@ -289,7 +289,7 @@ class ToolTip:
 class RemuxApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("MKV Batch Remuxer")
+        self.root.title("LangMux")
         self.root.geometry(DEFAULT_WINDOW_SIZE)
         self.root.minsize(*MIN_WINDOW_SIZE)
         
@@ -900,7 +900,7 @@ class RemuxApp:
         
         try:
             with open(filename, 'w', encoding='utf-8') as f:
-                f.write("MKV Batch Remuxer - Operation Log\n")
+                f.write("LangMux - Operation Log\n")
                 f.write("=" * 50 + "\n\n")
                 f.write(f"Date: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
                 f.write(f"Input Directory: {self.input_dir.get()}\n")

@@ -604,11 +604,11 @@ function App() {
         <div data-tauri-drag-region className="h-16 flex items-center px-6 border-b overflow-hidden whitespace-nowrap" style={{ borderColor: theme === "dark" ? "rgba(39, 39, 42, 0.2)" : "rgba(228, 228, 231, 0.5)" }}>
           <img 
             src="/app-icon.png" 
-            alt="Remux Pro"
+            alt="LangMux"
             className="w-8 h-8 min-w-[2rem] rounded-lg mr-3 shadow-glow-blue"
           />
           <span className={cn("font-bold text-lg tracking-tight transition-opacity duration-200 text-gradient-blue", isSidebarCollapsed ? "opacity-0 w-0" : "opacity-100")}>
-            Remux Pro
+            LangMux
           </span>
         </div>
 

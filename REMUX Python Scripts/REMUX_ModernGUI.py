@@ -112,7 +112,7 @@ class ModernRemuxApp(ctk.CTk):
     def __init__(self):
         super().__init__()
 
-        self.title("MKV Batch Remuxer Pro")
+        self.title("LangMux")
         self.geometry(DEFAULT_WINDOW_SIZE)
         self.minsize(*MIN_WINDOW_SIZE)
         
@@ -133,7 +133,7 @@ class ModernRemuxApp(ctk.CTk):
         self.sidebar_frame.grid(row=0, column=0, rowspan=4, sticky="nsew")
         self.sidebar_frame.grid_rowconfigure(4, weight=1)
 
-        self.logo_label = ctk.CTkLabel(self.sidebar_frame, text="REMUX\nPRO", font=ctk.CTkFont(size=24, weight="bold"))
+        self.logo_label = ctk.CTkLabel(self.sidebar_frame, text="LangMux", font=ctk.CTkFont(size=24, weight="bold"))
         self.logo_label.grid(row=0, column=0, padx=20, pady=(20, 10))
 
         self.sidebar_btn_1 = ctk.CTkButton(self.sidebar_frame, text="Dashboard", command=self.sidebar_button_event)

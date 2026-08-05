@@ -1,6 +1,6 @@
-# MKV Batch Remuxer
+# LangMux
 
-A cross-platform toolkit for batch remuxing Matroska (`.mkv`) files with selective audio and subtitle tracks. Choose the interface that fits your workflow: Tauri desktop app (recommended), classic Tkinter GUI, CustomTkinter GUI, interactive Rich CLI, or a Flask JSON API.
+**Selective MKV language remuxer** — batch remux Matroska (`.mkv`) files with chosen audio and subtitle tracks by ISO 639-2 language code. Choose the interface that fits your workflow: Tauri desktop app (recommended), classic Tkinter GUI, CustomTkinter GUI, interactive Rich CLI, or a Flask JSON API.
 
 **Requires [MKVToolNix](https://mkvtoolnix.download/)** — `mkvmerge` must be installed and on your PATH (or at the default Windows install path).
 
@@ -34,8 +34,8 @@ Optional Python packages are listed in `requirements.txt` (Rich, CustomTkinter, 
 ## Installation
 
 ```bash
-git clone https://github.com/mlbkumar9/Project_13.git
-cd Project_13
+git clone https://github.com/mlbkumar9/LangMux.git
+cd LangMux
 pip install -r requirements.txt
 ```
 
@@ -125,13 +125,13 @@ curl -s -X POST http://127.0.0.1:5000/api/scan -H "Content-Type: application/jso
 ## Project structure
 
 ```
-Project_13/
+LangMux/
 ├── REMUX Python Scripts/
 │   ├── remux_gui.py          # Tkinter GUI (classic)
 │   ├── REMUX_ModernGUI.py    # CustomTkinter GUI
 │   ├── REMUX_Script.py       # Rich CLI
 │   └── backend.py            # Flask API
-├── REMUX_Tauri/              # Tauri + React desktop app
+├── REMUX_Tauri/              # Tauri + React desktop app (LangMux)
 │   ├── src/                  # React frontend
 │   ├── src-tauri/            # Rust backend
 │   └── public/               # Static assets (app-icon.png)

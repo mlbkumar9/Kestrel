@@ -485,7 +485,7 @@ def compute_batch(rows, batch_start, completed_times):
 
 def main():
     """Main entry point for the CLI remuxing application."""
-    console.print("[bold cyan]=== MKVToolNix batch remux ===[/]")
+    console.print("[bold cyan]=== LangMux — selective MKV language remux ===[/]")
 
     inp = input("Enter input directory path: ").strip().strip('"')
     if not inp:

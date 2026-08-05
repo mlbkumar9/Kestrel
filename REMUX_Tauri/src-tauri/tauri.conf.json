@@ -1,7 +1,7 @@
 {
-  "productName": "remux-pro",
+  "productName": "LangMux",
   "version": "0.1.0",
-  "identifier": "com.remux.pro",
+  "identifier": "com.langmux.app",
   "build": {
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build",
@@ -11,7 +11,7 @@
   "app": {
     "windows": [
       {
-        "title": "REMUX PRO",
+        "title": "LangMux",
         "width": 1000,
         "height": 700,
         "minWidth": 800,
