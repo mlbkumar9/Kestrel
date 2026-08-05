@@ -25,7 +25,6 @@ from typing import Optional, Dict, List, Tuple
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import customtkinter as ctk
-from PIL import Image
 
 # --- Constants ---
 MKVMERGE_TIMEOUT = 10.0

@@ -1,26 +1,22 @@
-from PIL import Image
-import sys
-import os
+from pathlib import Path
 
-def convert_ico_to_png(ico_path, png_path):
+from PIL import Image
+
+
+def convert_ico_to_png(ico_path: Path, png_path: Path) -> None:
     try:
         img = Image.open(ico_path)
-        img.save(png_path, format='PNG')
+        png_path.parent.mkdir(parents=True, exist_ok=True)
+        img.save(png_path, format="PNG")
         print(f"Converted {ico_path} to {png_path}")
     except Exception as e:
         print(f"Error converting icon: {e}")
 
+
 if __name__ == "__main__":
-    convert_ico_to_png(
-        r"C:\Users\Maahi\Projects\13. Project_13\logo.ico",
-        r"C:\Users\Maahi\Projects\13. Project_13\REMUX_Tauri\src-tauri\icons\icon.png"
-    )
-    # Also update 32x32 and 128x128 for good measure
-    convert_ico_to_png(
-        r"C:\Users\Maahi\Projects\13. Project_13\logo.ico",
-        r"C:\Users\Maahi\Projects\13. Project_13\REMUX_Tauri\src-tauri\icons\32x32.png"
-    )
-    convert_ico_to_png(
-        r"C:\Users\Maahi\Projects\13. Project_13\logo.ico",
-        r"C:\Users\Maahi\Projects\13. Project_13\REMUX_Tauri\src-tauri\icons\128x128.png"
-    )
+    repo_root = Path(__file__).resolve().parent.parent
+    icons_dir = Path(__file__).resolve().parent / "src-tauri" / "icons"
+    ico_path = repo_root / "logo.ico"
+
+    for name in ("icon.png", "32x32.png", "128x128.png"):
+        convert_ico_to_png(ico_path, icons_dir / name)
