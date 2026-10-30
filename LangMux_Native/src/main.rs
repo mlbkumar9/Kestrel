@@ -3,6 +3,7 @@
 mod app;
 mod mkv;
 mod theme;
+mod tools;
 mod worker;
 
 use eframe::egui;

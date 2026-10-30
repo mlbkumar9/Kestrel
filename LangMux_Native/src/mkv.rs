@@ -1,14 +1,17 @@
+use crate::tools;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Output;
 use std::sync::OnceLock;
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct TrackInfo {
     pub id: u64,
+    pub mkvmerge_id: Option<u64>,
+    pub ffprobe_index: Option<u64>,
     pub language: String,
     pub codec: String,
     pub title: Option<String>,
@@ -40,30 +43,6 @@ pub struct BatchStats {
 pub struct AvailableLanguages {
     pub audio: Vec<String>,
     pub subtitles: Vec<String>,
-}
-
-pub fn find_mkvmerge() -> Result<PathBuf, String> {
-    let executable = if cfg!(windows) {
-        "mkvmerge.exe"
-    } else {
-        "mkvmerge"
-    };
-
-    if let Some(path) = std::env::var_os("PATH") {
-        for directory in std::env::split_paths(&path) {
-            let candidate = directory.join(executable);
-            if candidate.is_file() {
-                return Ok(candidate);
-            }
-        }
-    }
-
-    let default_windows = Path::new(r"C:\Program Files\MKVToolNix\mkvmerge.exe");
-    if cfg!(windows) && default_windows.is_file() {
-        return Ok(default_windows.to_path_buf());
-    }
-
-    Err("mkvmerge not found. Install MKVToolNix and ensure mkvmerge is on PATH.".to_owned())
 }
 
 pub fn normalize_languages(languages: &[String]) -> Vec<String> {
@@ -128,13 +107,67 @@ pub fn output_path(output_directory: &Path, input: &Path) -> PathBuf {
     output_directory.join(input.file_name().unwrap_or_default())
 }
 
-pub fn read_metadata(executable: &Path, input: &Path) -> Result<MediaMetadata, String> {
-    let output = command(executable)
-        .arg("-J")
+pub fn read_metadata(
+    mkvmerge: Option<&Path>,
+    ffprobe: Option<&Path>,
+    input: &Path,
+) -> Result<MediaMetadata, String> {
+    let mkvmerge_result = mkvmerge
+        .map(|executable| {
+            let output = tools::command(executable)
+                .arg("-J")
+                .arg(input)
+                .output()
+                .map_err(|error| format!("Failed to run mkvmerge: {error}"))?;
+            parse_identification_json(&output)
+        })
+        .unwrap_or_else(|| Err("mkvmerge is unavailable".to_owned()));
+
+    match mkvmerge_result {
+        Ok(mut metadata) => {
+            if let Some(executable) = ffprobe
+                && let Ok(probe_metadata) = read_ffprobe_metadata(executable, input)
+            {
+                attach_ffprobe_indices(&mut metadata, &probe_metadata);
+                if metadata.duration.is_none() {
+                    metadata.duration = probe_metadata.duration;
+                }
+            }
+            Ok(metadata)
+        }
+        Err(mkvmerge_error) => {
+            if let Some(executable) = ffprobe {
+                read_ffprobe_metadata(executable, input)
+                    .map_err(|error| format!("{mkvmerge_error}; ffprobe fallback failed: {error}"))
+            } else {
+                Err(format!("{mkvmerge_error}; ffprobe is unavailable"))
+            }
+        }
+    }
+}
+
+fn read_ffprobe_metadata(executable: &Path, input: &Path) -> Result<MediaMetadata, String> {
+    let output = tools::command(executable)
+        .args([
+            "-v",
+            "error",
+            "-print_format",
+            "json",
+            "-show_streams",
+            "-show_format",
+        ])
         .arg(input)
         .output()
-        .map_err(|error| format!("Failed to run mkvmerge: {error}"))?;
-    parse_identification_json(&output)
+        .map_err(|error| format!("Failed to run ffprobe: {error}"))?;
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        return Err(if error.is_empty() {
+            format!("ffprobe exited with status {}", output.status)
+        } else {
+            error
+        });
+    }
+    parse_ffprobe_json(&String::from_utf8_lossy(&output.stdout))
 }
 
 fn parse_identification_json(output: &Output) -> Result<MediaMetadata, String> {
@@ -166,6 +199,8 @@ pub fn parse_metadata_json(json: &str) -> Result<MediaMetadata, String> {
                 .to_ascii_lowercase();
             let info = TrackInfo {
                 id: track["id"].as_u64().unwrap_or_default(),
+                mkvmerge_id: track["id"].as_u64(),
+                ffprobe_index: None,
                 language,
                 codec: track["codec"].as_str().unwrap_or("unknown").to_owned(),
                 title: properties["track_name"].as_str().map(str::to_owned),
@@ -185,6 +220,81 @@ pub fn parse_metadata_json(json: &str) -> Result<MediaMetadata, String> {
         .as_f64()
         .map(|nanoseconds| nanoseconds / 1_000_000_000.0);
     Ok(metadata)
+}
+
+pub fn parse_ffprobe_json(json: &str) -> Result<MediaMetadata, String> {
+    let value: serde_json::Value =
+        serde_json::from_str(json).map_err(|error| format!("Invalid ffprobe JSON: {error}"))?;
+    let mut metadata = MediaMetadata::default();
+
+    if let Some(streams) = value["streams"].as_array() {
+        for stream in streams {
+            let kind = stream["codec_type"].as_str().unwrap_or_default();
+            let language = stream["tags"]["language"]
+                .as_str()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or("und")
+                .trim()
+                .to_ascii_lowercase();
+            let index = stream["index"].as_u64().unwrap_or_default();
+            let codec = stream["codec_name"]
+                .as_str()
+                .unwrap_or("unknown")
+                .to_owned();
+            let info = TrackInfo {
+                id: index,
+                mkvmerge_id: None,
+                ffprobe_index: Some(index),
+                language,
+                codec: codec.clone(),
+                title: stream["tags"]["title"].as_str().map(str::to_owned),
+            };
+            match kind {
+                "video" if metadata.video_codec.is_none() => {
+                    metadata.video_codec = Some(codec);
+                }
+                "audio" => metadata.audio_tracks.push(info),
+                "subtitle" => metadata.subtitle_tracks.push(info),
+                _ => {}
+            }
+        }
+    }
+
+    metadata.duration = value["format"]["duration"]
+        .as_str()
+        .and_then(|duration| duration.parse::<f64>().ok())
+        .or_else(|| value["format"]["duration"].as_f64());
+    Ok(metadata)
+}
+
+fn attach_ffprobe_indices(metadata: &mut MediaMetadata, ffprobe: &MediaMetadata) {
+    attach_track_indices(&mut metadata.audio_tracks, &ffprobe.audio_tracks);
+    attach_track_indices(&mut metadata.subtitle_tracks, &ffprobe.subtitle_tracks);
+}
+
+fn attach_track_indices(tracks: &mut [TrackInfo], probe_tracks: &[TrackInfo]) {
+    let mut used = vec![false; probe_tracks.len()];
+    for track in tracks {
+        let matching_index = probe_tracks
+            .iter()
+            .enumerate()
+            .find(|(index, candidate)| {
+                !used[*index]
+                    && candidate.language == track.language
+                    && candidate.codec.eq_ignore_ascii_case(&track.codec)
+            })
+            .or_else(|| {
+                probe_tracks
+                    .iter()
+                    .enumerate()
+                    .find(|(index, _)| !used[*index])
+            })
+            .map(|(index, _)| index);
+        if let Some(index) = matching_index {
+            used[index] = true;
+            track.ffprobe_index = probe_tracks[index].ffprobe_index;
+        }
+    }
 }
 
 pub fn available_languages(metadata: &[MediaMetadata]) -> AvailableLanguages {
@@ -238,32 +348,103 @@ pub fn build_arguments(
     subtitle_languages: &[String],
     dry_run: bool,
 ) -> Result<Option<Vec<OsString>>, String> {
-    let (audio, subtitles) = selected_tracks(metadata, audio_languages, subtitle_languages);
     if normalize_languages(audio_languages).is_empty() {
         return Err("At least one audio language is required".to_owned());
     }
-    if audio.is_empty() {
+    let audio_tracks = matching_tracks(&metadata.audio_tracks, audio_languages);
+    let subtitle_tracks = matching_tracks(&metadata.subtitle_tracks, subtitle_languages);
+    if audio_tracks.is_empty() {
         return Err("No matching audio tracks found".to_owned());
     }
     if dry_run {
         return Ok(None);
     }
+    let audio_ids = audio_tracks
+        .iter()
+        .map(|track| {
+            track
+                .mkvmerge_id
+                .ok_or_else(|| "MKVToolNix track IDs are unavailable; use FFmpeg".to_owned())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let subtitle_ids = subtitle_tracks
+        .iter()
+        .map(|track| {
+            track
+                .mkvmerge_id
+                .ok_or_else(|| "MKVToolNix track IDs are unavailable; use FFmpeg".to_owned())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
 
     let mut arguments = vec![
         OsString::from("--gui-mode"),
         OsString::from("-o"),
         output.as_os_str().to_owned(),
         OsString::from("--audio-tracks"),
-        OsString::from(join_ids(&audio)),
+        OsString::from(join_ids(&audio_ids)),
     ];
-    if subtitles.is_empty() {
+    if subtitle_ids.is_empty() {
         arguments.push(OsString::from("--no-subtitles"));
     } else {
         arguments.push(OsString::from("--subtitle-tracks"));
-        arguments.push(OsString::from(join_ids(&subtitles)));
+        arguments.push(OsString::from(join_ids(&subtitle_ids)));
     }
     arguments.push(input.as_os_str().to_owned());
     Ok(Some(arguments))
+}
+
+pub fn build_ffmpeg_arguments(
+    input: &Path,
+    output: &Path,
+    metadata: &MediaMetadata,
+    audio_languages: &[String],
+    subtitle_languages: &[String],
+    dry_run: bool,
+) -> Result<Option<Vec<OsString>>, String> {
+    if normalize_languages(audio_languages).is_empty() {
+        return Err("At least one audio language is required".to_owned());
+    }
+    let audio_tracks = matching_tracks(&metadata.audio_tracks, audio_languages);
+    let subtitle_tracks = matching_tracks(&metadata.subtitle_tracks, subtitle_languages);
+    if audio_tracks.is_empty() {
+        return Err("No matching audio tracks found".to_owned());
+    }
+    if dry_run {
+        return Ok(None);
+    }
+
+    let mut arguments = vec![OsString::from("-i"), input.as_os_str().to_owned()];
+    arguments.extend([OsString::from("-map"), OsString::from("0:v?")]);
+    for track in audio_tracks.iter().chain(subtitle_tracks.iter()) {
+        let index = track
+            .ffprobe_index
+            .ok_or_else(|| "FFprobe stream indices are unavailable".to_owned())?;
+        arguments.extend([OsString::from("-map"), OsString::from(format!("0:{index}"))]);
+    }
+    arguments.extend([
+        OsString::from("-map"),
+        OsString::from("0:t?"),
+        OsString::from("-c"),
+        OsString::from("copy"),
+        OsString::from("-map_metadata"),
+        OsString::from("0"),
+        OsString::from("-map_chapters"),
+        OsString::from("0"),
+        OsString::from("-progress"),
+        OsString::from("pipe:1"),
+        OsString::from("-nostats"),
+        OsString::from("-y"),
+        output.as_os_str().to_owned(),
+    ]);
+    Ok(Some(arguments))
+}
+
+fn matching_tracks<'a>(tracks: &'a [TrackInfo], languages: &[String]) -> Vec<&'a TrackInfo> {
+    let languages = normalize_languages(languages);
+    tracks
+        .iter()
+        .filter(|track| languages.contains(&track.language.to_ascii_lowercase()))
+        .collect()
 }
 
 fn join_ids(ids: &[u64]) -> String {
@@ -283,25 +464,22 @@ pub fn parse_progress_line(line: &str) -> Option<u32> {
         .map(|value| value.min(100))
 }
 
-pub fn command(executable: &Path) -> Command {
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        let mut command = Command::new(executable);
-        command.creation_flags(0x08000000);
-        command
-    }
-    #[cfg(not(windows))]
-    {
-        Command::new(executable)
-    }
+pub fn parse_ffmpeg_progress_line(line: &str, duration: Option<f64>) -> Option<u32> {
+    let duration = duration.filter(|duration| duration.is_finite() && *duration > 0.0)?;
+    let microseconds = line
+        .strip_prefix("out_time_us=")?
+        .trim()
+        .parse::<u64>()
+        .ok()?;
+    Some(((microseconds as f64 / 1_000_000.0 / duration) * 100.0).clamp(0.0, 100.0) as u32)
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        MediaMetadata, build_arguments, default_output_dir, normalize_languages,
-        parse_metadata_json, parse_progress_line, selected_tracks,
+        MediaMetadata, build_arguments, build_ffmpeg_arguments, default_output_dir,
+        normalize_languages, parse_ffmpeg_progress_line, parse_ffprobe_json, parse_metadata_json,
+        parse_progress_line, selected_tracks,
     };
     use std::path::Path;
 
@@ -402,6 +580,81 @@ mod tests {
         assert_eq!(parse_progress_line("Progress: 46%"), Some(46));
         assert_eq!(parse_progress_line("#GUI#progress 101"), Some(100));
         assert_eq!(parse_progress_line("No progress here"), None);
+    }
+
+    #[test]
+    fn parses_ffprobe_streams_and_missing_languages() {
+        let metadata = parse_ffprobe_json(include_str!("../tests/fixtures/ffprobe-identify.json"))
+            .expect("fixture should parse");
+        assert_eq!(metadata.video_codec.as_deref(), Some("h264"));
+        assert_eq!(metadata.duration, Some(12.5));
+        assert_eq!(metadata.audio_tracks[0].language, "eng");
+        assert_eq!(metadata.audio_tracks[0].ffprobe_index, Some(1));
+        assert_eq!(metadata.audio_tracks[1].language, "und");
+        assert_eq!(metadata.audio_tracks[1].ffprobe_index, Some(3));
+        assert_eq!(metadata.subtitle_tracks[0].language, "spa");
+    }
+
+    #[test]
+    fn builds_ffmpeg_stream_copy_arguments_with_absolute_indices() {
+        let metadata = parse_ffprobe_json(include_str!("../tests/fixtures/ffprobe-identify.json"))
+            .expect("fixture should parse");
+        let arguments = build_ffmpeg_arguments(
+            Path::new("source.mkv"),
+            Path::new("out/source.mkv"),
+            &metadata,
+            &["eng".to_owned()],
+            &["spa".to_owned()],
+            false,
+        )
+        .expect("arguments should build")
+        .expect("not a dry run")
+        .iter()
+        .map(|argument| argument.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+
+        assert!(arguments.windows(2).any(|pair| pair == ["-map", "0:v?"]));
+        assert!(arguments.windows(2).any(|pair| pair == ["-map", "0:1"]));
+        assert!(arguments.windows(2).any(|pair| pair == ["-map", "0:5"]));
+        assert!(arguments.windows(2).any(|pair| pair == ["-map", "0:t?"]));
+        assert!(arguments.windows(2).any(|pair| pair == ["-c", "copy"]));
+        assert!(
+            arguments
+                .windows(2)
+                .any(|pair| pair == ["-map_metadata", "0"])
+        );
+        assert!(
+            arguments
+                .windows(2)
+                .any(|pair| pair == ["-map_chapters", "0"])
+        );
+        assert!(
+            arguments
+                .windows(2)
+                .any(|pair| pair == ["-progress", "pipe:1"])
+        );
+        assert!(arguments.iter().any(|argument| argument == "-nostats"));
+        assert_eq!(arguments.last().map(String::as_str), Some("out/source.mkv"));
+    }
+
+    #[test]
+    fn parses_ffmpeg_progress_from_format_duration() {
+        assert_eq!(
+            parse_ffmpeg_progress_line("out_time_us=5000000", Some(10.0)),
+            Some(50)
+        );
+        assert_eq!(
+            parse_ffmpeg_progress_line("out_time_us=20000000", Some(10.0)),
+            Some(100)
+        );
+        assert_eq!(
+            parse_ffmpeg_progress_line("out_time_us=5000000", None),
+            None
+        );
+        assert_eq!(
+            parse_ffmpeg_progress_line("progress=continue", Some(10.0)),
+            None
+        );
     }
 
     #[test]

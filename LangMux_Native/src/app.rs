@@ -1,11 +1,12 @@
 use crate::mkv::{self, AvailableLanguages, BatchStats, FileInfo};
 use crate::theme;
-use crate::worker::{self, BatchSpec, FileStatus, WorkerControl, WorkerEvent};
+use crate::tools::{Tool, Toolchain};
+use crate::worker::{self, BatchSpec, FileStatus, RemuxEngine, WorkerControl, WorkerEvent};
 use eframe::CreationContext;
 use eframe::egui;
 use eframe::egui::{
-    Align, Button, Color32, CornerRadius, FontFamily, FontId, Frame, Key, Label, Layout, Margin,
-    Panel, ProgressBar, RichText, ScrollArea, Sense, Stroke, TextEdit,
+    Align, Button, Color32, ComboBox, CornerRadius, FontFamily, FontId, Frame, Key, Label, Layout,
+    Margin, Panel, ProgressBar, RichText, ScrollArea, Sense, Stroke, TextEdit,
 };
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -20,6 +21,8 @@ struct Preferences {
     output_directory: String,
     audio_languages: String,
     subtitle_languages: String,
+    #[serde(default)]
+    engine: RemuxEngine,
     skip_existing: bool,
     dry_run: bool,
     logs_open: bool,
@@ -32,6 +35,7 @@ impl Default for Preferences {
             output_directory: String::new(),
             audio_languages: "eng, jpn".to_owned(),
             subtitle_languages: "eng".to_owned(),
+            engine: RemuxEngine::MkvToolNix,
             skip_existing: true,
             dry_run: false,
             logs_open: false,
@@ -54,8 +58,7 @@ pub struct LangMuxApp {
     stats: BatchStats,
     languages: Option<AvailableLanguages>,
     scan_loading: bool,
-    mkvmerge: Option<PathBuf>,
-    mkvmerge_error: Option<String>,
+    tools: Toolchain,
     sender: mpsc::Sender<WorkerEvent>,
     receiver: mpsc::Receiver<WorkerEvent>,
     control: WorkerControl,
@@ -83,15 +86,15 @@ impl LangMuxApp {
                     egui::TextureOptions::LINEAR,
                 )
             });
-        let preferences = cc
+        let mut preferences: Preferences = cc
             .storage
             .and_then(|storage| eframe::get_value(storage, PREFERENCES_KEY))
             .unwrap_or_default();
         let (sender, receiver) = mpsc::channel();
-        let mkvmerge = mkv::find_mkvmerge().ok();
-        let mkvmerge_error = mkvmerge
-            .is_none()
-            .then(|| "mkvmerge not found. Install MKVToolNix and add it to PATH.".to_owned());
+        let tools = Toolchain::discover();
+        if tools.mkvmerge.is_none() {
+            preferences.engine = RemuxEngine::Ffmpeg;
+        }
         let mut app = Self {
             preferences,
             logo,
@@ -100,8 +103,7 @@ impl LangMuxApp {
             stats: BatchStats::default(),
             languages: None,
             scan_loading: false,
-            mkvmerge,
-            mkvmerge_error,
+            tools,
             sender,
             receiver,
             control: WorkerControl::default(),
@@ -114,10 +116,12 @@ impl LangMuxApp {
             logs: Vec::new(),
             drag_hovered: false,
         };
-        if app.mkvmerge.is_some() {
+        if app.tools.mkvmerge.is_some() {
             app.push_log("MKVToolNix is ready");
-        } else if let Some(error) = app.mkvmerge_error.clone() {
-            app.push_log(error);
+        } else if app.tools.ffmpeg.is_some() {
+            app.push_log("MKVToolNix was not found; FFmpeg is selected");
+        } else {
+            app.push_log("No remux engine was found");
         }
         let input = PathBuf::from(&app.preferences.input_directory);
         if input.is_dir() {
@@ -155,7 +159,7 @@ impl LangMuxApp {
         self.languages = None;
         self.scan_loading = true;
         self.push_log(format!("Scanning {}", directory.display()));
-        worker::scan_directory(directory, self.mkvmerge.clone(), self.sender.clone(), ctx);
+        worker::scan_directory(directory, self.tools.clone(), self.sender.clone(), ctx);
     }
 
     fn browse_input(&mut self, ctx: &egui::Context) {
@@ -204,12 +208,8 @@ impl LangMuxApp {
             self.push_log("Choose a folder with MKV files before starting");
             return;
         }
-        let Some(mkvmerge) = self.mkvmerge.clone() else {
-            let message = self
-                .mkvmerge_error
-                .clone()
-                .unwrap_or_else(|| "mkvmerge is unavailable".to_owned());
-            self.push_log(message);
+        if let Some(error) = self.selected_engine_error() {
+            self.push_log(error);
             return;
         };
         let audio_languages = mkv::parse_language_field(&self.preferences.audio_languages);
@@ -235,17 +235,33 @@ impl LangMuxApp {
         worker::start_batch(
             BatchSpec {
                 files: self.files.clone(),
+                tools: self.tools.clone(),
+                engine: self.preferences.engine,
                 output_directory,
                 audio_languages,
                 subtitle_languages,
                 skip_existing: self.preferences.skip_existing,
                 dry_run: self.preferences.dry_run,
             },
-            mkvmerge,
             self.control.clone(),
             self.sender.clone(),
             ctx.clone(),
         );
+    }
+
+    fn selected_engine_error(&self) -> Option<String> {
+        match self.preferences.engine {
+            RemuxEngine::MkvToolNix if self.tools.mkvmerge.is_none() => {
+                Some("MKVToolNix is unavailable; choose the FFmpeg engine".to_owned())
+            }
+            RemuxEngine::Ffmpeg if self.tools.ffmpeg.is_none() => {
+                Some("FFmpeg is unavailable; install it or add it to PATH".to_owned())
+            }
+            RemuxEngine::Ffmpeg if self.tools.ffprobe.is_none() => {
+                Some("FFprobe is unavailable; install it or add it to PATH".to_owned())
+            }
+            _ => None,
+        }
     }
 
     fn stop_batch(&mut self) {
@@ -430,20 +446,21 @@ impl LangMuxApp {
                     }
                     ui.vertical(|ui| {
                         ui.label(RichText::new("LangMux").size(17.0).strong());
-                        ui.label(
-                            RichText::new("LANGUAGE REMUXER")
-                                .size(9.5)
-                                .color(theme::MUTED),
-                        );
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new("LANGUAGE REMUXER")
+                                    .size(9.5)
+                                    .color(theme::MUTED),
+                            );
+                            ui.label(RichText::new("v2.0.0").size(9.5).color(theme::SUBTLE));
+                        });
                     });
                 });
                 ui.add_space(16.0);
                 ui.separator();
                 ui.add_space(10.0);
 
-                let content_height = (ui.available_height() - 76.0).max(240.0);
                 ScrollArea::vertical()
-                    .max_height(content_height)
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
@@ -462,43 +479,13 @@ impl LangMuxApp {
                         self.draw_processing_options(ui);
                         ui.add_space(18.0);
                         self.draw_batch_stats(ui);
+                        ui.add_space(8.0);
+                        ui.separator();
+                        ui.add_space(10.0);
+                        tool_status_row(ui, "mkvmerge", self.tools.mkvmerge.as_ref());
+                        tool_status_row(ui, "ffmpeg", self.tools.ffmpeg.as_ref());
+                        tool_status_row(ui, "ffprobe", self.tools.ffprobe.as_ref());
                     });
-
-                ui.add_space(8.0);
-                ui.separator();
-                ui.add_space(10.0);
-                ui.horizontal(|ui| {
-                    let indicator = if self.mkvmerge.is_some() {
-                        theme::SUCCESS
-                    } else {
-                        theme::ERROR
-                    };
-                    ui.label(RichText::new("●").color(indicator).size(11.0));
-                    ui.label(
-                        RichText::new(if self.mkvmerge.is_some() {
-                            "MKVToolNix detected"
-                        } else {
-                            "mkvmerge unavailable"
-                        })
-                        .size(11.0)
-                        .color(if self.mkvmerge.is_some() {
-                            theme::MUTED
-                        } else {
-                            theme::ERROR
-                        }),
-                    );
-                });
-                if let Some(path) = &self.mkvmerge {
-                    ui.add(
-                        Label::new(
-                            RichText::new(path.to_string_lossy())
-                                .monospace()
-                                .size(9.5)
-                                .color(theme::SUBTLE),
-                        )
-                        .truncate(),
-                    );
-                }
             });
     }
 
@@ -669,6 +656,34 @@ impl LangMuxApp {
         ui.add_space(6.0);
         ui.add_enabled_ui(!self.is_running, |ui| {
             ui.vertical(|ui| {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Engine").size(11.0).color(theme::MUTED));
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ComboBox::from_id_salt("remux-engine")
+                            .width(132.0)
+                            .selected_text(self.preferences.engine.label())
+                            .show_ui(ui, |ui| {
+                                ui.add_enabled_ui(self.tools.mkvmerge.is_some(), |ui| {
+                                    ui.selectable_value(
+                                        &mut self.preferences.engine,
+                                        RemuxEngine::MkvToolNix,
+                                        "MKVToolNix",
+                                    );
+                                });
+                                ui.add_enabled_ui(
+                                    self.tools.ffmpeg.is_some() && self.tools.ffprobe.is_some(),
+                                    |ui| {
+                                        ui.selectable_value(
+                                            &mut self.preferences.engine,
+                                            RemuxEngine::Ffmpeg,
+                                            "FFmpeg",
+                                        );
+                                    },
+                                );
+                            });
+                    });
+                });
+                ui.add_space(5.0);
                 draw_switch(
                     ui,
                     "Skip existing outputs",
@@ -990,7 +1005,7 @@ impl LangMuxApp {
     }
 
     fn draw_file_list(&mut self, ui: &mut egui::Ui) {
-        if let Some(error) = &self.mkvmerge_error {
+        if let Some(error) = self.selected_engine_error() {
             Frame::new()
                 .fill(theme::ERROR.gamma_multiply(0.08))
                 .stroke(Stroke::new(1.0, theme::ERROR.gamma_multiply(0.36)))
@@ -1332,6 +1347,40 @@ fn summary_stat(ui: &mut egui::Ui, label: &str, value: &str) {
     });
 }
 
+fn tool_status_row(ui: &mut egui::Ui, name: &str, tool: Option<&Tool>) {
+    ui.horizontal(|ui| {
+        let found = tool.is_some();
+        ui.label(
+            RichText::new("●")
+                .color(if found { theme::SUCCESS } else { theme::ERROR })
+                .size(10.0),
+        );
+        let (label, tooltip) = match tool {
+            Some(tool) => (
+                format!(
+                    "{name} · {}",
+                    tool.version.as_deref().unwrap_or("version unavailable")
+                ),
+                tool.path.display().to_string(),
+            ),
+            None => (
+                format!("{name} unavailable"),
+                "Not found in the application bundle, PATH, or platform defaults".to_owned(),
+            ),
+        };
+        ui.add(
+            Label::new(
+                RichText::new(label)
+                    .monospace()
+                    .size(9.0)
+                    .color(theme::MUTED),
+            )
+            .truncate(),
+        )
+        .on_hover_text(tooltip);
+    });
+}
+
 const TABLE_COLUMN_GAP: f32 = 10.0;
 const TABLE_HORIZONTAL_PADDING: f32 = 12.0;
 const FILE_COLUMN_MIN_WIDTH: f32 = 120.0;
@@ -1528,6 +1577,7 @@ fn styled_text_input(
             .hint_text(hint)
             .text_color(theme::TEXT)
             .background_color(theme::SURFACE)
+            .vertical_align(Align::Center)
             .margin(Margin::symmetric(8, 4))
             .frame(
                 Frame::new()
