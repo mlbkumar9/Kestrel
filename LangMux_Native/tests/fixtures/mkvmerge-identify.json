@@ -1,0 +1,58 @@
+{
+  "tracks": [
+    {
+      "id": 0,
+      "type": "video",
+      "codec": "AV1",
+      "properties": {
+        "codec_id": "V_AV1"
+      }
+    },
+    {
+      "id": 1,
+      "type": "audio",
+      "codec": "AAC",
+      "properties": {
+        "language": "eng",
+        "track_name": "English"
+      }
+    },
+    {
+      "id": 2,
+      "type": "audio",
+      "codec": "AAC",
+      "properties": {
+        "language": "jpn",
+        "track_name": "Japanese"
+      }
+    },
+    {
+      "id": 5,
+      "type": "audio",
+      "codec": "AAC",
+      "properties": {}
+    },
+    {
+      "id": 6,
+      "type": "subtitles",
+      "codec": "SubRip/SRT",
+      "properties": {
+        "language": "eng"
+      }
+    },
+    {
+      "id": 7,
+      "type": "subtitles",
+      "codec": "SubRip/SRT",
+      "properties": {
+        "language": "spa"
+      }
+    }
+  ],
+  "container": {
+    "type": "Matroska",
+    "properties": {
+      "duration": 10000000000
+    }
+  }
+}

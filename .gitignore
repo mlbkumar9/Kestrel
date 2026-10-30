@@ -36,6 +36,7 @@ dist/
 
 # Rust / Tauri build artifacts
 **/target/
+LangMux_Native/target/
 **/target_*/
 *.exe
 *.msi

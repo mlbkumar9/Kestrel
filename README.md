@@ -1,6 +1,6 @@
 # LangMux
 
-**Selective MKV language remuxer** — batch remux Matroska (`.mkv`) files with chosen audio and subtitle tracks by ISO 639-2 language code. Choose the interface that fits your workflow: Tauri desktop app (recommended), classic Tkinter GUI, CustomTkinter GUI, interactive Rich CLI, or a Flask JSON API.
+**Selective MKV language remuxer** — batch remux Matroska (`.mkv`) files with chosen audio and subtitle tracks by ISO 639-2 language code. The native Rust desktop app is the recommended daily-use interface; the existing Tauri, Python GUI, CLI, and Flask API remain available.
 
 **Requires [MKVToolNix](https://mkvtoolnix.download/)** — `mkvmerge` must be installed and on your PATH (or at the default Windows install path).
 
@@ -22,10 +22,10 @@
 
 | Requirement | Used by |
 |-------------|---------|
-| **Python 3.7+** | All Python entrypoints |
 | **MKVToolNix** (`mkvmerge`) | All entrypoints |
+| **Rust toolchain** (`rustup`) | Native and Tauri desktop apps |
+| **Python 3.7+** | Python GUI, CLI, and API |
 | **Node.js 18+** | Tauri desktop app |
-| **Rust toolchain** (`rustup`) | Building the Tauri app |
 
 Optional Python packages are listed in `requirements.txt` (Rich, CustomTkinter, Pillow, Flask).
 
@@ -50,7 +50,18 @@ npm install
 
 ## Usage
 
-### 1. Tauri desktop app (recommended UI)
+### 1. Native desktop app (recommended)
+
+Fast native Rust application with a dark egui interface, language chips, batch controls, and logs.
+
+```bash
+cd LangMux_Native
+cargo run --release
+```
+
+Build a platform-specific release binary with `cargo build --release`. The app requires `mkvmerge` on `PATH` (or the default MKVToolNix install path on Windows).
+
+### 2. Tauri desktop app
 
 Modern React desktop app with drag-and-drop, pause/stop, logs, and batch stats.
 
@@ -65,7 +76,7 @@ npm run tauri build    # production installer
 3. Under **Settings**, set **audio/subtitle languages** (comma-separated ISO codes).
 4. Click **Start Batch** (Space). **Esc** stops after killing the current file’s `mkvmerge` process.
 
-### 2. Classic GUI — `remux_gui.py`
+### 3. Classic GUI — `remux_gui.py`
 
 Dark-themed Tkinter interface with progress table and log export.
 
@@ -75,7 +86,7 @@ python "REMUX Python Scripts/remux_gui.py"
 
 Shortcuts: `Ctrl+O` browse input, `Ctrl+S` start, `Esc` cancel (with confirmation).
 
-### 3. Modern GUI — `REMUX_ModernGUI.py`
+### 4. Modern GUI — `REMUX_ModernGUI.py`
 
 CustomTkinter UI with sidebar and per-file progress bars.
 
@@ -85,7 +96,7 @@ python "REMUX Python Scripts/REMUX_ModernGUI.py"
 
 CustomTkinter and Pillow are included in `requirements.txt`.
 
-### 4. CLI — `REMUX_Script.py`
+### 5. CLI — `REMUX_Script.py`
 
 Interactive terminal workflow with a Rich live progress table. Writes `remux_log.txt` to the output folder.
 
@@ -95,7 +106,7 @@ python "REMUX Python Scripts/REMUX_Script.py"
 
 Prompts for input/output folders, language selection, skip-existing, and dry-run options.
 
-### 5. Flask API — `backend.py`
+### 6. Flask API — `backend.py`
 
 JSON REST API for integration or a custom web front-end. Listens on **port 5000** by default.
 
@@ -126,6 +137,10 @@ curl -s -X POST http://127.0.0.1:5000/api/scan -H "Content-Type: application/jso
 
 ```
 LangMux/
+├── LangMux_Native/            # Recommended native Rust + egui desktop app
+│   ├── src/                   # UI, theme, remux logic, and worker
+│   ├── tests/fixtures/        # mkvmerge JSON fixtures
+│   └── assets/                # Embedded fonts and licenses
 ├── REMUX Python Scripts/
 │   ├── remux_gui.py          # Tkinter GUI (classic)
 │   ├── REMUX_ModernGUI.py    # CustomTkinter GUI
@@ -156,7 +171,8 @@ If a track has no language tag, it is treated as `und`. Language matching is cas
 |---------|-----|
 | `mkvmerge not found` | Install MKVToolNix; add to PATH or use default `C:\Program Files\MKVToolNix\` on Windows |
 | No matching audio | Verify language codes match tags shown after scanning |
-| Tauri dev fails | Run `npm install` in `REMUX_Tauri`; ensure Rust is installed |
+| Native app build fails | Run `cargo build --release` from `LangMux_Native/`; ensure Rust is installed |
+| Tauri dev fails | Run `npm install` in `REMUX_Tauri`; ensure Node.js and Rust are installed |
 | Tauri blank window | Confirm Vite is on port 1420 (`npm run tauri dev` starts both) |
 | Empty output file | Check disk space and write permissions on the output folder |
 | Flask cancel seems stuck | Cancel sets a flag and kills the active `mkvmerge`; wait for the current file to finish aborting |
@@ -172,3 +188,4 @@ MIT — see [LICENSE](LICENSE).
 - [MKVToolNix](https://mkvtoolnix.download/)
 - [Rich](https://github.com/Textualize/rich)
 - [Tauri](https://tauri.app/)
+- [egui](https://www.egui.rs/)
