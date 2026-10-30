@@ -34,7 +34,6 @@ pub struct FileInfo {
 pub struct BatchStats {
     pub total_files: usize,
     pub total_size: u64,
-    pub estimated_seconds: Option<f64>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -118,8 +117,6 @@ pub fn batch_stats(files: &[FileInfo]) -> BatchStats {
     BatchStats {
         total_files: files.len(),
         total_size,
-        estimated_seconds: (total_size > 0)
-            .then_some((total_size as f64 / 1_073_741_824.0) * 120.0),
     }
 }
 
