@@ -22,7 +22,9 @@ cargo run --release
 ## Conventions and gotchas
 
 - Keep UI work on the eframe thread. Run scans and remux batches on `std::thread` workers and send events over `std::sync::mpsc`; do not add an async runtime or continuous idle repainting.
-- Discover `mkvmerge` on `PATH`, then check `C:\Program Files\MKVToolNix\mkvmerge.exe` on Windows. Surface missing-tool errors in the UI.
+- Discover `mkvmerge`, `ffmpeg`, and `ffprobe` through `LangMux_Native/src/tools.rs`: executable-adjacent bundles, PATH, then platform defaults. Keep tool version probing and Windows process creation there.
+- Keep MKVToolNix and FFmpeg stream-copy behavior in `LangMux_Native/src/mkv.rs`; use FFprobe metadata when `mkvmerge -J` fails, preserving both MKVToolNix IDs and FFmpeg stream indices.
 - Windows child processes must use `CREATE_NO_WINDOW` (`0x08000000`) through `std::os::windows::process::CommandExt`.
-- Keep track selection and path/argument rules in `LangMux_Native/src/mkv.rs`; cover behavior with unit tests and JSON fixtures.
-- Persist user preferences through eframe storage. Keep build output under ignored `target/` directories and screenshots outside the repository.
+- Persist the selected remux engine and other user preferences through eframe storage. Keep scans/remux work on `std::thread` workers and report progress over the event channel.
+- Release packaging is defined by `.github/workflows/release.yml` and `scripts/package-windows.ps1` / `scripts/package-unix.sh`; Windows packages bundle licensed FFmpeg and MKVToolNix tools, while macOS/Linux use system tools.
+- Keep track selection and path/argument rules covered by unit tests and JSON fixtures. Keep build output under ignored `target/` directories and screenshots outside the repository.
