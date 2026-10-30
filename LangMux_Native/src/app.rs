@@ -4,8 +4,8 @@ use crate::worker::{self, BatchSpec, FileStatus, WorkerControl, WorkerEvent};
 use eframe::CreationContext;
 use eframe::egui;
 use eframe::egui::{
-    Align, Button, Color32, CornerRadius, Frame, Key, Label, Layout, Margin, Panel, ProgressBar,
-    RichText, ScrollArea, Stroke, TextEdit,
+    Align, Button, Color32, CornerRadius, FontFamily, FontId, Frame, Key, Label, Layout, Margin,
+    Panel, ProgressBar, RichText, ScrollArea, Sense, Stroke, TextEdit,
 };
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -48,6 +48,7 @@ struct FileProgress {
 
 pub struct LangMuxApp {
     preferences: Preferences,
+    logo: Option<egui::TextureHandle>,
     files: Vec<FileInfo>,
     progress: Vec<FileProgress>,
     stats: BatchStats,
@@ -60,6 +61,7 @@ pub struct LangMuxApp {
     control: WorkerControl,
     is_running: bool,
     is_paused: bool,
+    batch_has_finished: bool,
     batch_started: Option<Instant>,
     elapsed_seconds: f64,
     filter: String,
@@ -70,6 +72,17 @@ pub struct LangMuxApp {
 impl LangMuxApp {
     pub fn new(cc: &CreationContext<'_>) -> Self {
         theme::apply(&cc.egui_ctx);
+        let logo = image::load_from_memory(include_bytes!("../../logo.png"))
+            .ok()
+            .map(|image| {
+                let rgba = image.into_rgba8();
+                let size = [rgba.width() as usize, rgba.height() as usize];
+                cc.egui_ctx.load_texture(
+                    "langmux-sidebar-logo",
+                    egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw()),
+                    egui::TextureOptions::LINEAR,
+                )
+            });
         let preferences = cc
             .storage
             .and_then(|storage| eframe::get_value(storage, PREFERENCES_KEY))
@@ -81,6 +94,7 @@ impl LangMuxApp {
             .then(|| "mkvmerge not found. Install MKVToolNix and add it to PATH.".to_owned());
         let mut app = Self {
             preferences,
+            logo,
             files: Vec::new(),
             progress: Vec::new(),
             stats: BatchStats::default(),
@@ -93,6 +107,7 @@ impl LangMuxApp {
             control: WorkerControl::default(),
             is_running: false,
             is_paused: false,
+            batch_has_finished: false,
             batch_started: None,
             elapsed_seconds: 0.0,
             filter: String::new(),
@@ -135,6 +150,8 @@ impl LangMuxApp {
         self.files.clear();
         self.progress.clear();
         self.stats = BatchStats::default();
+        self.elapsed_seconds = 0.0;
+        self.batch_has_finished = false;
         self.languages = None;
         self.scan_loading = true;
         self.push_log(format!("Scanning {}", directory.display()));
@@ -211,6 +228,7 @@ impl LangMuxApp {
 
         self.progress = vec![FileProgress::default(); self.files.len()];
         self.elapsed_seconds = 0.0;
+        self.batch_has_finished = false;
         self.batch_started = Some(Instant::now());
         self.is_running = true;
         self.is_paused = false;
@@ -323,6 +341,7 @@ impl LangMuxApp {
                     self.is_running = false;
                     self.is_paused = false;
                     self.elapsed_seconds = elapsed_seconds;
+                    self.batch_has_finished = true;
                     self.batch_started = None;
                     self.push_log(if cancelled {
                         "Batch stopped"
@@ -370,12 +389,13 @@ impl LangMuxApp {
             )
             .show(root, |ui| {
                 ui.horizontal(|ui| {
-                    ui.add_sized(
-                        [34.0, 34.0],
-                        Button::new(RichText::new("LM").strong().color(Color32::WHITE))
-                            .fill(theme::ACCENT)
-                            .corner_radius(CornerRadius::same(theme::CORNER)),
-                    );
+                    if let Some(logo) = &self.logo {
+                        ui.add_sized(
+                            [34.0, 34.0],
+                            egui::Image::new((logo.id(), egui::vec2(34.0, 34.0)))
+                                .corner_radius(CornerRadius::same(theme::CORNER)),
+                        );
+                    }
                     ui.vertical(|ui| {
                         ui.label(RichText::new("LangMux").size(17.0).strong());
                         ui.label(
@@ -459,6 +479,9 @@ impl LangMuxApp {
         ui.label(RichText::new(label).size(10.0).strong().color(theme::MUTED));
         ui.add_space(5.0);
         ui.horizontal(|ui| {
+            let button_width = 68.0;
+            let path_width =
+                (ui.available_width() - button_width - ui.spacing().item_spacing.x).max(84.0);
             let path = if input {
                 &self.preferences.input_directory
             } else {
@@ -473,22 +496,34 @@ impl LangMuxApp {
             } else {
                 path.as_str()
             };
-            let response =
-                ui.add_sized(
-                    [ui.available_width() - 76.0, 34.0],
-                    Label::new(RichText::new(shown).monospace().size(10.5).color(
-                        if path.is_empty() {
-                            theme::SUBTLE
-                        } else {
-                            theme::TEXT
-                        },
-                    ))
-                    .truncate(),
-                );
-            response.on_hover_text(shown);
+            let path_field = Frame::new()
+                .fill(theme::RAISED)
+                .stroke(Stroke::new(1.0, theme::BORDER))
+                .corner_radius(CornerRadius::same(6))
+                .inner_margin(Margin::symmetric(8, 0))
+                .show(ui, |ui| {
+                    ui.set_width(path_width - 16.0);
+                    ui.set_min_height(34.0);
+                    let available_width = ui.available_width();
+                    let display = middle_truncate(ui, shown, available_width);
+                    ui.add_sized(
+                        [ui.available_width(), 34.0],
+                        Label::new(RichText::new(display).monospace().size(10.5).color(
+                            if path.is_empty() {
+                                theme::SUBTLE
+                            } else {
+                                theme::TEXT
+                            },
+                        ))
+                        .truncate(),
+                    );
+                });
+            path_field.response.on_hover_text(shown);
             let clicked = ui.add_sized(
-                [68.0, 34.0],
+                [button_width, 34.0],
                 Button::new(if input { "Browse" } else { "Choose" })
+                    .fill(theme::SURFACE)
+                    .stroke(Stroke::new(1.0, theme::BORDER))
                     .corner_radius(CornerRadius::same(6)),
             );
             if clicked.clicked() && !self.is_running {
@@ -514,12 +549,21 @@ impl LangMuxApp {
         };
         ui.label(RichText::new(title).size(10.0).strong().color(theme::MUTED));
         ui.add_space(5.0);
-        ui.add_enabled(
-            !self.is_running,
-            TextEdit::singleline(selected)
-                .hint_text(if audio { "eng, jpn" } else { "eng" })
-                .desired_width(f32::INFINITY),
-        );
+        let field_id = if audio {
+            "audio-language-input"
+        } else {
+            "subtitle-language-input"
+        };
+        ui.add_enabled_ui(!self.is_running, |ui| {
+            let width = ui.available_width();
+            styled_text_input(
+                ui,
+                selected,
+                if audio { "eng, jpn" } else { "eng" },
+                width,
+                field_id,
+            );
+        });
         ui.add_space(4.0);
         ui.label(
             RichText::new(if audio {
@@ -592,8 +636,15 @@ impl LangMuxApp {
         );
         ui.add_space(6.0);
         ui.add_enabled_ui(!self.is_running, |ui| {
-            ui.checkbox(&mut self.preferences.skip_existing, "Skip existing outputs");
-            ui.checkbox(&mut self.preferences.dry_run, "Dry run — preview only");
+            ui.vertical(|ui| {
+                draw_switch(
+                    ui,
+                    "Skip existing outputs",
+                    &mut self.preferences.skip_existing,
+                );
+                ui.add_space(2.0);
+                draw_switch(ui, "Dry run — preview only", &mut self.preferences.dry_run);
+            });
         });
     }
 
@@ -634,12 +685,21 @@ impl LangMuxApp {
                     ui.add_space(18.0);
                     summary_stat(
                         ui,
-                        "ESTIMATE",
-                        &self
-                            .stats
-                            .estimated_seconds
-                            .map(format_duration)
-                            .unwrap_or_else(|| "—".to_owned()),
+                        if self.is_running {
+                            "ESTIMATE"
+                        } else {
+                            "ELAPSED"
+                        },
+                        &if self.is_running {
+                            self.stats
+                                .estimated_seconds
+                                .map(format_duration)
+                                .unwrap_or_else(|| "—".to_owned())
+                        } else if self.batch_has_finished {
+                            format_duration(self.elapsed_seconds)
+                        } else {
+                            "—".to_owned()
+                        },
                     );
                 });
             });
@@ -682,16 +742,23 @@ impl LangMuxApp {
                             "Logs"
                         };
                         if ui
-                            .add(Button::new(log_label).corner_radius(CornerRadius::same(6)))
+                            .add_sized(
+                                [68.0, 34.0],
+                                Button::new(log_label)
+                                    .fill(theme::SURFACE)
+                                    .stroke(Stroke::new(1.0, theme::BORDER))
+                                    .corner_radius(CornerRadius::same(6)),
+                            )
                             .clicked()
                         {
                             self.preferences.logs_open = !self.preferences.logs_open;
                         }
-                        ui.add_sized(
-                            [230.0, 30.0],
-                            TextEdit::singleline(&mut self.filter)
-                                .hint_text("Filter files")
-                                .desired_width(230.0),
+                        styled_text_input(
+                            ui,
+                            &mut self.filter,
+                            "Filter files",
+                            230.0,
+                            "filter-files",
                         );
                     });
                 });
@@ -730,7 +797,7 @@ impl LangMuxApp {
                             .unwrap_or(0.0);
                         ((done as f32 + active_fraction) / total as f32).clamp(0.0, 1.0)
                     };
-                    let controls_width = if self.is_running { 224.0 } else { 166.0 };
+                    let controls_width = if self.is_running { 390.0 } else { 166.0 };
                     let progress_width = (ui.available_width() - controls_width - 16.0).max(240.0);
                     ui.vertical(|ui| {
                         ui.set_width(progress_width);
@@ -765,10 +832,22 @@ impl LangMuxApp {
                     });
                     ui.add_space(16.0);
                     if self.is_running {
+                        ui.add_enabled_ui(false, |ui| {
+                            ui.add_sized(
+                                [150.0, 40.0],
+                                Button::new(
+                                    RichText::new("Start remux").strong().color(Color32::WHITE),
+                                )
+                                .fill(theme::ACCENT)
+                                .corner_radius(CornerRadius::same(7)),
+                            );
+                        });
                         if ui
                             .add_sized(
-                                [104.0, 38.0],
+                                [92.0, 38.0],
                                 Button::new(if self.is_paused { "Resume" } else { "Pause" })
+                                    .fill(theme::SURFACE)
+                                    .stroke(Stroke::new(1.0, theme::BORDER))
                                     .corner_radius(CornerRadius::same(6)),
                             )
                             .clicked()
@@ -777,7 +856,7 @@ impl LangMuxApp {
                         }
                         if ui
                             .add_sized(
-                                [104.0, 38.0],
+                                [92.0, 38.0],
                                 Button::new(RichText::new("Stop").color(theme::ERROR))
                                     .fill(theme::ERROR.gamma_multiply(0.12))
                                     .stroke(Stroke::new(1.0, theme::ERROR.gamma_multiply(0.35)))
@@ -986,44 +1065,16 @@ impl LangMuxApp {
             ui.add_space(8.0);
         }
 
-        ui.horizontal(|ui| {
-            ui.label(
-                RichText::new("FILE")
-                    .size(9.5)
-                    .strong()
-                    .color(theme::SUBTLE),
-            );
-            ui.add_space(ui.available_width() * 0.34);
-            ui.label(
-                RichText::new("SIZE")
-                    .size(9.5)
-                    .strong()
-                    .color(theme::SUBTLE),
-            );
-            ui.add_space(30.0);
-            ui.label(
-                RichText::new("TRACKS")
-                    .size(9.5)
-                    .strong()
-                    .color(theme::SUBTLE),
-            );
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.label(
-                    RichText::new("STATUS")
-                        .size(9.5)
-                        .strong()
-                        .color(theme::SUBTLE),
-                );
-            });
-        });
-        ui.add_space(6.0);
-        ui.separator();
-        ui.add_space(4.0);
         ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                let columns = FileColumns::for_width(ui.available_width());
+                draw_file_header(ui, columns);
+                ui.add_space(6.0);
+                ui.separator();
+                ui.add_space(4.0);
                 for index in visible {
-                    self.draw_file_row(ui, index);
+                    self.draw_file_row(ui, index, columns);
                 }
                 if visible_is_empty(&self.files, &query) {
                     ui.add_space(24.0);
@@ -1034,56 +1085,113 @@ impl LangMuxApp {
             });
     }
 
-    fn draw_file_row(&self, ui: &mut egui::Ui, index: usize) {
+    fn draw_file_row(&self, ui: &mut egui::Ui, index: usize, columns: FileColumns) {
         let Some(file) = self.files.get(index) else {
             return;
         };
         let progress = self.progress.get(index).cloned().unwrap_or_default();
-        let audio_languages = mkv::parse_language_field(&self.preferences.audio_languages);
-        let subtitle_languages = mkv::parse_language_field(&self.preferences.subtitle_languages);
-        let (audio_count, subtitle_count) = file.metadata.as_ref().map_or((0, 0), |metadata| {
-            let (audio, subtitles) =
-                mkv::selected_tracks(metadata, &audio_languages, &subtitle_languages);
-            (audio.len(), subtitles.len())
-        });
+        let selected_audio = mkv::parse_language_field(&self.preferences.audio_languages);
+        let selected_subtitles = mkv::parse_language_field(&self.preferences.subtitle_languages);
+        let (audio_count, subtitle_count, audio_codes, subtitle_codes) = file
+            .metadata
+            .as_ref()
+            .map_or((0, 0, Vec::new(), Vec::new()), |metadata| {
+                let (audio, subtitles) =
+                    mkv::selected_tracks(metadata, &selected_audio, &selected_subtitles);
+                (
+                    audio.len(),
+                    subtitles.len(),
+                    track_languages(&metadata.audio_tracks, &audio),
+                    track_languages(&metadata.subtitle_tracks, &subtitles),
+                )
+            });
 
         Frame::new()
             .fill(theme::SURFACE)
             .stroke(Stroke::new(1.0, theme::BORDER))
             .corner_radius(CornerRadius::same(7))
-            .inner_margin(Margin::symmetric(12, 9))
+            .inner_margin(Margin::symmetric(12, 7))
             .show(ui, |ui| {
+                ui.set_width(columns.content_width());
                 ui.horizontal(|ui| {
-                    ui.vertical(|ui| {
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                RichText::new(&file.name)
-                                    .size(12.0)
-                                    .strong()
-                                    .color(theme::TEXT),
+                    ui.spacing_mut().item_spacing.x = TABLE_COLUMN_GAP;
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(columns.file, FILE_ROW_CONTENT_HEIGHT),
+                        Layout::top_down(Align::Min).with_cross_align(Align::Min),
+                        |cell| {
+                            cell.spacing_mut().item_spacing.y = 0.0;
+                            let name = cell
+                                .allocate_ui_with_layout(
+                                    egui::vec2(columns.file, 22.0),
+                                    Layout::left_to_right(Align::Center),
+                                    |line| {
+                                        line.add(
+                                            Label::new(
+                                                RichText::new(&file.name)
+                                                    .size(12.0)
+                                                    .strong()
+                                                    .color(theme::TEXT),
+                                            )
+                                            .truncate(),
+                                        )
+                                    },
+                                )
+                                .inner;
+                            name.on_hover_text(&file.name);
+                            cell.allocate_ui_with_layout(
+                                egui::vec2(columns.file, 18.0),
+                                Layout::left_to_right(Align::Center),
+                                |line| {
+                                    line.add(
+                                        Label::new(
+                                            RichText::new(format!(
+                                                "{} audio · {} subtitle{} matched",
+                                                audio_count,
+                                                subtitle_count,
+                                                if subtitle_count == 1 { "" } else { "s" }
+                                            ))
+                                            .size(10.0)
+                                            .color(theme::MUTED),
+                                        )
+                                        .truncate(),
+                                    );
+                                },
                             );
-                        });
-                        ui.label(
-                            RichText::new(format!(
-                                "{} audio · {} subtitle{} matched",
-                                audio_count,
-                                subtitle_count,
-                                if subtitle_count == 1 { "" } else { "s" }
-                            ))
-                            .size(10.0)
-                            .color(theme::MUTED),
-                        );
-                    });
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        status_pill(ui, progress.status, progress.detail.as_deref());
-                        ui.add_space(10.0);
-                        ui.label(
-                            RichText::new(format_size(file.size))
-                                .monospace()
-                                .size(10.5)
-                                .color(theme::MUTED),
-                        );
-                    });
+                        },
+                    );
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(columns.tracks, FILE_ROW_CONTENT_HEIGHT),
+                        Layout::top_down(Align::Min),
+                        |cell| {
+                            cell.spacing_mut().item_spacing.y = 2.0;
+                            draw_track_line(cell, "AUDIO", &audio_codes);
+                            draw_track_line(cell, "SUBS", &subtitle_codes);
+                        },
+                    );
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(columns.size, FILE_ROW_CONTENT_HEIGHT),
+                        Layout::right_to_left(Align::Center),
+                        |cell| {
+                            cell.label(
+                                RichText::new(format_size(file.size))
+                                    .monospace()
+                                    .size(10.5)
+                                    .color(theme::MUTED),
+                            );
+                        },
+                    );
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(columns.status, FILE_ROW_CONTENT_HEIGHT),
+                        Layout::left_to_right(Align::Center),
+                        |cell| {
+                            status_pill(
+                                cell,
+                                progress.status,
+                                progress.detail.as_deref(),
+                                columns.status,
+                            );
+                        },
+                    );
                 });
                 if progress.status == FileStatus::Processing {
                     ui.add_space(7.0);
@@ -1096,10 +1204,16 @@ impl LangMuxApp {
                     );
                 }
                 if let Some(detail) = progress.detail
-                    && progress.status == FileStatus::Error
+                    && matches!(progress.status, FileStatus::Error | FileStatus::Cancelled)
                 {
                     ui.add_space(4.0);
-                    ui.label(RichText::new(detail).size(10.0).color(theme::ERROR));
+                    ui.label(RichText::new(detail).size(10.0).color(
+                        if progress.status == FileStatus::Cancelled {
+                            theme::WARNING
+                        } else {
+                            theme::ERROR
+                        },
+                    ));
                 }
             });
         ui.add_space(6.0);
@@ -1178,7 +1292,240 @@ fn summary_stat(ui: &mut egui::Ui, label: &str, value: &str) {
     });
 }
 
-fn status_pill(ui: &mut egui::Ui, status: FileStatus, detail: Option<&str>) {
+const TABLE_COLUMN_GAP: f32 = 10.0;
+const FILE_ROW_CONTENT_HEIGHT: f32 = 44.0;
+
+#[derive(Clone, Copy)]
+struct FileColumns {
+    file: f32,
+    tracks: f32,
+    size: f32,
+    status: f32,
+}
+
+impl FileColumns {
+    fn for_width(width: f32) -> Self {
+        let content = (width - 24.0 - TABLE_COLUMN_GAP * 3.0).max(0.0);
+        let size = 88.0_f32.min(content * 0.22);
+        let status = 96.0_f32.min((content - size).max(0.0) * 0.24);
+        let flexible = (content - size - status).max(0.0);
+        let tracks = (flexible * 0.42).clamp(140.0, 260.0).min(flexible);
+        let file = (flexible - tracks).max(0.0);
+        Self {
+            file,
+            tracks,
+            size,
+            status,
+        }
+    }
+
+    fn content_width(self) -> f32 {
+        self.file + self.tracks + self.size + self.status + TABLE_COLUMN_GAP * 3.0
+    }
+}
+
+fn draw_file_header(ui: &mut egui::Ui, columns: FileColumns) {
+    Frame::new()
+        .fill(Color32::TRANSPARENT)
+        .stroke(Stroke::NONE)
+        .inner_margin(Margin::symmetric(12, 4))
+        .show(ui, |ui| {
+            ui.set_width(columns.content_width());
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = TABLE_COLUMN_GAP;
+                ui.allocate_ui_with_layout(
+                    egui::vec2(columns.file, 22.0),
+                    Layout::left_to_right(Align::Center),
+                    |cell| {
+                        cell.set_width(columns.file);
+                        table_header_label(cell, "FILE");
+                    },
+                );
+                ui.allocate_ui_with_layout(
+                    egui::vec2(columns.tracks, 22.0),
+                    Layout::left_to_right(Align::Center),
+                    |cell| {
+                        cell.set_width(columns.tracks);
+                        table_header_label(cell, "TRACKS");
+                    },
+                );
+                ui.allocate_ui_with_layout(
+                    egui::vec2(columns.size, 22.0),
+                    Layout::right_to_left(Align::Center),
+                    |cell| {
+                        cell.set_width(columns.size);
+                        table_header_label(cell, "SIZE");
+                    },
+                );
+                ui.allocate_ui_with_layout(
+                    egui::vec2(columns.status, 22.0),
+                    Layout::left_to_right(Align::Center),
+                    |cell| {
+                        cell.set_width(columns.status);
+                        table_header_label(cell, "STATUS");
+                    },
+                );
+            });
+        });
+}
+
+fn table_header_label(ui: &mut egui::Ui, label: &str) {
+    ui.label(RichText::new(label).size(9.5).strong().color(theme::SUBTLE));
+}
+
+fn track_languages(tracks: &[mkv::TrackInfo], selected_ids: &[u64]) -> Vec<String> {
+    let mut languages = Vec::new();
+    for track in tracks
+        .iter()
+        .filter(|track| selected_ids.contains(&track.id))
+    {
+        let language = track.language.to_ascii_lowercase();
+        if !languages.contains(&language) {
+            languages.push(language);
+        }
+    }
+    languages
+}
+
+fn draw_track_line(ui: &mut egui::Ui, label: &str, languages: &[String]) {
+    ui.horizontal(|ui| {
+        let label_width = 38.0;
+        ui.add_sized(
+            [label_width, 18.0],
+            Label::new(RichText::new(label).size(8.0).strong().color(theme::SUBTLE)),
+        );
+        let chip_width = (ui.available_width() - ui.spacing().item_spacing.x).max(24.0);
+        Frame::new()
+            .fill(theme::INSET)
+            .stroke(Stroke::new(1.0, theme::BORDER))
+            .corner_radius(CornerRadius::same(4))
+            .inner_margin(Margin::symmetric(5, 0))
+            .show(ui, |ui| {
+                ui.set_width((chip_width - 10.0).max(12.0));
+                ui.add_sized(
+                    [ui.available_width(), 18.0],
+                    Label::new(
+                        RichText::new(if languages.is_empty() {
+                            "—".to_owned()
+                        } else {
+                            languages.join(", ")
+                        })
+                        .monospace()
+                        .size(9.0)
+                        .color(if languages.is_empty() {
+                            theme::SUBTLE
+                        } else {
+                            theme::TEXT
+                        }),
+                    )
+                    .truncate(),
+                );
+            });
+    });
+}
+
+fn styled_text_input(
+    ui: &mut egui::Ui,
+    value: &mut String,
+    hint: &str,
+    width: f32,
+    id_salt: &'static str,
+) -> egui::Response {
+    let response = ui.add_sized(
+        [width, 34.0],
+        TextEdit::singleline(value)
+            .id_salt(id_salt)
+            .hint_text(hint)
+            .text_color(theme::TEXT)
+            .background_color(theme::SURFACE)
+            .margin(Margin::symmetric(8, 4))
+            .frame(
+                Frame::new()
+                    .fill(theme::SURFACE)
+                    .stroke(Stroke::new(1.0, theme::BORDER))
+                    .corner_radius(CornerRadius::same(6))
+                    .inner_margin(Margin::same(0)),
+            ),
+    );
+    if response.has_focus() {
+        ui.painter().rect_stroke(
+            response.rect.shrink(0.5),
+            CornerRadius::same(6),
+            Stroke::new(1.0, theme::ACCENT),
+            egui::StrokeKind::Inside,
+        );
+    }
+    response
+}
+
+fn draw_switch(ui: &mut egui::Ui, label: &str, value: &mut bool) {
+    ui.horizontal(|ui| {
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(34.0, 18.0), Sense::click());
+        if response.clicked() {
+            *value = !*value;
+        }
+        let fill = if *value { theme::ACCENT } else { theme::RAISED };
+        let border = if *value { theme::ACCENT } else { theme::BORDER };
+        ui.painter().rect_filled(rect, CornerRadius::same(9), fill);
+        ui.painter().rect_stroke(
+            rect,
+            CornerRadius::same(9),
+            Stroke::new(1.0, border),
+            egui::StrokeKind::Inside,
+        );
+        let knob_x = if *value {
+            rect.right() - 9.0
+        } else {
+            rect.left() + 9.0
+        };
+        ui.painter()
+            .circle_filled(egui::pos2(knob_x, rect.center().y), 6.0, Color32::WHITE);
+        ui.add_space(4.0);
+        ui.label(RichText::new(label).size(11.0).color(theme::TEXT));
+    });
+}
+
+fn middle_truncate(ui: &mut egui::Ui, text: &str, max_width: f32) -> String {
+    let font = FontId::new(10.5, FontFamily::Monospace);
+    let measure = |text: String| {
+        ui.fonts_mut(|fonts| {
+            fonts
+                .layout_no_wrap(text, font.clone(), theme::TEXT)
+                .size()
+                .x
+        })
+    };
+    if measure(text.to_owned()) <= max_width {
+        return text.to_owned();
+    }
+    if max_width <= measure("…".to_owned()) {
+        return "…".to_owned();
+    }
+
+    let characters: Vec<char> = text.chars().collect();
+    let mut prefix_count = characters.len().div_ceil(2);
+    let mut suffix_count = characters.len() / 2;
+    loop {
+        let suffix_start = characters.len().saturating_sub(suffix_count);
+        let candidate = format!(
+            "{}…{}",
+            characters[..prefix_count].iter().collect::<String>(),
+            characters[suffix_start..].iter().collect::<String>()
+        );
+        if measure(candidate.clone()) <= max_width {
+            return candidate;
+        }
+        if prefix_count >= suffix_count && prefix_count > 0 {
+            prefix_count -= 1;
+        } else if suffix_count > 0 {
+            suffix_count -= 1;
+        } else {
+            return "…".to_owned();
+        }
+    }
+}
+
+fn status_pill(ui: &mut egui::Ui, status: FileStatus, detail: Option<&str>, width: f32) {
     let (label, foreground, background) = match status {
         FileStatus::Pending => ("Pending", theme::MUTED, theme::RAISED),
         FileStatus::Processing => ("Working", theme::ACCENT, theme::ACCENT.gamma_multiply(0.14)),
@@ -1191,7 +1538,8 @@ fn status_pill(ui: &mut egui::Ui, status: FileStatus, detail: Option<&str>) {
             theme::WARNING.gamma_multiply(0.13),
         ),
     };
-    let response = ui.add(
+    let response = ui.add_sized(
+        [width, 24.0],
         Button::new(RichText::new(label).size(9.5).color(foreground))
             .fill(background)
             .stroke(Stroke::new(1.0, foreground.gamma_multiply(0.25)))

@@ -1,5 +1,5 @@
 use eframe::egui::{
-    self, Color32, FontData, FontDefinitions, FontFamily, FontId, TextStyle, Theme, Visuals,
+    self, Color32, FontData, FontDefinitions, FontFamily, FontId, Stroke, TextStyle, Theme, Visuals,
 };
 use std::sync::Arc;
 
@@ -62,11 +62,11 @@ pub fn apply(ctx: &egui::Context) {
     visuals.widgets.noninteractive.bg_fill = BACKGROUND;
     visuals.widgets.noninteractive.bg_stroke.color = BORDER;
     visuals.widgets.noninteractive.fg_stroke.color = TEXT;
-    visuals.widgets.inactive.bg_fill = RAISED;
-    visuals.widgets.inactive.bg_stroke.color = BORDER;
+    visuals.widgets.inactive.bg_fill = SURFACE;
+    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, BORDER);
     visuals.widgets.inactive.fg_stroke.color = TEXT;
     visuals.widgets.hovered.bg_fill = Color32::from_rgb(43, 43, 43);
-    visuals.widgets.hovered.bg_stroke.color = ACCENT.gamma_multiply(0.6);
+    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, ACCENT.gamma_multiply(0.6));
     visuals.widgets.hovered.fg_stroke.color = TEXT;
     visuals.widgets.active.bg_fill = Color32::from_rgb(45, 67, 87);
     visuals.widgets.active.bg_stroke.color = ACCENT;
