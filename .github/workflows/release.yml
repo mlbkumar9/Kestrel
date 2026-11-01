@@ -170,14 +170,25 @@ jobs:
         run: |
           cd dist
           sha256sum LangMux-* > SHA256SUMS.txt
-      - name: Extract v2.0.0 release notes
+      - name: Extract release notes for tag
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          awk '
-            /^## \[2\.0\.0\]/ { capture = 1; next }
+          version="${RELEASE_TAG#v}"
+          escaped_version="$(printf '%s' "$version" | sed 's/\./\\./g')"
+          CHANGELOG_VERSION_REGEX="$escaped_version" awk '
+            $0 ~ ("^## \\[" ENVIRON["CHANGELOG_VERSION_REGEX"] "\\]") { capture = 1; found = 1; next }
             /^## \[/ && capture { exit }
             capture { print }
-          ' CHANGELOG.md > release-notes.md
-          test -s release-notes.md
+            END { if (!found) exit 2 }
+          ' CHANGELOG.md > release-notes.md || {
+            echo "::error::No CHANGELOG.md section found for tag ${RELEASE_TAG} (expected version ${version})." >&2
+            exit 1
+          }
+          if ! grep -q '[^[:space:]]' release-notes.md; then
+            echo "::error::CHANGELOG.md section for tag ${RELEASE_TAG} is empty." >&2
+            exit 1
+          fi
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
