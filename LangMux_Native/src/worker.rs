@@ -2,6 +2,7 @@ use crate::mkv::{self, AvailableLanguages, BatchStats, FileInfo, MediaMetadata};
 use crate::tools::{self, Toolchain};
 use eframe::egui;
 use serde::{Deserialize, Serialize};
+use std::fs::OpenOptions;
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
@@ -119,7 +120,7 @@ pub struct BatchSpec {
 
 enum ProcessOutcome {
     Success,
-    Warnings(Vec<String>),
+    Warnings(WarningSummary),
 }
 
 fn send(sender: &mpsc::Sender<WorkerEvent>, ctx: &egui::Context, event: WorkerEvent) {
@@ -236,9 +237,8 @@ pub fn start_batch(
             }
 
             let output = mkv::output_path(&spec.output_directory, &file.path);
-            let partial_output = mkv::partial_output_path(&output);
             if !spec.dry_run
-                && let Err(error) = validate_output_paths(&file.path, &output, &partial_output)
+                && let Err(error) = validate_output_paths(&file.path, &output)
             {
                 send(
                     &sender,
@@ -294,8 +294,8 @@ pub fn start_batch(
                 Ok(outcome) => {
                     let (detail, warnings) = match outcome {
                         ProcessOutcome::Success => (None, None),
-                        ProcessOutcome::Warnings(lines) => {
-                            (Some("Warnings".to_owned()), Some(lines))
+                        ProcessOutcome::Warnings(warnings) => {
+                            (Some("Warnings".to_owned()), Some(warnings))
                         }
                     };
                     send(
@@ -314,11 +314,21 @@ pub fn start_batch(
                             &ctx,
                             WorkerEvent::Log(format!("{} finished with warnings", file.name)),
                         );
-                        for warning in warnings {
+                        for warning in warnings.lines {
                             send(
                                 &sender,
                                 &ctx,
                                 WorkerEvent::Log(format!("{} — {warning}", file.name)),
+                            );
+                        }
+                        if warnings.omitted > 0 {
+                            send(
+                                &sender,
+                                &ctx,
+                                WorkerEvent::Log(format!(
+                                    "{} — ...and {} more warnings",
+                                    file.name, warnings.omitted
+                                )),
                             );
                         }
                     } else {
@@ -411,12 +421,9 @@ fn mark_cancelled(
     }
 }
 
-fn validate_output_paths(input: &Path, output: &Path, partial_output: &Path) -> Result<(), String> {
+fn validate_output_paths(input: &Path, output: &Path) -> Result<(), String> {
     if mkv::paths_resolve_to_same_file(input, output)? {
         return Err("Output path is the same as the input".to_owned());
-    }
-    if mkv::paths_resolve_to_same_file(input, partial_output)? {
-        return Err("Temporary output path is the same as the input".to_owned());
     }
     Ok(())
 }
@@ -434,10 +441,18 @@ fn process_file(
     if control.is_cancelled() {
         return Err("Stopped by user".to_owned());
     }
-    let partial_output = mkv::partial_output_path(output);
     if !spec.dry_run {
-        validate_output_paths(&file.path, output, &partial_output)?;
+        validate_output_paths(&file.path, output)?;
     }
+    let temporary_output = if spec.dry_run {
+        None
+    } else {
+        Some(TemporaryOutput::create(output)?)
+    };
+    let engine_output = temporary_output
+        .as_ref()
+        .map(TemporaryOutput::path)
+        .unwrap_or(output);
     let metadata = match &file.metadata {
         Some(metadata) => metadata.clone(),
         None => mkv::read_metadata(
@@ -456,7 +471,7 @@ fn process_file(
                 .ok_or_else(|| "MKVToolNix is unavailable".to_owned())?;
             match mkv::build_arguments(
                 &file.path,
-                &partial_output,
+                engine_output,
                 &metadata,
                 &spec.audio_languages,
                 &spec.subtitle_languages,
@@ -476,7 +491,7 @@ fn process_file(
                     );
                     let Some(arguments) = mkv::build_ffmpeg_arguments(
                         &file.path,
-                        &partial_output,
+                        engine_output,
                         &metadata,
                         &spec.audio_languages,
                         &spec.subtitle_languages,
@@ -498,7 +513,7 @@ fn process_file(
                 .ok_or_else(|| "FFmpeg is unavailable".to_owned())?;
             let Some(arguments) = mkv::build_ffmpeg_arguments(
                 &file.path,
-                &partial_output,
+                engine_output,
                 &metadata,
                 &spec.audio_languages,
                 &spec.subtitle_languages,
@@ -514,11 +529,14 @@ fn process_file(
         return Err("Stopped by user".to_owned());
     }
 
+    let partial_output = temporary_output
+        .as_ref()
+        .map(TemporaryOutput::path)
+        .ok_or_else(|| "Temporary output was not reserved".to_owned())?;
     let progress_mode = match engine {
         RemuxEngine::MkvToolNix => ProgressMode::MkvToolNix,
         RemuxEngine::Ffmpeg => ProgressMode::Ffmpeg(metadata.duration),
     };
-    remove_partial_output(&partial_output);
     let mut child = tools::command(&executable)
         .args(arguments)
         .stdout(Stdio::piped())
@@ -537,29 +555,49 @@ fn process_file(
     } else {
         let _ = child.kill();
         let _ = child.wait();
-        remove_partial_output(&partial_output);
         return Err("Could not register mkvmerge process".to_owned());
     }
 
+    let warning_summary = Arc::new(Mutex::new(WarningSummary::default()));
     let stdout_reader = stdout.map(|stdout| {
         let sender = sender.clone();
         let ctx = ctx.clone();
+        let warning_summary = warning_summary.clone();
         std::thread::spawn(move || {
-            drain_progress(stdout, index, &sender, &ctx, false, progress_mode)
+            drain_progress(
+                stdout,
+                index,
+                &sender,
+                &ctx,
+                false,
+                progress_mode,
+                warning_summary,
+            )
         })
     });
     let stderr_reader = stderr.map(|stderr| {
         let sender = sender.clone();
         let ctx = ctx.clone();
+        let warning_summary = warning_summary.clone();
         std::thread::spawn(move || {
-            drain_progress(stderr, index, &sender, &ctx, true, progress_mode)
+            drain_progress(
+                stderr,
+                index,
+                &sender,
+                &ctx,
+                true,
+                progress_mode,
+                warning_summary,
+            )
         })
     });
-    let stdout_output = stdout_reader
-        .and_then(|reader| reader.join().ok())
-        .unwrap_or_default();
+    let _ = stdout_reader.and_then(|reader| reader.join().ok());
     let stderr_output = stderr_reader
         .and_then(|reader| reader.join().ok())
+        .unwrap_or_default();
+    let warnings = warning_summary
+        .lock()
+        .map(|summary| summary.clone())
         .unwrap_or_default();
     let Some(mut child) = control
         .active_child
@@ -567,22 +605,19 @@ fn process_file(
         .ok()
         .and_then(|mut guard| guard.take())
     else {
-        remove_partial_output(&partial_output);
         return Err(format!("{} process handle lost", engine.label()));
     };
     let status = match child.wait() {
         Ok(status) => status,
         Err(error) => {
-            remove_partial_output(&partial_output);
             return Err(format!("Could not wait for {}: {error}", engine.label()));
         }
     };
 
     if control.is_cancelled() {
-        remove_partial_output(&partial_output);
         return Err("Stopped by user".to_owned());
     }
-    let has_nonempty_output = std::fs::metadata(&partial_output)
+    let has_nonempty_output = std::fs::metadata(partial_output)
         .is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0);
     let exit_outcome = mkv::classify_remux_exit(
         engine == RemuxEngine::MkvToolNix,
@@ -590,7 +625,6 @@ fn process_file(
         has_nonempty_output,
     );
     if exit_outcome == mkv::RemuxExitOutcome::Failure {
-        remove_partial_output(&partial_output);
         if !stderr_output.diagnostic_tail.trim().is_empty() {
             return Err(format!(
                 "{} failed: {}",
@@ -605,23 +639,12 @@ fn process_file(
         ));
     }
 
-    if let Err(error) = finalize_output(&partial_output, output) {
-        remove_partial_output(&partial_output);
-        return Err(error);
-    }
+    finalize_output(partial_output, output)?;
 
     match exit_outcome {
         mkv::RemuxExitOutcome::Success => Ok(ProcessOutcome::Success),
-        mkv::RemuxExitOutcome::SuccessWithWarnings => {
-            let warnings = stderr_output
-                .warnings
-                .into_iter()
-                .chain(stdout_output.warnings)
-                .collect();
-            Ok(ProcessOutcome::Warnings(warnings))
-        }
+        mkv::RemuxExitOutcome::SuccessWithWarnings => Ok(ProcessOutcome::Warnings(warnings)),
         mkv::RemuxExitOutcome::Failure => {
-            remove_partial_output(&partial_output);
             if !stderr_output.diagnostic_tail.trim().is_empty() {
                 Err(format!(
                     "{} failed: {}",
@@ -648,7 +671,22 @@ enum ProgressMode {
 #[derive(Default)]
 struct ChildOutput {
     diagnostic_tail: String,
-    warnings: Vec<String>,
+}
+
+#[derive(Clone, Default)]
+struct WarningSummary {
+    lines: Vec<String>,
+    omitted: usize,
+}
+
+impl WarningSummary {
+    fn record(&mut self, warning: &str) {
+        if self.lines.len() < 50 {
+            self.lines.push(warning.to_owned());
+        } else {
+            self.omitted += 1;
+        }
+    }
 }
 
 fn drain_progress<R: std::io::Read>(
@@ -658,9 +696,9 @@ fn drain_progress<R: std::io::Read>(
     ctx: &egui::Context,
     collect_errors: bool,
     progress_mode: ProgressMode,
+    warnings: Arc<Mutex<WarningSummary>>,
 ) -> ChildOutput {
     let mut diagnostic_tail = Vec::new();
-    let mut warnings = Vec::new();
     for line in std::io::BufReader::new(reader)
         .lines()
         .map_while(Result::ok)
@@ -681,8 +719,10 @@ fn drain_progress<R: std::io::Read>(
                 },
             );
         } else if !line.trim().is_empty() {
-            if line.to_ascii_lowercase().contains("warning") {
-                warnings.push(line.clone());
+            if line.to_ascii_lowercase().contains("warning")
+                && let Ok(mut summary) = warnings.lock()
+            {
+                summary.record(&line);
             }
             if collect_errors {
                 diagnostic_tail.push(line);
@@ -694,12 +734,46 @@ fn drain_progress<R: std::io::Read>(
     }
     ChildOutput {
         diagnostic_tail: diagnostic_tail.join("\n"),
-        warnings,
     }
 }
 
-fn remove_partial_output(output: &Path) {
-    let _ = std::fs::remove_file(output);
+struct TemporaryOutput {
+    path: PathBuf,
+}
+
+impl TemporaryOutput {
+    fn create(output: &Path) -> Result<Self, String> {
+        for attempt in 0..1000 {
+            let path = mkv::partial_output_path(output, std::process::id(), attempt);
+            match OpenOptions::new().write(true).create_new(true).open(&path) {
+                Ok(file) => {
+                    drop(file);
+                    return Ok(Self { path });
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => {
+                    return Err(format!(
+                        "Could not reserve temporary output {}: {error}",
+                        path.display()
+                    ));
+                }
+            }
+        }
+        Err(format!(
+            "Could not reserve a unique temporary output for {} after 1000 attempts",
+            output.display()
+        ))
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TemporaryOutput {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
 }
 
 fn finalize_output(partial_output: &Path, output: &Path) -> Result<(), String> {
@@ -750,7 +824,7 @@ fn should_skip_existing(skip_existing: bool, dry_run: bool, output_exists: bool)
 
 #[cfg(test)]
 mod tests {
-    use super::{should_skip_existing, validate_output_paths};
+    use super::{TemporaryOutput, WarningSummary, should_skip_existing, validate_output_paths};
     use crate::mkv;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -760,6 +834,19 @@ mod tests {
         assert!(should_skip_existing(true, false, true));
         assert!(!should_skip_existing(false, false, true));
         assert!(!should_skip_existing(true, false, false));
+    }
+
+    #[test]
+    fn retains_only_the_first_fifty_warnings_and_counts_the_rest() {
+        let mut summary = WarningSummary::default();
+        for index in 0..52 {
+            summary.record(&format!("warning {index}"));
+        }
+
+        assert_eq!(summary.lines.len(), 50);
+        assert_eq!(summary.lines.first().map(String::as_str), Some("warning 0"));
+        assert_eq!(summary.lines.last().map(String::as_str), Some("warning 49"));
+        assert_eq!(summary.omitted, 2);
     }
 
     #[test]
@@ -777,11 +864,53 @@ mod tests {
         std::fs::write(&input, b"input").expect("input fixture should be written");
 
         assert_eq!(
-            validate_output_paths(&input, &input, &mkv::partial_output_path(&input))
-                .expect_err("same-path output should be rejected"),
+            validate_output_paths(&input, &input).expect_err("same-path output should be rejected"),
             "Output path is the same as the input"
         );
 
+        std::fs::remove_dir_all(directory).expect("test directory should be removed");
+    }
+
+    #[test]
+    fn reserves_a_unique_temp_output_without_overwriting_existing_files() {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after UNIX epoch")
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!(
+            "langmux-worker-temp-output-test-{}-{timestamp}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&directory).expect("test directory should be created");
+        let output = directory.join("film.mkv");
+        let legacy_partial = directory.join("film.langmux-partial.mkv");
+        let occupied_candidate = mkv::partial_output_path(&output, std::process::id(), 0);
+        std::fs::write(&legacy_partial, b"legacy partial")
+            .expect("legacy partial fixture should be written");
+        std::fs::write(&occupied_candidate, b"occupied candidate")
+            .expect("occupied candidate fixture should be written");
+
+        let temporary_output =
+            TemporaryOutput::create(&output).expect("next free output should be reserved");
+        let expected = mkv::partial_output_path(&output, std::process::id(), 1);
+        assert_eq!(temporary_output.path(), expected);
+        assert_eq!(
+            std::fs::read(&legacy_partial).expect("legacy partial should survive"),
+            b"legacy partial"
+        );
+        assert_eq!(
+            std::fs::read(&occupied_candidate).expect("occupied candidate should survive"),
+            b"occupied candidate"
+        );
+        assert_eq!(
+            std::fs::metadata(temporary_output.path())
+                .expect("reserved path should exist")
+                .len(),
+            0
+        );
+
+        drop(temporary_output);
+        assert!(!expected.exists());
         std::fs::remove_dir_all(directory).expect("test directory should be removed");
     }
 }

@@ -220,19 +220,22 @@ impl LangMuxApp {
         } else {
             PathBuf::from(&self.preferences.output_directory)
         };
-        match mkv::directories_resolve_to_same_path(
-            Path::new(&self.preferences.input_directory),
-            &output_directory,
-        ) {
-            Ok(true) => {
-                self.start_error = Some("Output folder is the same as the input folder".to_owned());
-                return;
+        if !self.preferences.dry_run {
+            match mkv::directories_resolve_to_same_path(
+                Path::new(&self.preferences.input_directory),
+                &output_directory,
+            ) {
+                Ok(true) => {
+                    self.start_error =
+                        Some("Output folder is the same as the input folder".to_owned());
+                    return;
+                }
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                    self.start_error = Some(format!("Could not resolve output folder: {error}"));
+                    return;
+                }
+                _ => {}
             }
-            Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
-                self.start_error = Some(format!("Could not resolve output folder: {error}"));
-                return;
-            }
-            _ => {}
         }
         if let Some(error) = self.selected_engine_error() {
             self.push_log(error);

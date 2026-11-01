@@ -107,13 +107,13 @@ pub fn output_path(output_directory: &Path, input: &Path) -> PathBuf {
     output_directory.join(input.file_name().unwrap_or_default())
 }
 
-pub fn partial_output_path(output: &Path) -> PathBuf {
+pub fn partial_output_path(output: &Path, process_id: u32, attempt: u32) -> PathBuf {
     let mut name = output
         .file_stem()
         .or_else(|| output.file_name())
         .unwrap_or_else(|| OsStr::new("output"))
         .to_os_string();
-    name.push(".langmux-partial.mkv");
+    name.push(format!(".langmux-partial-{process_id}-{attempt}.mkv"));
     output
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -706,6 +706,7 @@ mod tests {
                 .any(|pair| pair == ["-progress", "pipe:1"])
         );
         assert!(arguments.iter().any(|argument| argument == "-nostats"));
+        assert!(arguments.iter().any(|argument| argument == "-y"));
         assert_eq!(arguments.last().map(String::as_str), Some("out/source.mkv"));
     }
 
@@ -770,12 +771,12 @@ mod tests {
     #[test]
     fn names_partial_outputs_in_the_output_directory() {
         assert_eq!(
-            partial_output_path(Path::new("/videos/film.mkv")),
-            Path::new("/videos/film.langmux-partial.mkv")
+            partial_output_path(Path::new("/videos/film.mkv"), 123, 4),
+            Path::new("/videos/film.langmux-partial-123-4.mkv")
         );
         assert_eq!(
-            partial_output_path(Path::new("film.mkv")),
-            Path::new("./film.langmux-partial.mkv")
+            partial_output_path(Path::new("film.mkv"), 123, 4),
+            Path::new("./film.langmux-partial-123-4.mkv")
         );
     }
 
