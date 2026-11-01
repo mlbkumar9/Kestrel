@@ -46,12 +46,15 @@ try {
         throw "FFmpeg $ffmpegVersion archive does not contain a license file."
     }
 
-    $sevenZip = (Get-Command "7z.exe" -ErrorAction SilentlyContinue).Source
+    $sevenZipCommand = Get-Command -Name @("7z.exe", "7z", "7zz") `
+        -CommandType Application -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    $sevenZip = $sevenZipCommand.Source
     if (-not $sevenZip) {
-        $sevenZipCandidates = @(
-            (Join-Path $env:ProgramFiles "7-Zip/7z.exe"),
-            (Join-Path ${env:ProgramFiles(x86)} "7-Zip/7z.exe")
-        )
+        $programFilesPaths = @($env:ProgramFiles, ${env:ProgramFiles(x86)}) |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+        $sevenZipCandidates = $programFilesPaths |
+            ForEach-Object { Join-Path $_ "7-Zip/7z.exe" }
         $sevenZip = $sevenZipCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
     }
     if (-not $sevenZip) {
@@ -64,7 +67,7 @@ try {
         throw "7-Zip failed to extract MKVToolNix $mkvtoolnixVersion."
     }
     $mkvmergeExe = Get-ChildItem -LiteralPath $mkvtoolnixExtract -Filter "mkvmerge.exe" -File -Recurse | Select-Object -First 1
-    $mkvtoolnixLicense = Get-ChildItem -LiteralPath $mkvtoolnixExtract -Filter "COPYING" -File -Recurse | Select-Object -First 1
+    $mkvtoolnixLicense = Get-ChildItem -LiteralPath $mkvtoolnixExtract -Filter "COPYING*" -File -Recurse | Select-Object -First 1
     if (-not $mkvmergeExe -or -not $mkvtoolnixLicense) {
         throw "MKVToolNix $mkvtoolnixVersion archive is missing mkvmerge.exe or COPYING."
     }
@@ -90,7 +93,7 @@ try {
         Remove-Item -LiteralPath $archive -Force
     }
     Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $archive -CompressionLevel Optimal
-    Write-Output "Packaged LangMux $Tag with FFmpeg $ffmpegVersion and MKVToolNix $mkvtoolnixVersion: $archive"
+    Write-Output "Packaged LangMux $Tag with FFmpeg $ffmpegVersion and MKVToolNix ${mkvtoolnixVersion}: $archive"
 }
 finally {
     if (Test-Path -LiteralPath $work) {
