@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*" Name="LangMux" Language="1033" Version="$(var.Version)"
+           Manufacturer="mlbkumar9" UpgradeCode="{bba02aaf-78ca-41e3-8586-b84b471755ed}">
+    <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of LangMux is already installed." />
+    <Media Id="1" Cabinet="LangMux.cab" EmbedCab="yes" />
+    <Icon Id="LangMuxIcon" SourceFile="$(var.StageDir)/logo.ico" />
+    <Property Id="ARPPRODUCTICON" Value="LangMuxIcon" />
+
+    <Feature Id="ProductFeature" Title="LangMux" Level="1">
+      <ComponentRef Id="ApplicationFiles" />
+      <ComponentRef Id="FfmpegBinaries" />
+      <ComponentRef Id="FfmpegLicense" />
+      <ComponentRef Id="MkvToolnixFiles" />
+      <ComponentRef Id="StartMenuShortcut" />
+    </Feature>
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLFOLDER" Name="LangMux">
+          <Component Id="ApplicationFiles" Guid="{5a0a83fb-0598-4b63-abef-7b399d4442f8}">
+            <File Id="LangMuxExe" Name="langmux.exe" Source="$(var.StageDir)/langmux.exe" KeyPath="yes" />
+            <File Id="RootLicense" Name="LICENSE" Source="$(var.StageDir)/LICENSE" />
+            <File Id="Readme" Name="README.md" Source="$(var.StageDir)/README.md" />
+            <File Id="ThirdPartyNotices" Name="THIRD_PARTY_NOTICES.md" Source="$(var.StageDir)/THIRD_PARTY_NOTICES.md" />
+            <File Id="LangMuxIconFile" Name="logo.ico" Source="$(var.StageDir)/logo.ico" />
+          </Component>
+          <Directory Id="ToolsFolder" Name="tools">
+            <Directory Id="FfmpegFolder" Name="ffmpeg">
+              <Component Id="FfmpegLicense" Guid="{83c21b28-a2eb-4e4e-9ac9-efc8063a2af1}">
+                <File Id="FfmpegLicenseFile" Name="LICENSE" Source="$(var.StageDir)/tools/ffmpeg/LICENSE" KeyPath="yes" />
+              </Component>
+              <Directory Id="FfmpegBinFolder" Name="bin">
+                <Component Id="FfmpegBinaries" Guid="{0f98422c-9148-4f56-8d8e-4e576de1af3e}">
+                  <File Id="FfmpegExe" Name="ffmpeg.exe" Source="$(var.StageDir)/tools/ffmpeg/bin/ffmpeg.exe" KeyPath="yes" />
+                  <File Id="FfprobeExe" Name="ffprobe.exe" Source="$(var.StageDir)/tools/ffmpeg/bin/ffprobe.exe" />
+                </Component>
+              </Directory>
+            </Directory>
+            <Directory Id="MkvToolnixFolder" Name="mkvtoolnix">
+              <Component Id="MkvToolnixFiles" Guid="{50c7e8f9-9726-4b87-9d3b-696b456ff3f9}">
+                <File Id="MkvmergeExe" Name="mkvmerge.exe" Source="$(var.StageDir)/tools/mkvtoolnix/mkvmerge.exe" KeyPath="yes" />
+                <File Id="MkvToolnixLicense" Name="COPYING.txt" Source="$(var.StageDir)/tools/mkvtoolnix/COPYING.txt" />
+              </Component>
+            </Directory>
+          </Directory>
+        </Directory>
+      </Directory>
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="ProgramMenuLangMuxFolder" Name="LangMux">
+          <Component Id="StartMenuShortcut" Guid="{f6a5b3f5-e2ff-4bc4-ba84-e24ca4d8b7a0}">
+            <Shortcut Id="LangMuxStartMenuShortcut" Name="LangMux"
+                      Description="LangMux MKV language remuxer"
+                      Target="[INSTALLFOLDER]langmux.exe" WorkingDirectory="INSTALLFOLDER"
+                      Icon="LangMuxIcon" IconIndex="0" />
+            <RemoveFolder Id="RemoveProgramMenuLangMuxFolder" On="uninstall" />
+            <RegistryValue Root="HKLM" Key="Software\mlbkumar9\LangMux"
+                           Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
+          </Component>
+        </Directory>
+      </Directory>
+    </Directory>
+  </Product>
+</Wix>
