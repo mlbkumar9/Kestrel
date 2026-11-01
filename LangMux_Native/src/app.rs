@@ -67,6 +67,7 @@ pub struct LangMuxApp {
     batch_has_finished: bool,
     batch_started: Option<Instant>,
     elapsed_seconds: f64,
+    start_error: Option<String>,
     filter: String,
     logs: Vec<String>,
     drag_hovered: bool,
@@ -112,6 +113,7 @@ impl LangMuxApp {
             batch_has_finished: false,
             batch_started: None,
             elapsed_seconds: 0.0,
+            start_error: None,
             filter: String::new(),
             logs: Vec::new(),
             drag_hovered: false,
@@ -141,6 +143,7 @@ impl LangMuxApp {
         if self.is_running {
             return;
         }
+        self.start_error = None;
         let previous_input = PathBuf::from(&self.preferences.input_directory);
         let previous_default = mkv::default_output_dir(&previous_input);
         let use_default = self.preferences.output_directory.is_empty()
@@ -183,6 +186,7 @@ impl LangMuxApp {
         };
         if let Some(directory) = dialog.pick_folder() {
             self.preferences.output_directory = directory.to_string_lossy().into_owned();
+            self.start_error = None;
             self.push_log(format!("Output folder set to {}", directory.display()));
         }
     }
@@ -204,9 +208,31 @@ impl LangMuxApp {
         if self.is_running {
             return;
         }
+        self.start_error = None;
         if self.files.is_empty() {
             self.push_log("Choose a folder with MKV files before starting");
             return;
+        }
+        let output_directory = if self.preferences.output_directory.trim().is_empty() {
+            let output = mkv::default_output_dir(Path::new(&self.preferences.input_directory));
+            self.preferences.output_directory = output.to_string_lossy().into_owned();
+            output
+        } else {
+            PathBuf::from(&self.preferences.output_directory)
+        };
+        match mkv::directories_resolve_to_same_path(
+            Path::new(&self.preferences.input_directory),
+            &output_directory,
+        ) {
+            Ok(true) => {
+                self.start_error = Some("Output folder is the same as the input folder".to_owned());
+                return;
+            }
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                self.start_error = Some(format!("Could not resolve output folder: {error}"));
+                return;
+            }
+            _ => {}
         }
         if let Some(error) = self.selected_engine_error() {
             self.push_log(error);
@@ -218,13 +244,6 @@ impl LangMuxApp {
             return;
         }
         let subtitle_languages = mkv::parse_language_field(&self.preferences.subtitle_languages);
-        let output_directory = if self.preferences.output_directory.trim().is_empty() {
-            let output = mkv::default_output_dir(Path::new(&self.preferences.input_directory));
-            self.preferences.output_directory = output.to_string_lossy().into_owned();
-            output
-        } else {
-            PathBuf::from(&self.preferences.output_directory)
-        };
 
         self.progress = vec![FileProgress::default(); self.files.len()];
         self.elapsed_seconds = 0.0;
@@ -463,28 +482,36 @@ impl LangMuxApp {
                 ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        self.draw_folder_picker(ui, ctx, true);
-                        ui.add_space(14.0);
-                        self.draw_folder_picker(ui, ctx, false);
-                        ui.add_space(20.0);
-                        ui.separator();
-                        ui.add_space(14.0);
-                        self.draw_language_picker(ui, true);
-                        ui.add_space(14.0);
-                        self.draw_language_picker(ui, false);
-                        ui.add_space(18.0);
-                        ui.separator();
-                        ui.add_space(12.0);
-                        self.draw_processing_options(ui);
-                        ui.add_space(18.0);
-                        self.draw_batch_stats(ui);
-                        ui.add_space(8.0);
-                        ui.separator();
-                        ui.add_space(10.0);
-                        tool_status_row(ui, "mkvmerge", self.tools.mkvmerge.as_ref());
-                        tool_status_row(ui, "ffmpeg", self.tools.ffmpeg.as_ref());
-                        tool_status_row(ui, "ffprobe", self.tools.ffprobe.as_ref());
+                        Frame::new()
+                            .inner_margin(Margin {
+                                left: 0,
+                                right: 16,
+                                top: 0,
+                                bottom: 0,
+                            })
+                            .show(ui, |ui| {
+                                self.draw_folder_picker(ui, ctx, true);
+                                ui.add_space(14.0);
+                                self.draw_folder_picker(ui, ctx, false);
+                                ui.add_space(20.0);
+                                ui.separator();
+                                ui.add_space(14.0);
+                                self.draw_language_picker(ui, true);
+                                ui.add_space(14.0);
+                                self.draw_language_picker(ui, false);
+                                ui.add_space(18.0);
+                                ui.separator();
+                                ui.add_space(12.0);
+                                self.draw_processing_options(ui);
+                                ui.add_space(18.0);
+                                self.draw_batch_stats(ui);
+                                ui.add_space(8.0);
+                                ui.separator();
+                                ui.add_space(10.0);
+                                tool_status_row(ui, "mkvmerge", self.tools.mkvmerge.as_ref());
+                                tool_status_row(ui, "ffmpeg", self.tools.ffmpeg.as_ref());
+                                tool_status_row(ui, "ffprobe", self.tools.ffprobe.as_ref());
+                            });
                     });
             });
     }
@@ -875,6 +902,12 @@ impl LangMuxApp {
                                 .fill(theme::ACCENT)
                                 .corner_radius(CornerRadius::same(3)),
                         );
+                        if let Some(error) = &self.start_error {
+                            ui.add(
+                                Label::new(RichText::new(error).size(9.5).color(theme::ERROR))
+                                    .truncate(),
+                            );
+                        }
                     });
                     ui.add_space(16.0);
                     if self.is_running {
@@ -1146,6 +1179,7 @@ impl LangMuxApp {
         let detail_color = match progress.status {
             FileStatus::Error => Some(theme::ERROR),
             FileStatus::Cancelled => Some(theme::WARNING),
+            FileStatus::Success if progress.detail.is_some() => Some(theme::WARNING),
             _ => None,
         };
         let show_detail = progress.detail.is_some() && detail_color.is_some();

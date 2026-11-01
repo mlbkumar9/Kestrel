@@ -2,7 +2,7 @@ use crate::tools;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Output;
 use std::sync::OnceLock;
@@ -105,6 +105,76 @@ pub fn default_output_dir(input: &Path) -> PathBuf {
 
 pub fn output_path(output_directory: &Path, input: &Path) -> PathBuf {
     output_directory.join(input.file_name().unwrap_or_default())
+}
+
+pub fn partial_output_path(output: &Path) -> PathBuf {
+    let mut name = output
+        .file_stem()
+        .or_else(|| output.file_name())
+        .unwrap_or_else(|| OsStr::new("output"))
+        .to_os_string();
+    name.push(".langmux-partial.mkv");
+    output
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+        .join(name)
+}
+
+pub fn paths_resolve_to_same_file(input: &Path, output: &Path) -> Result<bool, String> {
+    let canonical_input = std::fs::canonicalize(input)
+        .map_err(|error| format!("Could not resolve input path: {error}"))?;
+    let output_name = output
+        .file_name()
+        .ok_or_else(|| "Output path has no file name".to_owned())?;
+    let output_parent = output
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let canonical_output_parent = std::fs::canonicalize(output_parent)
+        .map_err(|error| format!("Could not resolve output folder: {error}"))?;
+    let canonicalized_output = canonical_output_parent.join(output_name);
+    if paths_equal(&canonical_input, &canonicalized_output) {
+        return Ok(true);
+    }
+    Ok(std::fs::canonicalize(output)
+        .is_ok_and(|resolved_output| paths_equal(&canonical_input, &resolved_output)))
+}
+
+pub fn directories_resolve_to_same_path(input: &Path, output: &Path) -> std::io::Result<bool> {
+    let canonical_input = std::fs::canonicalize(input)?;
+    let canonical_output = std::fs::canonicalize(output)?;
+    Ok(paths_equal(&canonical_input, &canonical_output))
+}
+
+#[cfg(windows)]
+fn paths_equal(left: &Path, right: &Path) -> bool {
+    left.to_string_lossy()
+        .eq_ignore_ascii_case(&right.to_string_lossy())
+}
+
+#[cfg(not(windows))]
+fn paths_equal(left: &Path, right: &Path) -> bool {
+    left == right
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RemuxExitOutcome {
+    Success,
+    SuccessWithWarnings,
+    Failure,
+}
+
+pub fn classify_remux_exit(
+    is_mkvtoolnix: bool,
+    exit_code: Option<i32>,
+    has_nonempty_output: bool,
+) -> RemuxExitOutcome {
+    match (is_mkvtoolnix, exit_code, has_nonempty_output) {
+        (_, Some(0), true) => RemuxExitOutcome::Success,
+        (true, Some(1), true) => RemuxExitOutcome::SuccessWithWarnings,
+        _ => RemuxExitOutcome::Failure,
+    }
 }
 
 pub fn read_metadata(
@@ -477,11 +547,13 @@ pub fn parse_ffmpeg_progress_line(line: &str, duration: Option<f64>) -> Option<u
 #[cfg(test)]
 mod tests {
     use super::{
-        MediaMetadata, build_arguments, build_ffmpeg_arguments, default_output_dir,
+        MediaMetadata, RemuxExitOutcome, build_arguments, build_ffmpeg_arguments,
+        classify_remux_exit, default_output_dir, directories_resolve_to_same_path,
         normalize_languages, parse_ffmpeg_progress_line, parse_ffprobe_json, parse_metadata_json,
-        parse_progress_line, selected_tracks,
+        parse_progress_line, partial_output_path, paths_resolve_to_same_file, selected_tracks,
     };
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn fixture() -> MediaMetadata {
         parse_metadata_json(include_str!("../tests/fixtures/mkvmerge-identify.json"))
@@ -670,5 +742,79 @@ mod tests {
             ),
             Path::new("/media/movies/remuxed/film.mkv")
         );
+    }
+
+    #[test]
+    fn resolves_output_paths_before_comparing_with_input() {
+        let directory = temporary_test_directory();
+        std::fs::create_dir_all(&directory).expect("test directory should be created");
+        let input = directory.join("film.mkv");
+        std::fs::write(&input, b"input").expect("input fixture should be written");
+
+        assert!(
+            paths_resolve_to_same_file(&input, &directory.join("./film.mkv"))
+                .expect("paths should resolve")
+        );
+        assert!(
+            !paths_resolve_to_same_file(&input, &directory.join("other.mkv"))
+                .expect("paths should resolve")
+        );
+        assert!(
+            directories_resolve_to_same_path(&directory, &directory.join("."))
+                .expect("directories should resolve")
+        );
+
+        std::fs::remove_dir_all(directory).expect("test directory should be removed");
+    }
+
+    #[test]
+    fn names_partial_outputs_in_the_output_directory() {
+        assert_eq!(
+            partial_output_path(Path::new("/videos/film.mkv")),
+            Path::new("/videos/film.langmux-partial.mkv")
+        );
+        assert_eq!(
+            partial_output_path(Path::new("film.mkv")),
+            Path::new("./film.langmux-partial.mkv")
+        );
+    }
+
+    #[test]
+    fn classifies_engine_exit_codes_and_nonempty_outputs() {
+        assert_eq!(
+            classify_remux_exit(true, Some(0), true),
+            RemuxExitOutcome::Success
+        );
+        assert_eq!(
+            classify_remux_exit(true, Some(1), true),
+            RemuxExitOutcome::SuccessWithWarnings
+        );
+        assert_eq!(
+            classify_remux_exit(true, Some(1), false),
+            RemuxExitOutcome::Failure
+        );
+        assert_eq!(
+            classify_remux_exit(true, Some(2), true),
+            RemuxExitOutcome::Failure
+        );
+        assert_eq!(
+            classify_remux_exit(false, Some(1), true),
+            RemuxExitOutcome::Failure
+        );
+        assert_eq!(
+            classify_remux_exit(false, Some(0), true),
+            RemuxExitOutcome::Success
+        );
+    }
+
+    fn temporary_test_directory() -> PathBuf {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after UNIX epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "langmux-path-test-{}-{timestamp}",
+            std::process::id()
+        ))
     }
 }
