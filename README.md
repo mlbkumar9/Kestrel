@@ -206,3 +206,8 @@ MIT — see [LICENSE](LICENSE).
 - [Rich](https://github.com/Textualize/rich)
 - [Tauri](https://tauri.app/)
 - [egui](https://www.egui.rs/)
+
+## Contributors
+
+- [mlbkumar9](https://github.com/mlbkumar9) — author and maintainer
+- [Devin](https://devin.ai) — AI software engineer by Cognition

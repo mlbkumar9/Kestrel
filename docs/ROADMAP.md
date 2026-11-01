@@ -4,7 +4,7 @@ LangMux is moving from a single-purpose MKV language remuxer to a fast, native m
 
 ## v2.0 — Native app (current)
 
-- Native Rust (eframe/egui) desktop app with a MonoCode-style interface.
+- Native Rust (eframe/egui) desktop app with a refined dark interface.
 - Language-based remux of audio and subtitle tracks with MKVToolNix (`mkvmerge`).
 - FFmpeg integration: `ffprobe` reads metadata as a fallback, and FFmpeg can act as a stream-copy remux engine when MKVToolNix is not available.
 - The Windows release bundles `mkvmerge`, `ffmpeg` and `ffprobe`. macOS and Linux use the tools installed on the system.

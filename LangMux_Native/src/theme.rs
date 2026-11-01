@@ -3,9 +3,7 @@ use eframe::egui::{
 };
 use std::sync::Arc;
 
-// Palette roles follow crates/monocode-gpui/src/theme.rs and
-// crates/monocode-gpui/src/settings/palettes.rs; separators are derived from
-// the 7% content-ink stroke in monocode/src/styles/index.css.
+// Dark neutral palette with 7% ink separators.
 pub const BACKGROUND: Color32 = Color32::from_rgb(20, 20, 20);
 pub const SURFACE: Color32 = Color32::from_rgb(23, 23, 23);
 pub const INSET: Color32 = Color32::from_rgb(13, 13, 13);
@@ -19,8 +17,7 @@ pub const SUCCESS: Color32 = Color32::from_rgb(110, 231, 183);
 pub const WARNING: Color32 = Color32::from_rgb(251, 191, 36);
 pub const ERROR: Color32 = Color32::from_rgb(248, 113, 113);
 
-// MonoCode uses system UI sans, 13px body text, 12.5px code, and 8/12px
-// radius families; see crates/monocode-gpui/src/fonts.rs and src/styles/index.css.
+// Compact typography with 13px body text, 12.5px code, and 8/12px corner radii.
 pub const SIDEBAR_WIDTH: f32 = 306.0;
 pub const SPACE: f32 = 8.0;
 pub const CORNER: u8 = 8;

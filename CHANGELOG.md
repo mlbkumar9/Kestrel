@@ -3,7 +3,7 @@
 ## [2.0.0] - 2026-10-30
 
 ### Added
-- Native Rust desktop app with a MonoCode-inspired dark interface
+- Native Rust (eframe/egui) desktop app with a refined dark interface
 - FFmpeg stream-copy remux engine alongside MKVToolNix
 - FFprobe metadata fallback when MKVToolNix identification is unavailable
 - Windows release bundles with FFmpeg and MKVToolNix command-line tools
