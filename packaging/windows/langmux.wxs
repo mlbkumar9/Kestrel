@@ -13,6 +13,7 @@
       <ComponentRef Id="FfmpegBinaries" />
       <ComponentRef Id="FfmpegLicense" />
       <ComponentRef Id="MkvToolnixFiles" />
+      <!-- MKVTOOLNIX_DLL_REFS -->
       <ComponentRef Id="StartMenuShortcut" />
     </Feature>
 
@@ -43,6 +44,7 @@
                 <File Id="MkvmergeExe" Name="mkvmerge.exe" Source="$(var.StageDir)/tools/mkvtoolnix/mkvmerge.exe" KeyPath="yes" />
                 <File Id="MkvToolnixLicense" Name="COPYING.txt" Source="$(var.StageDir)/tools/mkvtoolnix/COPYING.txt" />
               </Component>
+              <!-- MKVTOOLNIX_DLLS -->
             </Directory>
           </Directory>
         </Directory>

@@ -50,3 +50,15 @@ jobs:
       - name: Run tests
         working-directory: LangMux_Native
         run: cargo test
+
+  msi:
+    name: Windows MSI packaging
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install MSI tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y msitools wixl
+      - name: Test MSI packaging
+        run: scripts/test-msi.sh
