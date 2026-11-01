@@ -34,7 +34,7 @@ for relative_path in "${standard_files[@]}"; do
     printf 'fixture: %s\n' "$relative_path" > "$file_path"
   fi
 done
-printf 'fixture DLL\n' > "$stage_directory/tools/mkvtoolnix/libfixture.dll"
+printf 'fixture DLL\n' > "$stage_directory/tools/mkvtoolnix/LIBFIXTURE.DLL"
 
 "$repo_root/scripts/build-msi.sh" "$stage_directory" 2.0.0 "$output_msi"
 
@@ -74,7 +74,7 @@ expected_files = Counter(
         "LICENSE",
         "mkvmerge.exe",
         "COPYING.txt",
-        "libfixture.dll",
+        "LIBFIXTURE.DLL",
     ]
 )
 if actual_files != expected_files:
@@ -88,6 +88,6 @@ shortcuts = exported_rows("Shortcut")
 if not any(row[0] == "LangMuxStartMenuShortcut" for row in shortcuts):
     raise SystemExit("LangMux Start Menu shortcut is missing.")
 
-print("PASS: MSI contains 10 standard files and libfixture.dll (11 files total).")
+print("PASS: MSI contains 10 standard files and LIBFIXTURE.DLL (11 files total).")
 print("PASS: LangMux Start Menu shortcut is present.")
 PY
