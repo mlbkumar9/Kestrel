@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.0.0] - 2026-10-30
+
+### Added
+- Native Rust (eframe/egui) desktop app with a refined dark interface
+- FFmpeg stream-copy remux engine alongside MKVToolNix
+- FFprobe metadata fallback when MKVToolNix identification is unavailable
+- Windows release bundles with FFmpeg and MKVToolNix command-line tools
+- Cross-platform Linux, macOS, and Windows builds and GitHub releases
+
 ## [1.0.0] - 2025-10-18
 
 ### Added
