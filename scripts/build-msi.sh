@@ -68,7 +68,14 @@ if source.count(component_marker) != 1 or source.count(reference_marker) != 1:
     raise SystemExit("WiX template is missing or duplicates an MKVToolNix DLL marker.")
 
 dll_directory = stage / "tools" / "mkvtoolnix"
-dlls = sorted(dll_directory.glob("*.dll"), key=lambda path: path.name.casefold())
+dlls = sorted(
+    (
+        path
+        for path in dll_directory.iterdir()
+        if path.is_file() and path.suffix.casefold() == ".dll"
+    ),
+    key=lambda path: (path.name.casefold(), path.name),
+)
 components = []
 references = []
 
