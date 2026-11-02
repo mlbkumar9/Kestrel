@@ -1,5 +1,5 @@
 use super::widgets;
-use crate::app::{LangMuxApp, SettingsTab};
+use crate::app::{KestrelApp, SettingsTab};
 use crate::presets::{self, Preset};
 use crate::theme;
 use crate::transcode::{
@@ -8,7 +8,7 @@ use crate::transcode::{
 };
 use eframe::egui::{self, Align, ComboBox, Frame, Layout, RichText, ScrollArea, Slider, Stroke};
 
-pub fn show(app: &mut LangMuxApp, ui: &mut egui::Ui) {
+pub fn show(app: &mut KestrelApp, ui: &mut egui::Ui) {
     if app.preview_source.is_none()
         && let Some(source) = app.sources.first()
     {
@@ -49,7 +49,7 @@ pub fn show(app: &mut LangMuxApp, ui: &mut egui::Ui) {
     }
 }
 
-pub fn action_bar(app: &mut LangMuxApp, ui: &mut egui::Ui, ctx: &egui::Context) {
+pub fn action_bar(app: &mut KestrelApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     let preset_name = presets::builtins(&app.encoders)
         .into_iter()
         .chain(app.preferences.user_presets.clone())
@@ -89,7 +89,7 @@ pub fn action_bar(app: &mut LangMuxApp, ui: &mut egui::Ui, ctx: &egui::Context) 
     });
 }
 
-fn presets_panel(app: &mut LangMuxApp, ui: &mut egui::Ui) {
+fn presets_panel(app: &mut KestrelApp, ui: &mut egui::Ui) {
     widgets::section_title(ui, "Presets");
     ui.add_space(8.0);
     ScrollArea::vertical()
@@ -201,7 +201,7 @@ fn presets_panel(app: &mut LangMuxApp, ui: &mut egui::Ui) {
     }
 }
 
-fn settings_panel(app: &mut LangMuxApp, ui: &mut egui::Ui) {
+fn settings_panel(app: &mut KestrelApp, ui: &mut egui::Ui) {
     ui.horizontal_wrapped(|ui| {
         for (tab, label) in [
             (SettingsTab::Summary, "Summary"),
@@ -231,7 +231,7 @@ fn settings_panel(app: &mut LangMuxApp, ui: &mut egui::Ui) {
         });
 }
 
-fn summary(app: &mut LangMuxApp, ui: &mut egui::Ui) {
+fn summary(app: &mut KestrelApp, ui: &mut egui::Ui) {
     let settings = app.preferences.current_settings.clone();
     let selected = app.selected_source_indices();
     ui.heading("Processing summary");
@@ -355,7 +355,7 @@ fn summary(app: &mut LangMuxApp, ui: &mut egui::Ui) {
 }
 
 fn summary_languages(
-    app: &LangMuxApp,
+    app: &KestrelApp,
     selected: &[usize],
     configured: &[String],
     audio: bool,
@@ -401,7 +401,7 @@ fn language_name(code: &str) -> String {
     }
 }
 
-fn video_settings(app: &mut LangMuxApp, ui: &mut egui::Ui) {
+fn video_settings(app: &mut KestrelApp, ui: &mut egui::Ui) {
     ui.heading("Video");
     ui.horizontal(|ui| {
         if ui
@@ -830,7 +830,7 @@ fn denoise_label(option: Denoise) -> &'static str {
     }
 }
 
-fn audio_settings(app: &mut LangMuxApp, ui: &mut egui::Ui) {
+fn audio_settings(app: &mut KestrelApp, ui: &mut egui::Ui) {
     ui.heading("Audio");
     let languages = app.available_languages().audio;
     language_chips(
@@ -888,7 +888,7 @@ fn audio_settings(app: &mut LangMuxApp, ui: &mut egui::Ui) {
     }
 }
 
-fn subtitle_settings(app: &mut LangMuxApp, ui: &mut egui::Ui) {
+fn subtitle_settings(app: &mut KestrelApp, ui: &mut egui::Ui) {
     ui.heading("Subtitles");
     ui.checkbox(
         &mut app.preferences.current_settings.subtitles.include,
@@ -918,7 +918,7 @@ fn subtitle_settings(app: &mut LangMuxApp, ui: &mut egui::Ui) {
     });
 }
 
-fn metadata_settings(app: &mut LangMuxApp, ui: &mut egui::Ui) {
+fn metadata_settings(app: &mut KestrelApp, ui: &mut egui::Ui) {
     ui.heading("Chapters & metadata");
     ui.checkbox(
         &mut app.preferences.current_settings.keep_chapters,
@@ -994,7 +994,7 @@ fn language_chips(ui: &mut egui::Ui, languages: &[String], selected: &mut Vec<St
     });
 }
 
-fn preview_panel(app: &mut LangMuxApp, ui: &mut egui::Ui) {
+fn preview_panel(app: &mut KestrelApp, ui: &mut egui::Ui) {
     widgets::card(ui, |ui| {
         ui.set_width(ui.available_width());
         ScrollArea::vertical()

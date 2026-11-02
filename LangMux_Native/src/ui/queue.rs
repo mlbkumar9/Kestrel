@@ -1,10 +1,10 @@
 use super::widgets;
-use crate::app::LangMuxApp;
+use crate::app::KestrelApp;
 use crate::theme;
 use crate::worker::FileStatus;
 use eframe::egui::{self, Align, Button, Layout, ProgressBar, RichText, ScrollArea, Stroke};
 
-pub fn show(app: &mut LangMuxApp, ui: &mut egui::Ui, ctx: &egui::Context) {
+pub fn show(app: &mut KestrelApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     ui.horizontal(|ui| {
         ui.heading("Queue");
         ui.label(

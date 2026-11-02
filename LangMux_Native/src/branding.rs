@@ -1,9 +1,11 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-pub const APP_NAME: &str = "LangMux";
-pub const APP_ID: &str = "langmux";
-pub const LEGACY_APP_IDS: &[&str] = &[];
+pub const APP_NAME: &str = "Kestrel";
+pub const APP_ID: &str = "kestrel";
+pub const PREFERENCES_KEY: &str = "kestrel.preferences.v3";
+pub const LEGACY_APP_IDS: &[&str] = &["langmux"];
+pub const LEGACY_PREFERENCES_KEYS: &[&str] = &["app.preferences.v3", "langmux.preferences"];
 
 pub fn migrate_storage() {
     let Some(current_dir) = eframe::storage_dir(APP_ID) else {
@@ -45,7 +47,7 @@ mod tests {
     fn temp_dir() -> PathBuf {
         let id = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
         let path =
-            std::env::temp_dir().join(format!("langmux-branding-{}-{id}", std::process::id()));
+            std::env::temp_dir().join(format!("kestrel-branding-{}-{id}", std::process::id()));
         std::fs::create_dir_all(&path).unwrap();
         path
     }

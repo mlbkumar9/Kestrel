@@ -1,5 +1,5 @@
 use super::widgets;
-use crate::app::{LangMuxApp, Step};
+use crate::app::{KestrelApp, Step};
 use crate::formats::Container;
 use crate::inputs::{self, ExistingPolicy, OutputTarget};
 use crate::theme;
@@ -7,7 +7,7 @@ use eframe::egui::{
     self, Align, Button, ComboBox, CornerRadius, Layout, RichText, ScrollArea, Stroke,
 };
 
-pub fn show(app: &mut LangMuxApp, ui: &mut egui::Ui) {
+pub fn show(app: &mut KestrelApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         if ui.button("Add files…").clicked() {
             app.add_files_dialog();
@@ -71,7 +71,7 @@ pub fn show(app: &mut LangMuxApp, ui: &mut egui::Ui) {
     }
 }
 
-fn empty_state(app: &mut LangMuxApp, ui: &mut egui::Ui) {
+fn empty_state(app: &mut KestrelApp, ui: &mut egui::Ui) {
     let rect = ui.available_rect_before_wrap();
     let card = rect.shrink2(egui::vec2((rect.width() - 620.0).max(0.0) / 2.0, 70.0));
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(card));
@@ -98,7 +98,7 @@ fn empty_state(app: &mut LangMuxApp, ui: &mut egui::Ui) {
     });
 }
 
-fn source_table(app: &mut LangMuxApp, ui: &mut egui::Ui) {
+fn source_table(app: &mut KestrelApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         let mut all_checked = app.sources.iter().all(|source| source.checked);
         if ui.checkbox(&mut all_checked, "").changed() {
@@ -358,7 +358,7 @@ fn source_column_widths(available: f32) -> [f32; 9] {
     ]
 }
 
-fn output_panel(app: &mut LangMuxApp, ui: &mut egui::Ui) {
+fn output_panel(app: &mut KestrelApp, ui: &mut egui::Ui) {
     widgets::card(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {

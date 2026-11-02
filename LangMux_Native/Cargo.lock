@@ -1216,6 +1216,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "kestrel-media"
+version = "3.0.0"
+dependencies = [
+ "eframe",
+ "image",
+ "regex",
+ "rfd",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "khronos_api"
 version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1231,18 +1243,6 @@ dependencies = [
  "euclid",
  "polycool",
  "smallvec",
-]
-
-[[package]]
-name = "langmux"
-version = "3.0.0"
-dependencies = [
- "eframe",
- "image",
- "regex",
- "rfd",
- "serde",
- "serde_json",
 ]
 
 [[package]]

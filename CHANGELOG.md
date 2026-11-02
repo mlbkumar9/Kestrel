@@ -2,6 +2,8 @@
 
 ## [3.0.0] - 2026-11-02
 
+LangMux is now Kestrel.
+
 ### Added
 - Multi-step native workflow for source selection, conversion settings, and queue management
 - Configurable video, audio, and subtitle processing with presets and per-job snapshots

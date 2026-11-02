@@ -5,7 +5,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 temporary_directory="$(mktemp -d)"
 trap 'rm -rf "$temporary_directory"' EXIT
 stage_directory="$temporary_directory/stage"
-output_msi="$temporary_directory/LangMux-test.msi"
+output_msi="$temporary_directory/Kestrel-test.msi"
 
 if ! command -v msiinfo >/dev/null 2>&1; then
   echo "msiinfo is required; install msitools." >&2
@@ -13,11 +13,11 @@ if ! command -v msiinfo >/dev/null 2>&1; then
 fi
 
 standard_files=(
-  langmux.exe
+  kestrel.exe
   LICENSE
   README.md
   THIRD_PARTY_NOTICES.md
-  logo.ico
+  kestrel.ico
   tools/ffmpeg/bin/ffmpeg.exe
   tools/ffmpeg/bin/ffprobe.exe
   tools/ffmpeg/LICENSE
@@ -28,8 +28,8 @@ standard_files=(
 for relative_path in "${standard_files[@]}"; do
   file_path="$stage_directory/$relative_path"
   mkdir -p "$(dirname "$file_path")"
-  if [[ "$relative_path" == "logo.ico" ]]; then
-    cp "$repo_root/logo.ico" "$file_path"
+  if [[ "$relative_path" == "kestrel.ico" ]]; then
+    cp "$repo_root/LangMux_Native/assets/kestrel.ico" "$file_path"
   else
     printf 'fixture: %s\n' "$relative_path" > "$file_path"
   fi
@@ -65,11 +65,11 @@ file_rows = exported_rows("File")
 actual_files = Counter(row[2] for row in file_rows)
 expected_files = Counter(
     [
-        "langmux.exe",
+        "kestrel.exe",
         "LICENSE",
         "README.md",
         "THIRD_PARTY_NOTICES.md",
-        "logo.ico",
+        "kestrel.ico",
         "ffmpeg.exe",
         "ffprobe.exe",
         "LICENSE",
@@ -87,8 +87,8 @@ if actual_files != expected_files:
     )
 
 shortcuts = exported_rows("Shortcut")
-if not any(row[0] == "LangMuxStartMenuShortcut" for row in shortcuts):
-    raise SystemExit("LangMux Start Menu shortcut is missing.")
+if not any(row[0] == "KestrelStartMenuShortcut" for row in shortcuts):
+    raise SystemExit("Kestrel Start Menu shortcut is missing.")
 
 upgrade_rows = exported_rows("Upgrade")
 upgrade_codes = {
@@ -112,6 +112,6 @@ if version_two is None or int(version_two[4]) != 256 or version_two[6] != "LEGAC
     )
 
 print("PASS: MSI contains 10 standard files, libfixture.dll, and LIBUPPER.DLL (12 files total).")
-print("PASS: LangMux Start Menu shortcut is present.")
+print("PASS: Kestrel Start Menu shortcut is present.")
 print("PASS: Upgrade table contains v1.0.0 and v2.0.0 upgrade rows.")
 PY

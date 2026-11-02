@@ -1,18 +1,18 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-  <Product Id="*" Name="LangMux" Language="1033" Version="$(var.Version)"
-           Manufacturer="mlbkumar9" UpgradeCode="{E110F64D-5C3D-5E2D-9B02-53217F2CAEA5}">
+  <Product Id="*" Name="Kestrel" Language="1033" Version="$(var.Version)"
+           Manufacturer="Kestrel" UpgradeCode="{E110F64D-5C3D-5E2D-9B02-53217F2CAEA5}">
     <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" />
-    <MajorUpgrade DowngradeErrorMessage="A newer version of LangMux is already installed." />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Kestrel is already installed." />
     <Upgrade Id="{bba02aaf-78ca-41e3-8586-b84b471755ed}">
       <UpgradeVersion Minimum="0.0.0" IncludeMinimum="yes" Maximum="$(var.Version)" IncludeMaximum="no"
                       Property="LEGACY_V2_FOUND" OnlyDetect="no"/>
     </Upgrade>
-    <Media Id="1" Cabinet="LangMux.cab" EmbedCab="yes" />
-    <Icon Id="LangMuxIcon" SourceFile="$(var.StageDir)/logo.ico" />
-    <Property Id="ARPPRODUCTICON" Value="LangMuxIcon" />
+    <Media Id="1" Cabinet="Kestrel.cab" EmbedCab="yes" />
+    <Icon Id="KestrelIcon" SourceFile="$(var.StageDir)/kestrel.ico" />
+    <Property Id="ARPPRODUCTICON" Value="KestrelIcon" />
 
-    <Feature Id="ProductFeature" Title="LangMux" Level="1">
+    <Feature Id="ProductFeature" Title="Kestrel" Level="1">
       <ComponentRef Id="ApplicationFiles" />
       <ComponentRef Id="FfmpegBinaries" />
       <ComponentRef Id="FfmpegLicense" />
@@ -23,13 +23,13 @@
 
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="ProgramFiles64Folder">
-        <Directory Id="INSTALLFOLDER" Name="LangMux">
+        <Directory Id="INSTALLFOLDER" Name="Kestrel">
           <Component Id="ApplicationFiles" Guid="{5a0a83fb-0598-4b63-abef-7b399d4442f8}">
-            <File Id="LangMuxExe" Name="langmux.exe" Source="$(var.StageDir)/langmux.exe" KeyPath="yes" />
+            <File Id="KestrelExe" Name="kestrel.exe" Source="$(var.StageDir)/kestrel.exe" KeyPath="yes" />
             <File Id="RootLicense" Name="LICENSE" Source="$(var.StageDir)/LICENSE" />
             <File Id="Readme" Name="README.md" Source="$(var.StageDir)/README.md" />
             <File Id="ThirdPartyNotices" Name="THIRD_PARTY_NOTICES.md" Source="$(var.StageDir)/THIRD_PARTY_NOTICES.md" />
-            <File Id="LangMuxIconFile" Name="logo.ico" Source="$(var.StageDir)/logo.ico" />
+            <File Id="KestrelIconFile" Name="kestrel.ico" Source="$(var.StageDir)/kestrel.ico" />
           </Component>
           <Directory Id="ToolsFolder" Name="tools">
             <Directory Id="FfmpegFolder" Name="ffmpeg">
@@ -54,14 +54,14 @@
         </Directory>
       </Directory>
       <Directory Id="ProgramMenuFolder">
-        <Directory Id="ProgramMenuLangMuxFolder" Name="LangMux">
+        <Directory Id="ProgramMenuKestrelFolder" Name="Kestrel">
           <Component Id="StartMenuShortcut" Guid="{f6a5b3f5-e2ff-4bc4-ba84-e24ca4d8b7a0}">
-            <Shortcut Id="LangMuxStartMenuShortcut" Name="LangMux"
-                      Description="LangMux MKV language remuxer"
-                      Target="[INSTALLFOLDER]langmux.exe" WorkingDirectory="INSTALLFOLDER"
-                      Icon="LangMuxIcon" IconIndex="0" />
-            <RemoveFolder Id="RemoveProgramMenuLangMuxFolder" On="uninstall" />
-            <RegistryValue Root="HKLM" Key="Software\mlbkumar9\LangMux"
+            <Shortcut Id="KestrelStartMenuShortcut" Name="Kestrel"
+                      Description="Kestrel MKV language remuxer"
+                      Target="[INSTALLFOLDER]kestrel.exe" WorkingDirectory="INSTALLFOLDER"
+                      Icon="KestrelIcon" IconIndex="0" />
+            <RemoveFolder Id="RemoveProgramMenuKestrelFolder" On="uninstall" />
+            <RegistryValue Root="HKLM" Key="Software\mlbkumar9\Kestrel"
                            Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
           </Component>
         </Directory>

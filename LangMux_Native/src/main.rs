@@ -1,11 +1,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use eframe::egui;
-use langmux::{app, branding};
+use kestrel_media::{app, branding};
 use std::sync::Arc;
 
 fn app_icon() -> Option<Arc<egui::IconData>> {
-    let image = image::load_from_memory(include_bytes!("../../logo.png"))
+    let image = image::load_from_memory(include_bytes!("../assets/kestrel.png"))
         .ok()?
         .into_rgba8();
     Some(Arc::new(egui::IconData {
@@ -33,6 +33,6 @@ fn main() -> eframe::Result {
     eframe::run_native(
         branding::APP_NAME,
         options,
-        Box::new(|cc| Ok(Box::new(app::LangMuxApp::new(cc)))),
+        Box::new(|cc| Ok(Box::new(app::KestrelApp::new(cc)))),
     )
 }

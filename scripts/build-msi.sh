@@ -17,7 +17,7 @@ if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 fi
 
 for file in \
-  langmux.exe \
+  kestrel.exe \
   LICENSE \
   README.md \
   THIRD_PARTY_NOTICES.md \
@@ -32,8 +32,8 @@ for file in \
   fi
 done
 
-if [[ ! -f "$stage_dir/logo.ico" ]]; then
-  cp "$repo_root/logo.ico" "$stage_dir/logo.ico"
+if [[ ! -f "$stage_dir/kestrel.ico" ]]; then
+  cp "$repo_root/LangMux_Native/assets/kestrel.ico" "$stage_dir/kestrel.ico"
 fi
 
 output_directory="$(dirname "$output_msi")"

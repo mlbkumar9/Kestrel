@@ -1,8 +1,8 @@
-# LangMux contributor notes
+# Kestrel contributor notes
 
 ## Project layout
 
-- `LangMux_Native/` is the recommended desktop application: an eframe/egui Rust app with the remux worker and unit tests.
+- `LangMux_Native/` is the Kestrel desktop application: an eframe/egui Rust app with the remux worker and unit tests.
 - `REMUX_Tauri/` is the existing Tauri + React desktop app.
 - `REMUX Python Scripts/` contains the Tkinter, CustomTkinter, CLI, and Flask entrypoints.
 - Keep changes to the native app isolated from the existing Tauri and Python applications unless a task explicitly asks otherwise.

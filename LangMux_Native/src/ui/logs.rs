@@ -1,8 +1,8 @@
-use crate::app::LangMuxApp;
+use crate::app::KestrelApp;
 use crate::theme;
 use eframe::egui::{self, Align, ComboBox, Layout, RichText, ScrollArea};
 
-pub fn show(app: &mut LangMuxApp, ui: &mut egui::Ui, ctx: &egui::Context) {
+pub fn show(app: &mut KestrelApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     ui.horizontal(|ui| {
         ui.label(RichText::new("ACTIVITY LOG").strong().size(10.0));
         ComboBox::from_id_salt("log-level")
@@ -18,7 +18,7 @@ pub fn show(app: &mut LangMuxApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             }
             if ui.button("Export").clicked()
                 && let Some(path) = rfd::FileDialog::new()
-                    .set_file_name("langmux.log")
+                    .set_file_name("kestrel.log")
                     .save_file()
             {
                 match std::fs::write(&path, app.logs.join("\n")) {

@@ -1,10 +1,10 @@
 use super::{logs, queue, settings, source};
-use crate::app::{LangMuxApp, Step};
+use crate::app::{KestrelApp, Step};
 use crate::branding::APP_NAME;
 use crate::theme;
 use eframe::egui::{self, Align, Button, CornerRadius, Layout, ProgressBar, RichText, Stroke};
 
-pub fn show(app: &mut LangMuxApp, root: &mut egui::Ui, ctx: &egui::Context) {
+pub fn show(app: &mut KestrelApp, root: &mut egui::Ui, ctx: &egui::Context) {
     egui::Panel::top("app-header")
         .exact_size(48.0)
         .frame(
@@ -102,7 +102,7 @@ pub fn show(app: &mut LangMuxApp, root: &mut egui::Ui, ctx: &egui::Context) {
                 }
                 if ui.button("Export presets…").clicked() {
                     if let Some(path) = rfd::FileDialog::new()
-                        .set_file_name("langmux-presets.json")
+                        .set_file_name("kestrel-presets.json")
                         .save_file()
                         && let Ok(contents) =
                             crate::presets::export_user_presets(&app.preferences.user_presets)
@@ -317,9 +317,7 @@ pub fn show(app: &mut LangMuxApp, root: &mut egui::Ui, ctx: &egui::Context) {
             });
         app.about_open = about_open;
     }
-    if !app.preferences.legacy_banner_dismissed
-        && let Some(install) = app.legacy_install.clone()
-    {
+    if !app.preferences.legacy_banner_dismissed && app.legacy_install.is_some() {
         egui::Area::new(egui::Id::new("legacy-install-banner"))
             .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 48.0))
             .order(egui::Order::Foreground)
@@ -331,10 +329,7 @@ pub fn show(app: &mut LangMuxApp, root: &mut egui::Ui, ctx: &egui::Context) {
                     .inner_margin(egui::Margin::symmetric(12, 8))
                     .show(ui, |ui| {
                         ui.horizontal_wrapped(|ui| {
-                            ui.label(format!(
-                                "An older LangMux {} installation was found.",
-                                install.display_version
-                            ));
+                            ui.label("A LangMux 1.0 installation was found.");
                             if app.legacy_action_running {
                                 ui.spinner();
                             } else if ui.button("Remove it").clicked() {

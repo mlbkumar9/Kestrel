@@ -18,9 +18,6 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-const PREFERENCES_KEY: &str = "app.preferences.v3";
-const LEGACY_PREFERENCES_KEY: &str = "langmux.preferences";
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum Step {
     #[default]
@@ -178,7 +175,7 @@ enum UiEvent {
     },
 }
 
-pub struct LangMuxApp {
+pub struct KestrelApp {
     pub(crate) preferences: Preferences,
     pub(crate) step: Step,
     pub(crate) settings_tab: SettingsTab,
@@ -225,15 +222,15 @@ pub struct LangMuxApp {
     preview_cache: HashMap<(PathBuf, u64, String), Vec<u8>>,
 }
 
-impl LangMuxApp {
+impl KestrelApp {
     pub fn new(cc: &CreationContext<'_>) -> Self {
         theme::apply(&cc.egui_ctx);
-        let logo = image::load_from_memory(include_bytes!("../../logo.png"))
+        let logo = image::load_from_memory(include_bytes!("../assets/kestrel.png"))
             .ok()
             .map(|image| {
                 let rgba = image.into_rgba8();
                 cc.egui_ctx.load_texture(
-                    "langmux-logo",
+                    "kestrel-logo",
                     egui::ColorImage::from_rgba_unmultiplied(
                         [rgba.width() as usize, rgba.height() as usize],
                         rgba.as_raw(),
@@ -241,21 +238,12 @@ impl LangMuxApp {
                     egui::TextureOptions::LINEAR,
                 )
             });
-        let (mut preferences, from_legacy_record) = cc.storage.map_or_else(
-            || (Preferences::default(), false),
-            |storage| {
-                eframe::get_value(storage, PREFERENCES_KEY)
-                    .map(|preferences| (preferences, false))
-                    .or_else(|| {
-                        eframe::get_value(storage, LEGACY_PREFERENCES_KEY)
-                            .map(|preferences| (preferences, true))
-                    })
-                    .unwrap_or_else(|| (Preferences::default(), false))
-            },
-        );
+        let (mut preferences, from_legacy_record) = cc
+            .storage
+            .map_or_else(|| (Preferences::default(), false), load_preferences);
         migrate_preferences(&mut preferences, from_legacy_record);
         #[cfg(debug_assertions)]
-        let tools = if std::env::var("LANGMUX_DEBUG_NO_TOOLS").as_deref() == Ok("1") {
+        let tools = if std::env::var("KESTREL_DEBUG_NO_TOOLS").as_deref() == Ok("1") {
             Toolchain::default()
         } else {
             Toolchain::discover()
@@ -269,7 +257,7 @@ impl LangMuxApp {
         let (sender, receiver) = mpsc::channel();
         let (ui_sender, ui_receiver) = mpsc::channel();
         #[cfg(debug_assertions)]
-        let legacy_install = (std::env::var("LANGMUX_DEBUG_LEGACY_BANNER").as_deref() == Ok("1"))
+        let legacy_install = (std::env::var("KESTREL_DEBUG_LEGACY_BANNER").as_deref() == Ok("1"))
             .then(crate::legacy::debug_sample);
         #[cfg(not(debug_assertions))]
         let legacy_install = None;
@@ -1109,7 +1097,7 @@ impl LangMuxApp {
     }
 }
 
-impl eframe::App for LangMuxApp {
+impl eframe::App for KestrelApp {
     fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = root.ctx().clone();
         self.handle_ui_events();
@@ -1147,7 +1135,7 @@ impl eframe::App for LangMuxApp {
             .subtitles
             .languages
             .join(", ");
-        eframe::set_value(storage, PREFERENCES_KEY, &self.preferences);
+        eframe::set_value(storage, crate::branding::PREFERENCES_KEY, &self.preferences);
     }
 }
 
@@ -1161,6 +1149,16 @@ fn clock_time() -> String {
 fn clear_source_preferences(preferences: &mut Preferences) {
     preferences.input_items.clear();
     preferences.input_directory.clear();
+}
+
+fn load_preferences(storage: &dyn eframe::Storage) -> (Preferences, bool) {
+    if let Some(preferences) = eframe::get_value(storage, crate::branding::PREFERENCES_KEY) {
+        return (preferences, false);
+    }
+    crate::branding::LEGACY_PREFERENCES_KEYS
+        .iter()
+        .find_map(|key| eframe::get_value(storage, key).map(|preferences| (preferences, true)))
+        .unwrap_or_else(|| (Preferences::default(), false))
 }
 
 fn effective_output_target(
@@ -1190,11 +1188,48 @@ fn effective_output_target(
 #[cfg(test)]
 mod tests {
     use super::{
-        Preferences, clear_source_preferences, effective_output_target, migrate_preferences,
+        Preferences, clear_source_preferences, effective_output_target, load_preferences,
+        migrate_preferences,
     };
     use crate::formats::Container;
     use crate::inputs::{ExistingPolicy, InputItem, OutputTarget};
+    use std::collections::HashMap;
     use std::path::PathBuf;
+
+    #[derive(Default)]
+    struct MemoryStorage(HashMap<String, String>);
+
+    impl eframe::Storage for MemoryStorage {
+        fn get_string(&self, key: &str) -> Option<String> {
+            self.0.get(key).cloned()
+        }
+
+        fn set_string(&mut self, key: &str, value: String) {
+            self.0.insert(key.to_owned(), value);
+        }
+
+        fn remove_string(&mut self, key: &str) {
+            self.0.remove(key);
+        }
+
+        fn flush(&mut self) {}
+    }
+
+    #[test]
+    fn loads_preferences_from_a_legacy_langmux_key() {
+        let mut storage = MemoryStorage::default();
+        eframe::set_value(
+            &mut storage,
+            "langmux.preferences",
+            &Preferences {
+                output_directory: "/exports".to_owned(),
+                ..Preferences::default()
+            },
+        );
+        let (preferences, from_legacy) = load_preferences(&storage);
+        assert!(from_legacy);
+        assert_eq!(preferences.output_directory, "/exports");
+    }
 
     #[test]
     fn legacy_fields_migrate_only_from_the_legacy_record() {
