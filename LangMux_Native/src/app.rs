@@ -1139,7 +1139,8 @@ impl eframe::App for KestrelApp {
             .subtitles
             .languages
             .join(", ");
-        eframe::set_value(storage, crate::branding::PREFERENCES_KEY, &self.preferences);
+        let preferences = preferences_for_save(&self.preferences);
+        eframe::set_value(storage, crate::branding::PREFERENCES_KEY, &preferences);
     }
 }
 
@@ -1153,6 +1154,23 @@ fn clock_time() -> String {
 fn clear_source_preferences(preferences: &mut Preferences) {
     preferences.input_items.clear();
     preferences.input_directory.clear();
+}
+
+pub(crate) fn remove_source_input(preferences: &mut Preferences, path: &Path) {
+    preferences
+        .input_items
+        .retain(|item| !matches!(item, InputItem::File(file) if file.as_path() == path));
+    if preferences.input_items.is_empty() {
+        preferences.input_directory.clear();
+    }
+}
+
+fn preferences_for_save(preferences: &Preferences) -> Preferences {
+    let mut preferences = preferences.clone();
+    if preferences.input_items.is_empty() {
+        preferences.input_directory.clear();
+    }
+    preferences
 }
 
 fn load_preferences(storage: &dyn eframe::Storage) -> (Preferences, bool) {
@@ -1200,7 +1218,7 @@ fn effective_output_target(
 mod tests {
     use super::{
         Preferences, clear_source_preferences, effective_output_target, load_preferences,
-        migrate_preferences,
+        migrate_preferences, preferences_for_save, remove_source_input,
     };
     use crate::formats::Container;
     use crate::inputs::{ExistingPolicy, InputItem, OutputTarget};
@@ -1257,6 +1275,45 @@ mod tests {
             Some(OutputTarget::Folder(PathBuf::from("/exports")))
         );
         assert_eq!(preferences.output_directory, "/exports");
+    }
+
+    #[test]
+    fn removing_last_explicit_file_then_saving_does_not_restore_it() {
+        let input_file = PathBuf::from("/movies/only.mkv");
+        let mut preferences = Preferences {
+            input_items: vec![InputItem::File(input_file.clone())],
+            input_directory: "/movies".to_owned(),
+            ..Preferences::default()
+        };
+        remove_source_input(&mut preferences, &input_file);
+
+        assert!(preferences.input_items.is_empty());
+        assert!(preferences.input_directory.is_empty());
+
+        let saved = preferences_for_save(&preferences);
+        let mut storage = MemoryStorage::default();
+        eframe::set_value(&mut storage, crate::branding::PREFERENCES_KEY, &saved);
+        let (mut loaded, from_legacy) = load_preferences(&storage);
+        assert!(!from_legacy);
+        migrate_preferences(&mut loaded, from_legacy);
+        assert!(loaded.input_items.is_empty());
+    }
+
+    #[test]
+    fn saving_empty_sources_clears_a_stale_input_directory_before_reload() {
+        let preferences = Preferences {
+            input_directory: "/movies".to_owned(),
+            ..Preferences::default()
+        };
+        let saved = preferences_for_save(&preferences);
+        assert!(saved.input_directory.is_empty());
+
+        let mut storage = MemoryStorage::default();
+        eframe::set_value(&mut storage, crate::branding::PREFERENCES_KEY, &saved);
+        let (mut loaded, from_legacy) = load_preferences(&storage);
+        assert!(!from_legacy);
+        migrate_preferences(&mut loaded, from_legacy);
+        assert!(loaded.input_items.is_empty());
     }
 
     #[test]
