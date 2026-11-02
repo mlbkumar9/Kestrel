@@ -1157,7 +1157,14 @@ fn load_preferences(storage: &dyn eframe::Storage) -> (Preferences, bool) {
     }
     crate::branding::LEGACY_PREFERENCES_KEYS
         .iter()
-        .find_map(|key| eframe::get_value(storage, key).map(|preferences| (preferences, true)))
+        .find_map(|key| {
+            eframe::get_value(storage, key).map(|preferences| {
+                (
+                    preferences,
+                    *key == crate::branding::LEGACY_V2_PREFERENCES_KEY,
+                )
+            })
+        })
         .unwrap_or_else(|| (Preferences::default(), false))
 }
 
@@ -1220,15 +1227,76 @@ mod tests {
         let mut storage = MemoryStorage::default();
         eframe::set_value(
             &mut storage,
-            "langmux.preferences",
+            crate::branding::LEGACY_V2_PREFERENCES_KEY,
             &Preferences {
+                input_directory: "/movies".to_owned(),
                 output_directory: "/exports".to_owned(),
+                skip_existing: false,
                 ..Preferences::default()
             },
         );
-        let (preferences, from_legacy) = load_preferences(&storage);
+        let (mut preferences, from_legacy) = load_preferences(&storage);
         assert!(from_legacy);
+        migrate_preferences(&mut preferences, from_legacy);
+        assert_eq!(
+            preferences.input_items,
+            [InputItem::Folder {
+                path: PathBuf::from("/movies"),
+                recursive: true,
+            }]
+        );
+        assert_eq!(preferences.existing, ExistingPolicy::Overwrite);
+        assert!(preferences.output_target_explicit);
+        assert_eq!(
+            preferences.output_target,
+            Some(OutputTarget::Folder(PathBuf::from("/exports")))
+        );
         assert_eq!(preferences.output_directory, "/exports");
+    }
+
+    #[test]
+    fn app_preferences_v3_fallback_is_not_migrated_as_a_v1_v2_record() {
+        let mut storage = MemoryStorage::default();
+        eframe::set_value(
+            &mut storage,
+            "app.preferences.v3",
+            &Preferences {
+                input_items: vec![InputItem::Folder {
+                    path: PathBuf::from("/movies"),
+                    recursive: true,
+                }],
+                input_directory: "/movies".to_owned(),
+                output_directory: "/custom-output".to_owned(),
+                output_target: Some(OutputTarget::Folder(PathBuf::from("/movies/converted"))),
+                output_target_explicit: false,
+                existing: ExistingPolicy::Rename,
+                skip_existing: true,
+                ..Preferences::default()
+            },
+        );
+
+        let (mut preferences, from_legacy) = load_preferences(&storage);
+        assert!(!from_legacy);
+        migrate_preferences(&mut preferences, from_legacy);
+
+        assert_eq!(preferences.existing, ExistingPolicy::Rename);
+        assert!(preferences.skip_existing);
+        assert_eq!(preferences.output_directory, "/custom-output");
+        assert!(!preferences.output_target_explicit);
+        assert_eq!(
+            preferences.output_target,
+            Some(OutputTarget::Folder(PathBuf::from("/movies/converted",)))
+        );
+        assert_eq!(
+            effective_output_target(
+                preferences.output_target.as_ref(),
+                preferences.output_target_explicit,
+                &[],
+                &preferences.input_items,
+                Container::Mkv,
+            ),
+            OutputTarget::Folder(PathBuf::from("/movies/converted"))
+        );
     }
 
     #[test]

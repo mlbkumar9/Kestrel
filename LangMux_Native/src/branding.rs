@@ -5,7 +5,8 @@ pub const APP_NAME: &str = "Kestrel";
 pub const APP_ID: &str = "kestrel";
 pub const PREFERENCES_KEY: &str = "kestrel.preferences.v3";
 pub const LEGACY_APP_IDS: &[&str] = &["langmux"];
-pub const LEGACY_PREFERENCES_KEYS: &[&str] = &["app.preferences.v3", "langmux.preferences"];
+pub const LEGACY_V2_PREFERENCES_KEY: &str = "langmux.preferences";
+pub const LEGACY_PREFERENCES_KEYS: &[&str] = &["app.preferences.v3", LEGACY_V2_PREFERENCES_KEY];
 
 pub fn migrate_storage() {
     let Some(current_dir) = eframe::storage_dir(APP_ID) else {
