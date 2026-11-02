@@ -24,9 +24,9 @@ LangMux is moving from a single-purpose MKV language remuxer to a fast, native m
 - Bulk rules such as "keep the first `eng` audio track and drop commentary" and "keep forced subtitles only".
 - Saved remux profiles.
 
-## v3.0 — Transcoding (HandBrake-style)
+## v3.0 — Transcoding
 
-The transcode UI follows HandBrake's model: a source, a preset, tabbed settings and a queue.
+The transcode UI provides a source, a preset, tabbed settings and a queue.
 
 - **Source and queue:** add files or folders; each queue item stores a snapshot of its settings. Start, pause and stop the queue; reorder and retry items.
 - **Presets:** built-in presets (Fast 1080p H.264, HQ 1080p H.265, 4K HEVC 10-bit, AV1 SVT, Web/Discord, Apple devices) plus user presets you can import and export as JSON.
