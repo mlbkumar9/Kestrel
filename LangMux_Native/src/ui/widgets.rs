@@ -177,6 +177,30 @@ pub fn format_duration(seconds: f64) -> String {
     }
 }
 
+pub fn format_eta(seconds: f64) -> String {
+    if !seconds.is_finite() || seconds < 0.0 {
+        return "—".to_owned();
+    }
+    let seconds = seconds.round() as u64;
+    format!("{:02}:{:02}", seconds / 60, seconds % 60)
+}
+
+pub fn count_label(count: usize, singular: &str, plural: &str) -> String {
+    format!("{count} {}", if count == 1 { singular } else { plural })
+}
+
+pub fn preset_display_name(
+    id: &str,
+    encoders: &crate::encoders::EncoderSet,
+    user_presets: &[crate::presets::Preset],
+) -> String {
+    crate::presets::builtins(encoders)
+        .into_iter()
+        .chain(user_presets.iter().cloned())
+        .find(|preset| preset.id == id)
+        .map_or_else(|| id.to_owned(), |preset| preset.name)
+}
+
 pub fn tooltip_label(ui: &mut egui::Ui, text: &str, tooltip: &str) {
     ui.add(Label::new(RichText::new(text).color(theme::MUTED)).truncate())
         .on_hover_text(tooltip);

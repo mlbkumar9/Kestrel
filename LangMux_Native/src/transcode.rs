@@ -773,6 +773,22 @@ fn quality_value(quality: u8, worst: u32, best: u32) -> String {
     value.round().to_string()
 }
 
+pub fn quality_control_label(encoder: &VideoEncoder, quality: u8) -> String {
+    let (name, value) = match encoder {
+        VideoEncoder::X264 | VideoEncoder::X265 => ("CRF", quality_value(quality, 30, 14)),
+        VideoEncoder::SvtAv1 => ("CRF", quality_value(quality, 50, 18)),
+        VideoEncoder::Vp9 => ("CRF", quality_value(quality, 50, 15)),
+        VideoEncoder::Hardware { vendor, .. } => match vendor {
+            HwVendor::Nvenc => ("CQ", quality_value(quality, 35, 16)),
+            HwVendor::Qsv => ("Quality", quality_value(quality, 35, 16)),
+            HwVendor::Amf => ("QP", quality_value(quality, 35, 16)),
+            HwVendor::VideoToolbox => ("Quality", quality_value(quality, 30, 85)),
+            HwVendor::Vaapi => ("QP", quality_value(quality, 35, 16)),
+        },
+    };
+    format!("{name} {value}")
+}
+
 fn push_pair(arguments: &mut Vec<OsString>, flag: &str, value: impl Into<OsString>) {
     arguments.push(flag.into());
     arguments.push(value.into());

@@ -3,8 +3,8 @@ use crate::app::{LangMuxApp, SettingsTab};
 use crate::presets::{self, Preset};
 use crate::theme;
 use crate::transcode::{
-    AudioChoice, BurnIn, Deinterlace, Denoise, FrameRate, Mixdown, RateControl, TenBit,
-    VideoEncode, VideoEncoder, VideoSettings,
+    AudioChoice, BurnIn, Crop, Deinterlace, Denoise, FrameRate, HwCodec, HwVendor, Mixdown,
+    RateControl, TenBit, VideoEncode, VideoEncoder, VideoSettings,
 };
 use eframe::egui::{self, Align, ComboBox, Frame, Layout, RichText, ScrollArea, Slider, Stroke};
 
@@ -58,8 +58,8 @@ pub fn action_bar(app: &mut LangMuxApp, ui: &mut egui::Ui, ctx: &egui::Context) 
     ui.horizontal(|ui| {
         ui.label(
             RichText::new(format!(
-                "{} files · {}",
-                app.selected_source_indices().len(),
+                "{} · {}",
+                widgets::count_label(app.selected_source_indices().len(), "file", "files"),
                 preset_name
             ))
             .size(10.0)
@@ -247,7 +247,11 @@ fn summary(app: &mut LangMuxApp, ui: &mut egui::Ui) {
                         VideoEncoder::X265 => "H.265".to_owned(),
                         VideoEncoder::SvtAv1 => "AV1".to_owned(),
                         VideoEncoder::Vp9 => "VP9".to_owned(),
-                        VideoEncoder::Hardware { codec, .. } => format!("{codec:?}"),
+                        VideoEncoder::Hardware { codec, .. } => match codec {
+                            HwCodec::H264 => "H.264".to_owned(),
+                            HwCodec::Hevc => "H.265".to_owned(),
+                            HwCodec::Av1 => "AV1".to_owned(),
+                        },
                     }
                 ),
             }
@@ -327,9 +331,12 @@ fn summary(app: &mut LangMuxApp, ui: &mut egui::Ui) {
                     ui.label(RichText::new(warning.clone()).color(theme::TEXT))
                         .on_hover_text(files.join("\n"));
                     ui.label(
-                        RichText::new(format!("({} files)", files.len()))
-                            .size(10.0)
-                            .color(theme::MUTED),
+                        RichText::new(format!(
+                            "({})",
+                            widgets::count_label(files.len(), "file", "files")
+                        ))
+                        .size(10.0)
+                        .color(theme::MUTED),
                     )
                     .on_hover_text(files.join("\n"));
                     if warning.starts_with("Video must be re-encoded")
@@ -430,152 +437,394 @@ fn video_settings(app: &mut LangMuxApp, ui: &mut egui::Ui) {
             .and_then(|metadata| metadata.video.as_ref())
             .is_some_and(|video| video.hdr)
     });
-    if ui.button("Detect crop").clicked()
-        && let Some(index) = selected_index
-    {
-        app.detect_crop(index);
-    }
     let VideoSettings::Encode(encode) = &mut app.preferences.current_settings.video else {
         return;
     };
-    ui.horizontal_wrapped(|ui| {
-        for (encoder, label) in [
-            (VideoEncoder::X264, "H.264"),
-            (VideoEncoder::X265, "H.265"),
-            (VideoEncoder::SvtAv1, "AV1"),
-            (VideoEncoder::Vp9, "VP9"),
-        ] {
-            if ui
-                .selectable_label(encode.encoder == encoder, label)
-                .clicked()
-            {
-                encode.encoder = encoder;
-            }
-        }
-    });
-    ui.horizontal(|ui| {
-        ui.label("Encoder");
-        ComboBox::from_id_salt("video-encoder")
-            .selected_text(format!("{:?}", encode.encoder))
-            .show_ui(ui, |ui| {
-                for encoder in app.encoders.software.iter() {
-                    ui.selectable_value(
-                        &mut encode.encoder,
-                        encoder.clone(),
-                        format!("{encoder:?}"),
-                    );
-                }
-                for encoder in app.encoders.hardware.iter() {
-                    ui.selectable_value(
-                        &mut encode.encoder,
-                        encoder.clone(),
-                        format!("{encoder:?}"),
-                    );
-                }
-            });
-    });
-    if let RateControl::Quality(quality) = &mut encode.rate {
-        ui.horizontal(|ui| {
-            ui.label("Quality");
-            ui.add(Slider::new(quality, 0..=100).show_value(true));
-        });
-    } else if let RateControl::Bitrate(bitrate) = &mut encode.rate {
-        ui.add(Slider::new(bitrate, 250..=25000).text("kb/s"));
-    }
-    ui.add(Slider::new(&mut encode.speed, 0..=5).text("Speed"));
-    ui.horizontal(|ui| {
-        ui.label("Resolution");
-        ComboBox::from_id_salt("resolution")
-            .selected_text(
-                encode
-                    .max_height
-                    .map_or("Source".to_owned(), |height| format!("Up to {height}p")),
-            )
-            .show_ui(ui, |ui| {
-                ui.selectable_value(&mut encode.max_height, None, "Source");
-                for height in [2160, 1080, 720, 480] {
-                    ui.selectable_value(&mut encode.max_height, Some(height), format!("{height}p"));
-                }
-            });
-    });
-    egui::CollapsingHeader::new("Advanced video options")
-        .default_open(app.advanced_open)
+    let mut detect_crop = false;
+    egui::Grid::new("video-settings-grid")
+        .num_columns(2)
+        .spacing([8.0, 8.0])
         .show(ui, |ui| {
+            ui.add_sized(
+                [130.0, 22.0],
+                egui::Label::new(RichText::new("Codec").color(theme::MUTED)),
+            );
+            ui.vertical(|ui| {
+                ui.horizontal_wrapped(|ui| {
+                    for (encoder, label) in [
+                        (VideoEncoder::X264, "H.264"),
+                        (VideoEncoder::X265, "H.265"),
+                        (VideoEncoder::SvtAv1, "AV1"),
+                        (VideoEncoder::Vp9, "VP9"),
+                    ] {
+                        if ui
+                            .selectable_label(codec_matches(&encode.encoder, &encoder), label)
+                            .clicked()
+                        {
+                            encode.encoder = encoder;
+                        }
+                    }
+                });
+                ui.label(
+                    RichText::new(codec_hint(&encode.encoder))
+                        .size(10.0)
+                        .color(theme::MUTED),
+                );
+            });
+            ui.end_row();
+
+            ui.add_sized(
+                [130.0, 22.0],
+                egui::Label::new(RichText::new("Encoder").color(theme::MUTED)),
+            );
+            ComboBox::from_id_salt("video-encoder")
+                .selected_text(encoder_label(&encode.encoder))
+                .show_ui(ui, |ui| {
+                    for encoder in app.encoders.software.iter() {
+                        ui.selectable_value(
+                            &mut encode.encoder,
+                            encoder.clone(),
+                            encoder_label(encoder),
+                        );
+                    }
+                    for encoder in app.encoders.hardware.iter() {
+                        ui.selectable_value(
+                            &mut encode.encoder,
+                            encoder.clone(),
+                            encoder_label(encoder),
+                        );
+                    }
+                });
+            ui.end_row();
+
+            ui.add_sized(
+                [130.0, 22.0],
+                egui::Label::new(RichText::new("Quality").color(theme::MUTED)),
+            );
             ui.horizontal(|ui| {
-                ui.label("Frame rate");
-                ComboBox::from_id_salt("frame-rate")
-                    .selected_text(match encode.frame_rate {
-                        FrameRate::Source => "Source".to_owned(),
-                        FrameRate::Fixed(fps) => format!("{fps} fps"),
-                    })
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut encode.frame_rate, FrameRate::Source, "Source");
-                        for fps in [24.0, 25.0, 30.0, 50.0, 60.0] {
-                            ui.selectable_value(
-                                &mut encode.frame_rate,
-                                FrameRate::Fixed(fps),
-                                format!("{fps} fps"),
+                if let RateControl::Quality(quality) = &mut encode.rate {
+                    ui.label("Smaller file");
+                    ui.scope(|ui| {
+                        style_slider(ui, 280.0);
+                        ui.add_sized(
+                            [280.0, 20.0],
+                            Slider::new(quality, 0..=100).show_value(false),
+                        );
+                    });
+                    ui.label("Better quality");
+                    ui.label(
+                        RichText::new(crate::transcode::quality_control_label(
+                            &encode.encoder,
+                            *quality,
+                        ))
+                        .size(10.0)
+                        .color(theme::MUTED),
+                    );
+                } else if let RateControl::Bitrate(bitrate) = &mut encode.rate {
+                    ui.add(Slider::new(bitrate, 250..=25000).text("kb/s"));
+                }
+            });
+            ui.end_row();
+
+            ui.add_sized(
+                [130.0, 22.0],
+                egui::Label::new(RichText::new("Speed").color(theme::MUTED)),
+            );
+            ui.horizontal(|ui| {
+                ui.label("Smallest file");
+                ui.scope(|ui| {
+                    style_slider(ui, 280.0);
+                    ui.add_sized(
+                        [280.0, 20.0],
+                        Slider::new(&mut encode.speed, 0..=4).show_value(false),
+                    );
+                });
+                ui.label("Fastest");
+                ui.label(
+                    RichText::new(["Slow", "Medium", "Fast", "Faster", "Very fast"]
+                        [usize::from(encode.speed.min(4))])
+                        .size(10.0)
+                        .color(theme::MUTED),
+                );
+            });
+            ui.end_row();
+
+            ui.add_sized(
+                [130.0, 22.0],
+                egui::Label::new(RichText::new("Resolution").color(theme::MUTED)),
+            );
+            ComboBox::from_id_salt("resolution")
+                .selected_text(
+                    encode
+                        .max_height
+                        .map_or("Source".to_owned(), |height| format!("Up to {height}p")),
+                )
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut encode.max_height, None, "Source");
+                    for height in [2160, 1080, 720, 480] {
+                        ui.selectable_value(
+                            &mut encode.max_height,
+                            Some(height),
+                            format!("{height}p"),
+                        );
+                    }
+                });
+            ui.end_row();
+
+            ui.add_sized(
+                [130.0, 22.0],
+                egui::Label::new(RichText::new("Advanced").color(theme::MUTED)),
+            );
+            egui::CollapsingHeader::new("Video options")
+                .default_open(app.advanced_open)
+                .show(ui, |ui| {
+                    egui::Grid::new("video-advanced-grid")
+                        .num_columns(2)
+                        .spacing([8.0, 7.0])
+                        .show(ui, |ui| {
+                            ui.label(RichText::new("Frame rate").color(theme::MUTED));
+                            ComboBox::from_id_salt("frame-rate")
+                                .selected_text(match encode.frame_rate {
+                                    FrameRate::Source => "Source".to_owned(),
+                                    FrameRate::Fixed(fps) => format!("{fps} fps"),
+                                })
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(
+                                        &mut encode.frame_rate,
+                                        FrameRate::Source,
+                                        "Source",
+                                    );
+                                    for fps in [24.0, 25.0, 30.0, 50.0, 60.0] {
+                                        ui.selectable_value(
+                                            &mut encode.frame_rate,
+                                            FrameRate::Fixed(fps),
+                                            format!("{fps} fps"),
+                                        );
+                                    }
+                                });
+                            ui.end_row();
+
+                            ui.label(RichText::new("Deinterlace").color(theme::MUTED));
+                            ComboBox::from_id_salt("deinterlace")
+                                .selected_text(deinterlace_label(encode.deinterlace))
+                                .show_ui(ui, |ui| {
+                                    for option in
+                                        [Deinterlace::Auto, Deinterlace::Off, Deinterlace::On]
+                                    {
+                                        ui.selectable_value(
+                                            &mut encode.deinterlace,
+                                            option,
+                                            deinterlace_label(option),
+                                        );
+                                    }
+                                });
+                            ui.end_row();
+
+                            ui.label(RichText::new("Denoise").color(theme::MUTED));
+                            ComboBox::from_id_salt("denoise")
+                                .selected_text(denoise_label(encode.denoise))
+                                .show_ui(ui, |ui| {
+                                    for option in [
+                                        Denoise::Off,
+                                        Denoise::Light,
+                                        Denoise::Medium,
+                                        Denoise::Strong,
+                                    ] {
+                                        ui.selectable_value(
+                                            &mut encode.denoise,
+                                            option,
+                                            denoise_label(option),
+                                        );
+                                    }
+                                });
+                            ui.end_row();
+
+                            ui.label(RichText::new("Rate control").color(theme::MUTED));
+                            ui.horizontal(|ui| {
+                                if ui
+                                    .selectable_label(
+                                        matches!(encode.rate, RateControl::Quality(_)),
+                                        "Quality",
+                                    )
+                                    .clicked()
+                                {
+                                    encode.rate = RateControl::Quality(60);
+                                }
+                                if ui
+                                    .selectable_label(
+                                        matches!(encode.rate, RateControl::Bitrate(_)),
+                                        "Bitrate",
+                                    )
+                                    .clicked()
+                                {
+                                    encode.rate = RateControl::Bitrate(4000);
+                                }
+                            });
+                            ui.end_row();
+
+                            ui.label(RichText::new("Pixel depth").color(theme::MUTED));
+                            ui.horizontal(|ui| {
+                                for (option, label) in [
+                                    (TenBit::MatchSource, "Match source"),
+                                    (TenBit::Off, "8-bit"),
+                                    (TenBit::On, "10-bit"),
+                                ] {
+                                    ui.selectable_value(&mut encode.ten_bit, option, label);
+                                }
+                            });
+                            ui.end_row();
+
+                            ui.label(RichText::new("Crop").color(theme::MUTED));
+                            ui.horizontal(|ui| {
+                                let custom = matches!(encode.crop, Crop::Custom { .. });
+                                if ui.selectable_label(!custom, "None").clicked() {
+                                    encode.crop = Crop::None;
+                                }
+                                if ui.selectable_label(custom, "Custom").clicked() && !custom {
+                                    encode.crop = Crop::Custom {
+                                        top: 0,
+                                        bottom: 0,
+                                        left: 0,
+                                        right: 0,
+                                    };
+                                }
+                            });
+                            ui.end_row();
+                            if let Crop::Custom {
+                                top,
+                                bottom,
+                                left,
+                                right,
+                            } = &mut encode.crop
+                            {
+                                ui.label("");
+                                ui.horizontal(|ui| {
+                                    ui.add(
+                                        egui::DragValue::new(top)
+                                            .range(0..=9999)
+                                            .prefix("T "),
+                                    );
+                                    ui.add(
+                                        egui::DragValue::new(bottom)
+                                            .range(0..=9999)
+                                            .prefix("B "),
+                                    );
+                                    ui.add(
+                                        egui::DragValue::new(left)
+                                            .range(0..=9999)
+                                            .prefix("L "),
+                                    );
+                                    ui.add(
+                                        egui::DragValue::new(right)
+                                            .range(0..=9999)
+                                            .prefix("R "),
+                                    );
+                                    detect_crop = ui.button("Detect").clicked();
+                                });
+                                ui.end_row();
+                            }
+
+                            ui.label(RichText::new("HDR").color(theme::MUTED));
+                            let response = ui.add_enabled(
+                                hdr,
+                                egui::Checkbox::new(
+                                    &mut encode.tone_map_to_sdr,
+                                    "Convert HDR to SDR",
+                                ),
                             );
-                        }
-                    });
-            });
-            ui.horizontal(|ui| {
-                ui.label("Deinterlace");
-                ComboBox::from_id_salt("deinterlace")
-                    .selected_text(format!("{:?}", encode.deinterlace))
-                    .show_ui(ui, |ui| {
-                        for option in [Deinterlace::Auto, Deinterlace::Off, Deinterlace::On] {
-                            ui.selectable_value(
-                                &mut encode.deinterlace,
-                                option,
-                                format!("{option:?}"),
-                            );
-                        }
-                    });
-            });
-            ui.horizontal(|ui| {
-                ui.label("Denoise");
-                ComboBox::from_id_salt("denoise")
-                    .selected_text(format!("{:?}", encode.denoise))
-                    .show_ui(ui, |ui| {
-                        for option in [
-                            Denoise::Off,
-                            Denoise::Light,
-                            Denoise::Medium,
-                            Denoise::Strong,
-                        ] {
-                            ui.selectable_value(&mut encode.denoise, option, format!("{option:?}"));
-                        }
-                    });
-            });
-            ui.horizontal(|ui| {
-                ui.label("Rate control");
-                if ui
-                    .selectable_label(matches!(encode.rate, RateControl::Quality(_)), "Quality")
-                    .clicked()
-                {
-                    encode.rate = RateControl::Quality(60);
-                }
-                if ui
-                    .selectable_label(matches!(encode.rate, RateControl::Bitrate(_)), "Bitrate")
-                    .clicked()
-                {
-                    encode.rate = RateControl::Bitrate(4000);
-                }
-            });
-            ui.horizontal(|ui| {
-                ui.label("Pixel depth");
-                for option in [TenBit::MatchSource, TenBit::Off, TenBit::On] {
-                    ui.selectable_value(&mut encode.ten_bit, option, format!("{option:?}"));
-                }
-            });
-            ui.add_enabled_ui(hdr, |ui| {
-                ui.checkbox(&mut encode.tone_map_to_sdr, "Convert HDR to SDR");
-            });
-            if !hdr {
-                encode.tone_map_to_sdr = false;
-            }
+                            if !hdr {
+                                response.on_hover_text(
+                                    "Available when at least one selected source contains HDR video.",
+                                );
+                                encode.tone_map_to_sdr = false;
+                            }
+                            ui.end_row();
+                        });
+                });
+            ui.end_row();
         });
+    if detect_crop && let Some(index) = selected_index {
+        app.detect_crop(index);
+    }
+}
+
+fn codec_matches(selected: &VideoEncoder, software: &VideoEncoder) -> bool {
+    let selected_codec = match selected {
+        VideoEncoder::X264 => HwCodec::H264,
+        VideoEncoder::X265 => HwCodec::Hevc,
+        VideoEncoder::SvtAv1 | VideoEncoder::Vp9 => HwCodec::Av1,
+        VideoEncoder::Hardware { codec, .. } => *codec,
+    };
+    match software {
+        VideoEncoder::X264 => selected_codec == HwCodec::H264,
+        VideoEncoder::X265 => selected_codec == HwCodec::Hevc,
+        VideoEncoder::SvtAv1 => {
+            matches!(selected, VideoEncoder::SvtAv1)
+                || matches!(
+                    selected,
+                    VideoEncoder::Hardware {
+                        codec: HwCodec::Av1,
+                        ..
+                    }
+                )
+        }
+        VideoEncoder::Vp9 => matches!(selected, VideoEncoder::Vp9),
+        VideoEncoder::Hardware { .. } => false,
+    }
+}
+
+fn codec_hint(encoder: &VideoEncoder) -> &'static str {
+    match encoder {
+        VideoEncoder::X264
+        | VideoEncoder::Hardware {
+            codec: HwCodec::H264,
+            ..
+        } => "Most compatible",
+        VideoEncoder::X265
+        | VideoEncoder::Hardware {
+            codec: HwCodec::Hevc,
+            ..
+        } => "Smaller files",
+        VideoEncoder::SvtAv1
+        | VideoEncoder::Hardware {
+            codec: HwCodec::Av1,
+            ..
+        } => "Smallest, slower",
+        VideoEncoder::Vp9 => "Web",
+    }
+}
+
+fn encoder_label(encoder: &VideoEncoder) -> &'static str {
+    match encoder {
+        VideoEncoder::X264 => "Software (x264)",
+        VideoEncoder::X265 => "Software (x265)",
+        VideoEncoder::SvtAv1 => "Software (SVT-AV1)",
+        VideoEncoder::Vp9 => "Software (VP9)",
+        VideoEncoder::Hardware { vendor, .. } => match vendor {
+            HwVendor::Nvenc => "NVIDIA NVENC",
+            HwVendor::Qsv => "Intel Quick Sync",
+            HwVendor::Amf => "AMD AMF",
+            HwVendor::VideoToolbox => "Apple VideoToolbox",
+            HwVendor::Vaapi => "VAAPI",
+        },
+    }
+}
+
+fn deinterlace_label(option: Deinterlace) -> &'static str {
+    match option {
+        Deinterlace::Auto => "Automatic",
+        Deinterlace::Off => "Off",
+        Deinterlace::On => "On",
+    }
+}
+
+fn denoise_label(option: Denoise) -> &'static str {
+    match option {
+        Denoise::Off => "Off",
+        Denoise::Light => "Light",
+        Denoise::Medium => "Medium",
+        Denoise::Strong => "Strong",
+    }
 }
 
 fn audio_settings(app: &mut LangMuxApp, ui: &mut egui::Ui) {
@@ -589,9 +838,8 @@ fn audio_settings(app: &mut LangMuxApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         ui.label("Codec");
         ComboBox::from_id_salt("audio-codec")
-            .selected_text(format!(
-                "{:?}",
-                app.preferences.current_settings.audio.codec
+            .selected_text(audio_choice_label(
+                &app.preferences.current_settings.audio.codec,
             ))
             .show_ui(ui, |ui| {
                 for codec in [
@@ -605,7 +853,7 @@ fn audio_settings(app: &mut LangMuxApp, ui: &mut egui::Ui) {
                     ui.selectable_value(
                         &mut app.preferences.current_settings.audio.codec,
                         codec.clone(),
-                        format!("{codec:?}"),
+                        audio_choice_label(&codec),
                     );
                 }
             });
@@ -621,16 +869,15 @@ fn audio_settings(app: &mut LangMuxApp, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label("Mixdown");
             ComboBox::from_id_salt("mixdown")
-                .selected_text(format!(
-                    "{:?}",
-                    app.preferences.current_settings.audio.mixdown
+                .selected_text(mixdown_label(
+                    app.preferences.current_settings.audio.mixdown,
                 ))
                 .show_ui(ui, |ui| {
                     for mix in [Mixdown::Source, Mixdown::Stereo, Mixdown::Surround51] {
                         ui.selectable_value(
                             &mut app.preferences.current_settings.audio.mixdown,
                             mix,
-                            format!("{mix:?}"),
+                            mixdown_label(mix),
                         );
                     }
                 });
@@ -653,16 +900,15 @@ fn subtitle_settings(app: &mut LangMuxApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         ui.label("Burn in");
         ComboBox::from_id_salt("burn-in")
-            .selected_text(format!(
-                "{:?}",
-                app.preferences.current_settings.subtitles.burn_in
+            .selected_text(burn_in_label(
+                app.preferences.current_settings.subtitles.burn_in,
             ))
             .show_ui(ui, |ui| {
                 for mode in [BurnIn::None, BurnIn::ForcedOnly, BurnIn::FirstSelected] {
                     ui.selectable_value(
                         &mut app.preferences.current_settings.subtitles.burn_in,
                         mode,
-                        format!("{mode:?}"),
+                        burn_in_label(mode),
                     );
                 }
             });
@@ -748,120 +994,158 @@ fn language_chips(ui: &mut egui::Ui, languages: &[String], selected: &mut Vec<St
 fn preview_panel(app: &mut LangMuxApp, ui: &mut egui::Ui) {
     widgets::card(ui, |ui| {
         ui.set_width(ui.available_width());
-        ui.horizontal(|ui| {
-            ui.heading("Preview");
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.selectable_value(&mut app.preview_original, false, "Filtered");
-                ui.selectable_value(&mut app.preview_original, true, "Original");
-            });
-        });
-        if app.sources.is_empty() {
-            ui.label(RichText::new("Add a source to preview a frame.").color(theme::MUTED));
-            return;
-        }
-        let mut selected = app
-            .preview_source
-            .clone()
-            .unwrap_or_else(|| app.sources[0].source.path.clone());
-        ComboBox::from_id_salt("preview-source")
-            .selected_text(selected.file_name().unwrap_or_default().to_string_lossy())
-            .width(ui.available_width())
-            .show_ui(ui, |ui| {
-                for source in &app.sources {
-                    ui.selectable_value(
-                        &mut selected,
-                        source.source.path.clone(),
-                        source.source.relative.display().to_string(),
-                    );
-                }
-            });
-        if selected != app.preview_source.clone().unwrap_or_default() {
-            app.preview_source = Some(selected);
-            app.mark_preview_dirty();
-        }
-        let duration = app
-            .sources
-            .iter()
-            .find(|source| Some(&source.source.path) == app.preview_source.as_ref())
-            .and_then(|source| source.info.metadata.as_ref())
-            .and_then(|metadata| metadata.duration)
-            .unwrap_or(1.0);
-        let timestamp =
-            |seconds: f64| format!("{:02}:{:02}", seconds as u64 / 60, seconds as u64 % 60);
-        let preview_time = app.preview_time;
-        ui.add(
-            Slider::new(&mut app.preview_time, 0.0..=duration.max(1.0))
-                .text(format!(
-                    "{} / {}",
-                    timestamp(preview_time),
-                    timestamp(duration)
-                ))
-                .show_value(false),
-        )
-        .on_hover_text("Preview updates after a short pause");
-        let height = 170.0_f32.min(ui.available_height() * 0.44);
-        if let Some(bytes) = &app.preview_bytes {
-            if app.preview_texture.is_none()
-                && let Ok(image) = image::load_from_memory(bytes)
-            {
-                let rgba = image.to_rgba8();
-                app.preview_texture = Some(ui.ctx().load_texture(
-                    "preview-frame",
-                    egui::ColorImage::from_rgba_unmultiplied(
-                        [rgba.width() as usize, rgba.height() as usize],
-                        rgba.as_raw(),
-                    ),
-                    egui::TextureOptions::LINEAR,
-                ));
-            }
-            if let Some(texture) = &app.preview_texture {
-                let source_size = texture.size_vec2();
-                let scale = (ui.available_width() / source_size.x).min(height / source_size.y);
-                let image_size = source_size * scale;
-                ui.horizontal_centered(|ui| {
-                    ui.add(egui::Image::new(texture).fit_to_exact_size(image_size));
+        ScrollArea::vertical()
+            .id_salt("settings-preview")
+            .max_height(ui.available_height())
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.heading("Preview");
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.selectable_value(&mut app.preview_original, false, "Filtered");
+                        ui.selectable_value(&mut app.preview_original, true, "Original");
+                    });
                 });
-            }
-        } else if app.preview_pending {
-            ui.allocate_ui_with_layout(
-                egui::vec2(ui.available_width(), height),
-                Layout::top_down(Align::Center),
-                |ui| {
-                    ui.add_space(height / 2.0 - 12.0);
-                    ui.spinner();
-                },
-            );
-        } else {
-            ui.allocate_ui_with_layout(
-                egui::vec2(ui.available_width(), height),
-                Layout::top_down(Align::Center),
-                |ui| {
-                    ui.add_space(height / 2.0 - 9.0);
-                    ui.label(RichText::new("Frame preview").color(theme::SUBTLE));
-                },
-            );
-        }
-        if let Some(error) = &app.preview_error {
-            ui.label(RichText::new(error).size(9.0).color(theme::ERROR));
-        }
-        ui.horizontal(|ui| {
-            if ui.button("Estimate size").clicked()
-                && let Some(index) = app.selected_source_indices().first().copied()
-            {
-                app.estimate_size(index);
-            }
-            if app.estimate_running {
-                ui.spinner();
-            } else if let Some(estimate) = &app.size_estimate {
+                if app.sources.is_empty() {
+                    ui.label(RichText::new("Add a source to preview a frame.").color(theme::MUTED));
+                    return;
+                }
+                let mut selected = app
+                    .preview_source
+                    .clone()
+                    .unwrap_or_else(|| app.sources[0].source.path.clone());
+                ComboBox::from_id_salt("preview-source")
+                    .selected_text(selected.file_name().unwrap_or_default().to_string_lossy())
+                    .width(ui.available_width())
+                    .show_ui(ui, |ui| {
+                        for source in &app.sources {
+                            ui.selectable_value(
+                                &mut selected,
+                                source.source.path.clone(),
+                                source.source.relative.display().to_string(),
+                            );
+                        }
+                    });
+                if selected != app.preview_source.clone().unwrap_or_default() {
+                    app.preview_source = Some(selected);
+                    app.mark_preview_dirty();
+                }
+                let duration = app
+                    .sources
+                    .iter()
+                    .find(|source| Some(&source.source.path) == app.preview_source.as_ref())
+                    .and_then(|source| source.info.metadata.as_ref())
+                    .and_then(|metadata| metadata.duration)
+                    .unwrap_or(1.0);
+                let timestamp =
+                    |seconds: f64| format!("{:02}:{:02}", seconds as u64 / 60, seconds as u64 % 60);
                 ui.label(
-                    RichText::new(match estimate {
-                        Ok(bytes) => widgets::format_size(*bytes),
-                        Err(error) => error.clone(),
-                    })
-                    .size(9.0)
+                    RichText::new(format!(
+                        "{} / {}",
+                        timestamp(app.preview_time),
+                        timestamp(duration)
+                    ))
+                    .size(10.0)
                     .color(theme::MUTED),
                 );
-            }
-        });
+                let slider_width = ui.max_rect().width();
+                ui.scope(|ui| {
+                    style_slider(ui, slider_width);
+                    ui.add_sized(
+                        [slider_width, 28.0],
+                        Slider::new(&mut app.preview_time, 0.0..=duration.max(1.0))
+                            .show_value(false)
+                            .handle_shape(egui::style::HandleShape::Circle)
+                            .trailing_fill(true),
+                    )
+                    .on_hover_text("Preview updates after a short pause");
+                });
+
+                if let Some(bytes) = &app.preview_bytes {
+                    if app.preview_texture.is_none()
+                        && let Ok(image) = image::load_from_memory(bytes)
+                    {
+                        let rgba = image.to_rgba8();
+                        app.preview_texture = Some(ui.ctx().load_texture(
+                            "preview-frame",
+                            egui::ColorImage::from_rgba_unmultiplied(
+                                [rgba.width() as usize, rgba.height() as usize],
+                                rgba.as_raw(),
+                            ),
+                            egui::TextureOptions::LINEAR,
+                        ));
+                    }
+                    if let Some(texture) = &app.preview_texture {
+                        let source_size = texture.size_vec2();
+                        let image_width = ui.available_width();
+                        let image_size = egui::vec2(
+                            image_width,
+                            image_width * source_size.y / source_size.x.max(1.0),
+                        );
+                        ui.add(egui::Image::new(texture).fit_to_exact_size(image_size));
+                    }
+                } else if app.preview_pending {
+                    ui.add_space(6.0);
+                    ui.spinner();
+                } else {
+                    ui.add_space(6.0);
+                    ui.label(RichText::new("Frame preview").color(theme::SUBTLE));
+                }
+                if let Some(error) = &app.preview_error {
+                    ui.label(RichText::new(error).size(9.0).color(theme::ERROR));
+                }
+                ui.horizontal(|ui| {
+                    if ui.button("Estimate size").clicked()
+                        && let Some(index) = app.selected_source_indices().first().copied()
+                    {
+                        app.estimate_size(index);
+                    }
+                    if app.estimate_running {
+                        ui.spinner();
+                    } else if let Some(estimate) = &app.size_estimate {
+                        ui.label(
+                            RichText::new(match estimate {
+                                Ok(bytes) => widgets::format_size(*bytes),
+                                Err(error) => error.clone(),
+                            })
+                            .size(9.0)
+                            .color(theme::MUTED),
+                        );
+                    }
+                });
+            });
     });
+}
+
+fn audio_choice_label(choice: &AudioChoice) -> &'static str {
+    match choice {
+        AudioChoice::Passthrough => "Copy",
+        AudioChoice::Aac => "AAC",
+        AudioChoice::Opus => "Opus",
+        AudioChoice::Ac3 => "AC-3",
+        AudioChoice::Eac3 => "E-AC-3",
+        AudioChoice::Flac => "FLAC",
+    }
+}
+
+fn style_slider(ui: &mut egui::Ui, width: f32) {
+    ui.spacing_mut().slider_width = width;
+    let inactive = &mut ui.visuals_mut().widgets.inactive;
+    inactive.bg_fill = theme::SUBTLE;
+    inactive.bg_stroke = Stroke::new(1.0, theme::MUTED);
+}
+
+fn mixdown_label(mixdown: Mixdown) -> &'static str {
+    match mixdown {
+        Mixdown::Source => "Match source",
+        Mixdown::Stereo => "Stereo",
+        Mixdown::Surround51 => "5.1 surround",
+    }
+}
+
+fn burn_in_label(burn_in: BurnIn) -> &'static str {
+    match burn_in {
+        BurnIn::None => "Off",
+        BurnIn::ForcedOnly => "Forced only",
+        BurnIn::FirstSelected => "First selected",
+    }
 }

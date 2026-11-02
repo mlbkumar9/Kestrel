@@ -90,6 +90,28 @@ shortcuts = exported_rows("Shortcut")
 if not any(row[0] == "LangMuxStartMenuShortcut" for row in shortcuts):
     raise SystemExit("LangMux Start Menu shortcut is missing.")
 
+upgrade_rows = exported_rows("Upgrade")
+upgrade_codes = {
+    row[0].strip("{}").casefold(): row
+    for row in upgrade_rows
+}
+version_one_code = "e110f64d-5c3d-5e2d-9b02-53217f2caea5"
+version_two_code = "bba02aaf-78ca-41e3-8586-b84b471755ed"
+version_one_rows = [
+    row for row in upgrade_rows
+    if row[0].strip("{}").casefold() == version_one_code
+]
+if {int(row[4]) for row in version_one_rows} != {1, 2}:
+    raise SystemExit(
+        f"v1.0.0 Upgrade rows should have attributes 1 and 2; got {version_one_rows}"
+    )
+version_two = upgrade_codes.get(version_two_code)
+if version_two is None or int(version_two[4]) != 256 or version_two[6] != "LEGACY_V2_FOUND":
+    raise SystemExit(
+        f"v2.0.0 Upgrade row should use attributes 256 and LEGACY_V2_FOUND; got {version_two}"
+    )
+
 print("PASS: MSI contains 10 standard files, libfixture.dll, and LIBUPPER.DLL (12 files total).")
 print("PASS: LangMux Start Menu shortcut is present.")
+print("PASS: Upgrade table contains v1.0.0 and v2.0.0 upgrade rows.")
 PY

@@ -8,7 +8,7 @@ pub fn show(app: &mut LangMuxApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     ui.horizontal(|ui| {
         ui.heading("Queue");
         ui.label(
-            RichText::new(format!("{} jobs", app.queue.len()))
+            RichText::new(widgets::count_label(app.queue.len(), "job", "jobs"))
                 .size(10.0)
                 .color(theme::MUTED),
         );
@@ -62,6 +62,7 @@ pub fn show(app: &mut LangMuxApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     ScrollArea::vertical()
         .id_salt("queue-jobs")
         .auto_shrink([false, false])
+        .max_height((ui.available_height() - 48.0).max(0.0))
         .show(ui, |ui| {
             let mut selected_all = app.queue.iter().all(|job| job.checked);
             if ui.checkbox(&mut selected_all, "Select all jobs").changed() {
@@ -72,7 +73,13 @@ pub fn show(app: &mut LangMuxApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             ui.add_space(5.0);
             let mut action = None;
             for index in 0..app.queue.len() {
+                let preset_name = widgets::preset_display_name(
+                    &app.queue[index].preset,
+                    &app.encoders,
+                    &app.preferences.user_presets,
+                );
                 let job = &mut app.queue[index];
+                let output_path = job.output.display().to_string();
                 egui::Frame::new()
                     .fill(theme::SURFACE)
                     .stroke(Stroke::new(1.0, theme::BORDER))
@@ -95,23 +102,22 @@ pub fn show(app: &mut LangMuxApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                     .truncate(),
                                 )
                                 .on_hover_text(job.input.display().to_string());
-                                ui.label(
-                                    RichText::new(job.preset.clone())
-                                        .size(9.5)
-                                        .color(theme::MUTED),
-                                );
+                                widgets::chip(ui, &preset_name, theme::MUTED);
                             });
                             ui.add_space(10.0);
                             ui.vertical(|ui| {
+                                let output_label = widgets::middle_truncate(
+                                    ui,
+                                    &output_path,
+                                    ui.available_width(),
+                                );
                                 ui.add(
                                     egui::Label::new(
-                                        RichText::new(job.output.display().to_string())
-                                            .size(9.0)
-                                            .color(theme::MUTED),
+                                        RichText::new(output_label).size(9.0).color(theme::MUTED),
                                     )
                                     .truncate(),
                                 )
-                                .on_hover_text(job.output.display().to_string());
+                                .on_hover_text(&output_path);
                                 if matches!(job.status, FileStatus::Success)
                                     && let Some(size) = job.output_size
                                 {
@@ -131,19 +137,23 @@ pub fn show(app: &mut LangMuxApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                             ui.vertical(|ui| {
                                 ui.label(status_label(job.status));
                                 if job.status == FileStatus::Processing {
-                                    ui.add(
-                                        ProgressBar::new(job.percent as f32 / 100.0)
-                                            .desired_width(120.0)
-                                            .text(format!("{}%", job.percent)),
-                                    );
                                     let detail = match (job.speed, job.eta) {
                                         (Some(speed), Some(eta)) => format!(
-                                            "{speed:.1}× · ETA {}",
-                                            widgets::format_duration(eta)
+                                            "{speed:.1}x · ETA {}",
+                                            widgets::format_eta(eta)
                                         ),
                                         _ => job.detail.clone().unwrap_or_default(),
                                     };
-                                    ui.label(RichText::new(detail).size(9.0).color(theme::MUTED));
+                                    ui.horizontal(|ui| {
+                                        ui.add(
+                                            ProgressBar::new(job.percent as f32 / 100.0)
+                                                .desired_width(120.0)
+                                                .text(format!("{}%", job.percent)),
+                                        );
+                                        ui.label(
+                                            RichText::new(detail).size(9.0).color(theme::MUTED),
+                                        );
+                                    });
                                 } else if let Some(detail) = &job.detail {
                                     ui.label(RichText::new(detail).size(9.0).color(theme::ERROR));
                                 }

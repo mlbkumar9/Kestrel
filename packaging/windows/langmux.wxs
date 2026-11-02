@@ -1,9 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
   <Product Id="*" Name="LangMux" Language="1033" Version="$(var.Version)"
-           Manufacturer="mlbkumar9" UpgradeCode="{bba02aaf-78ca-41e3-8586-b84b471755ed}">
+           Manufacturer="mlbkumar9" UpgradeCode="{E110F64D-5C3D-5E2D-9B02-53217F2CAEA5}">
     <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" />
     <MajorUpgrade DowngradeErrorMessage="A newer version of LangMux is already installed." />
+    <Upgrade Id="{bba02aaf-78ca-41e3-8586-b84b471755ed}">
+      <UpgradeVersion Minimum="0.0.0" IncludeMinimum="yes" Maximum="$(var.Version)" IncludeMaximum="no"
+                      Property="LEGACY_V2_FOUND" OnlyDetect="no"/>
+    </Upgrade>
     <Media Id="1" Cabinet="LangMux.cab" EmbedCab="yes" />
     <Icon Id="LangMuxIcon" SourceFile="$(var.StageDir)/logo.ico" />
     <Property Id="ARPPRODUCTICON" Value="LangMuxIcon" />

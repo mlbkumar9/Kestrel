@@ -36,9 +36,21 @@ pub fn show(app: &mut LangMuxApp, root: &mut egui::Ui, ctx: &egui::Context) {
             left_ui.label(RichText::new(APP_NAME).strong().size(15.0));
 
             let steps = [
-                (Step::Source, format!("1  Source ({})", app.sources.len())),
+                (
+                    Step::Source,
+                    format!(
+                        "1  Source ({})",
+                        crate::ui::widgets::count_label(app.sources.len(), "file", "files")
+                    ),
+                ),
                 (Step::Settings, "2  Settings".to_owned()),
-                (Step::Queue, format!("3  Queue ({})", app.queue.len())),
+                (
+                    Step::Queue,
+                    format!(
+                        "3  Queue ({})",
+                        crate::ui::widgets::count_label(app.queue.len(), "job", "jobs")
+                    ),
+                ),
             ];
             let mut tab_left = nav_left;
             for ((step, title), width) in steps.into_iter().zip(tab_widths) {
@@ -205,7 +217,7 @@ pub fn show(app: &mut LangMuxApp, root: &mut egui::Ui, ctx: &egui::Context) {
                         active.map_or_else(String::new, |job| match (job.speed, job.eta) {
                             (Some(speed), Some(eta)) => format!(
                                 " · {speed:.1}x · {} left",
-                                crate::ui::widgets::format_duration(eta)
+                                crate::ui::widgets::format_eta(eta)
                             ),
                             _ => String::new(),
                         });
@@ -213,7 +225,11 @@ pub fn show(app: &mut LangMuxApp, root: &mut egui::Ui, ctx: &egui::Context) {
                 } else if app.queue_running {
                     "Queue running".to_owned()
                 } else {
-                    format!("Idle · {} queued · {completed} completed", app.queue.len())
+                    format!(
+                        "Idle · {} queued · {} completed",
+                        crate::ui::widgets::count_label(app.queue.len(), "job", "jobs"),
+                        crate::ui::widgets::count_label(completed, "job", "jobs")
+                    )
                 };
                 ui.label(RichText::new(status).size(10.0).color(theme::MUTED));
                 let overall = if app.queue.is_empty() {
@@ -283,13 +299,52 @@ pub fn show(app: &mut LangMuxApp, root: &mut egui::Ui, ctx: &egui::Context) {
             Step::Queue => queue::show(app, ui, ctx),
         });
     if app.about_open {
+        let mut about_open = app.about_open;
         egui::Window::new(format!("About {APP_NAME}"))
-            .open(&mut app.about_open)
+            .open(&mut about_open)
             .collapsible(false)
             .show(ctx, |ui| {
                 ui.heading(APP_NAME);
                 ui.label("A native media language and stream remuxing utility.");
                 ui.label(RichText::new(env!("CARGO_PKG_VERSION")).color(theme::MUTED));
+                ui.add_space(8.0);
+                if ui.button("Check for older installation").clicked() {
+                    app.preferences.legacy_banner_dismissed = false;
+                    if app.legacy_install.is_none() {
+                        app.check_legacy_install();
+                    }
+                }
+            });
+        app.about_open = about_open;
+    }
+    if !app.preferences.legacy_banner_dismissed
+        && let Some(install) = app.legacy_install.clone()
+    {
+        egui::Area::new(egui::Id::new("legacy-install-banner"))
+            .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 48.0))
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                egui::Frame::new()
+                    .fill(theme::SURFACE)
+                    .stroke(Stroke::new(1.0, theme::BORDER))
+                    .corner_radius(CornerRadius::same(6))
+                    .inner_margin(egui::Margin::symmetric(12, 8))
+                    .show(ui, |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(format!(
+                                "An older LangMux {} installation was found.",
+                                install.display_version
+                            ));
+                            if app.legacy_action_running {
+                                ui.spinner();
+                            } else if ui.button("Remove it").clicked() {
+                                app.remove_legacy_install();
+                            }
+                            if ui.button("Not now").clicked() {
+                                app.preferences.legacy_banner_dismissed = true;
+                            }
+                        });
+                    });
             });
     }
     if app.confirm_stop {

@@ -1,6 +1,7 @@
 use crate::analysis;
 use crate::encoders::{self, EncoderSet};
 use crate::inputs::{self, ExistingPolicy, InputItem, OutputTarget, SourceFile};
+use crate::legacy::LegacyInstall;
 use crate::mkv::{self, AvailableLanguages, FileInfo, MediaMetadata};
 use crate::presets::Preset;
 use crate::theme;
@@ -82,6 +83,7 @@ pub(crate) struct Preferences {
     pub(crate) output_target: Option<OutputTarget>,
     pub(crate) input_directory: String,
     pub(crate) skip_existing: bool,
+    pub(crate) legacy_banner_dismissed: bool,
 }
 
 impl Default for Preferences {
@@ -103,6 +105,7 @@ impl Default for Preferences {
             output_target: None,
             input_directory: String::new(),
             skip_existing: true,
+            legacy_banner_dismissed: false,
         }
     }
 }
@@ -154,6 +157,13 @@ enum UiEvent {
     CropReady {
         result: Option<Crop>,
     },
+    LegacyChecked {
+        result: Option<LegacyInstall>,
+    },
+    LegacyActionFinished {
+        result: Result<(), String>,
+        found: Option<LegacyInstall>,
+    },
 }
 
 pub struct LangMuxApp {
@@ -188,6 +198,8 @@ pub struct LangMuxApp {
     pub(crate) preview_original: bool,
     pub(crate) scan_loading: bool,
     pub(crate) logo: Option<egui::TextureHandle>,
+    pub(crate) legacy_install: Option<LegacyInstall>,
+    pub(crate) legacy_action_running: bool,
     sender: mpsc::Sender<WorkerEvent>,
     receiver: mpsc::Receiver<WorkerEvent>,
     ui_sender: mpsc::Sender<UiEvent>,
@@ -232,6 +244,11 @@ impl LangMuxApp {
             .map(|ffmpeg| encoders::detect_async(ffmpeg.path.clone()));
         let (sender, receiver) = mpsc::channel();
         let (ui_sender, ui_receiver) = mpsc::channel();
+        #[cfg(debug_assertions)]
+        let legacy_install = (std::env::var("LANGMUX_DEBUG_LEGACY_BANNER").as_deref() == Ok("1"))
+            .then(crate::legacy::debug_sample);
+        #[cfg(not(debug_assertions))]
+        let legacy_install = None;
         let mut app = Self {
             preferences,
             step: Step::Source,
@@ -264,6 +281,8 @@ impl LangMuxApp {
             preview_original: false,
             scan_loading: false,
             logo,
+            legacy_install,
+            legacy_action_running: false,
             sender,
             receiver,
             ui_sender,
@@ -276,10 +295,36 @@ impl LangMuxApp {
             preview_pending: false,
             preview_cache: HashMap::new(),
         };
+        #[cfg(windows)]
+        if app.legacy_install.is_none() {
+            app.check_legacy_install();
+        }
         if !app.preferences.input_items.is_empty() {
             app.refresh_sources();
         }
         app
+    }
+
+    pub(crate) fn check_legacy_install(&self) {
+        let sender = self.ui_sender.clone();
+        std::thread::spawn(move || {
+            let _ = sender.send(UiEvent::LegacyChecked {
+                result: crate::legacy::find_legacy_install(),
+            });
+        });
+    }
+
+    pub(crate) fn remove_legacy_install(&mut self) {
+        let Some(install) = self.legacy_install.clone() else {
+            return;
+        };
+        self.legacy_action_running = true;
+        let sender = self.ui_sender.clone();
+        std::thread::spawn(move || {
+            let result = crate::legacy::remove_legacy_install(&install);
+            let found = crate::legacy::find_legacy_install();
+            let _ = sender.send(UiEvent::LegacyActionFinished { result, found });
+        });
     }
 
     pub(crate) fn push_log(&mut self, text: impl Into<String>) {
@@ -569,7 +614,10 @@ impl LangMuxApp {
                 checked: false,
             });
         }
-        self.push_log(format!("Added {} job(s) to the queue", selected.len()));
+        self.push_log(format!(
+            "Added {} to the queue",
+            crate::ui::widgets::count_label(selected.len(), "job", "jobs")
+        ));
         self.step = Step::Queue;
         if start_now {
             self.start_queue(ctx);
@@ -841,7 +889,14 @@ impl LangMuxApp {
                     self.scan_loading = false;
                     self.sources
                         .sort_by(|left, right| left.source.relative.cmp(&right.source.relative));
-                    self.push_log(format!("Loaded {} source file(s)", self.sources.len()));
+                    self.push_log(format!(
+                        "Loaded {}",
+                        crate::ui::widgets::count_label(
+                            self.sources.len(),
+                            "source file",
+                            "source files"
+                        )
+                    ));
                 }
                 UiEvent::PreviewReady {
                     path,
@@ -871,6 +926,19 @@ impl LangMuxApp {
                             &mut self.preferences.current_settings.video
                     {
                         encode.crop = crop;
+                    }
+                }
+                UiEvent::LegacyChecked { result } => {
+                    self.legacy_install = result;
+                }
+                UiEvent::LegacyActionFinished { result, found } => {
+                    self.legacy_action_running = false;
+                    self.legacy_install = found;
+                    match result {
+                        Ok(()) => self.push_log("Removed the older per-user installation"),
+                        Err(error) => {
+                            self.push_log(format!("Could not remove older installation: {error}"))
+                        }
                     }
                 }
                 _ => {}
@@ -914,8 +982,12 @@ impl LangMuxApp {
                 } => {
                     if let Some(job) = self.queue.iter_mut().find(|job| job.id == job_id) {
                         job.percent = percent;
-                        job.speed = speed;
-                        job.eta = eta_seconds;
+                        if speed.is_some() {
+                            job.speed = speed;
+                        }
+                        if eta_seconds.is_some() {
+                            job.eta = eta_seconds;
+                        }
                     }
                 }
                 WorkerEvent::Log(message) => self.push_log(message),

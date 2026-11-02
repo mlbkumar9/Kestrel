@@ -92,8 +92,8 @@ fn source_table(app: &mut LangMuxApp, ui: &mut egui::Ui) {
         ui.label(RichText::new("SOURCE FILES").strong());
         ui.label(
             RichText::new(format!(
-                "{} files · {}",
-                app.sources.len(),
+                "{} · {}",
+                widgets::count_label(app.sources.len(), "file", "files"),
                 widgets::format_size(app.sources.iter().map(|source| source.info.size).sum())
             ))
             .size(10.5)
