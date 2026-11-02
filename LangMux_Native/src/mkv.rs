@@ -242,8 +242,19 @@ pub fn read_metadata(
                     metadata.container = probe_metadata.container;
                 }
                 metadata.has_chapters |= probe_metadata.has_chapters;
-                if metadata.video.is_none() {
-                    metadata.video = probe_metadata.video;
+                if let Some(probed_video) = probe_metadata.video.as_ref() {
+                    if let Some(video) = metadata.video.as_mut() {
+                        merge_video_info(video, probed_video);
+                    } else {
+                        metadata.video = Some(probed_video.clone());
+                    }
+                }
+                if metadata
+                    .video_codec
+                    .as_deref()
+                    .is_none_or(|codec| codec.trim().is_empty() || codec == "unknown")
+                {
+                    metadata.video_codec.clone_from(&probe_metadata.video_codec);
                 }
             }
             Ok(metadata)
@@ -455,6 +466,19 @@ fn attach_ffprobe_metadata(metadata: &mut MediaMetadata, ffprobe: &MediaMetadata
     attach_track_indices(&mut metadata.subtitle_tracks, &ffprobe.subtitle_tracks);
 }
 
+fn merge_video_info(video: &mut VideoInfo, probe: &VideoInfo) {
+    if !probe.codec_id.trim().is_empty() && probe.codec_id != "unknown" {
+        video.codec_id.clone_from(&probe.codec_id);
+    }
+    video.width = probe.width.or(video.width);
+    video.height = probe.height.or(video.height);
+    video.fps = probe.fps.or(video.fps);
+    video.bit_depth = probe.bit_depth.or(video.bit_depth);
+    video.hdr = probe.hdr;
+    video.interlaced = probe.interlaced.or(video.interlaced);
+    video.ffprobe_index = probe.ffprobe_index.or(video.ffprobe_index);
+}
+
 fn attach_track_indices(tracks: &mut [TrackInfo], probe_tracks: &[TrackInfo]) {
     let mut used = vec![false; probe_tracks.len()];
     for track in tracks {
@@ -576,6 +600,13 @@ pub fn selected_tracks(
     (audio, subtitles)
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct MkvRemuxSettings<'a> {
+    pub keep_chapters: bool,
+    pub keep_metadata: bool,
+    pub title: Option<&'a str>,
+}
+
 pub fn build_arguments(
     input: &Path,
     output: &Path,
@@ -583,6 +614,7 @@ pub fn build_arguments(
     audio_languages: &[String],
     subtitle_languages: &[String],
     dry_run: bool,
+    settings: MkvRemuxSettings<'_>,
 ) -> Result<Option<Vec<OsString>>, String> {
     let mut audio_tracks = matching_tracks(&metadata.audio_tracks, audio_languages);
     if audio_tracks.is_empty() && !metadata.audio_tracks.is_empty() {
@@ -624,6 +656,15 @@ pub fn build_arguments(
     } else {
         arguments.push(OsString::from("--subtitle-tracks"));
         arguments.push(OsString::from(join_ids(&subtitle_ids)));
+    }
+    if !settings.keep_chapters {
+        arguments.push(OsString::from("--no-chapters"));
+    }
+    if !settings.keep_metadata {
+        arguments.push(OsString::from("--no-global-tags"));
+    }
+    if let Some(title) = settings.title.filter(|title| !title.is_empty()) {
+        arguments.extend([OsString::from("--title"), OsString::from(title)]);
     }
     arguments.push(input.as_os_str().to_owned());
     Ok(Some(arguments))
@@ -716,10 +757,11 @@ pub fn parse_ffmpeg_progress_line(line: &str, duration: Option<f64>) -> Option<u
 #[cfg(test)]
 mod tests {
     use super::{
-        MediaMetadata, RemuxExitOutcome, build_arguments, build_ffmpeg_arguments,
-        classify_remux_exit, default_output_dir, directories_resolve_to_same_path,
-        normalize_languages, parse_ffmpeg_progress_line, parse_ffprobe_json, parse_metadata_json,
-        parse_progress_line, partial_output_path, paths_resolve_to_same_file, selected_tracks,
+        MediaMetadata, MkvRemuxSettings, RemuxExitOutcome, VideoInfo, build_arguments,
+        build_ffmpeg_arguments, classify_remux_exit, default_output_dir,
+        directories_resolve_to_same_path, merge_video_info, normalize_languages,
+        parse_ffmpeg_progress_line, parse_ffprobe_json, parse_metadata_json, parse_progress_line,
+        partial_output_path, paths_resolve_to_same_file, selected_tracks,
     };
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -766,6 +808,11 @@ mod tests {
             &["eng".to_owned()],
             &["eng".to_owned()],
             false,
+            MkvRemuxSettings {
+                keep_chapters: true,
+                keep_metadata: true,
+                title: None,
+            },
         )
         .expect("arguments should build")
         .expect("not a dry run");
@@ -792,6 +839,11 @@ mod tests {
             &["eng".to_owned()],
             &["not-present".to_owned()],
             false,
+            MkvRemuxSettings {
+                keep_chapters: true,
+                keep_metadata: true,
+                title: None,
+            },
         )
         .expect("arguments should build")
         .expect("not a dry run");
@@ -811,6 +863,11 @@ mod tests {
             &["eng".to_owned()],
             &[],
             true,
+            MkvRemuxSettings {
+                keep_chapters: true,
+                keep_metadata: true,
+                title: None,
+            },
         )
         .expect("matching dry run should succeed");
         assert!(arguments.is_none());
@@ -859,6 +916,100 @@ mod tests {
         assert_eq!(metadata.audio_tracks[1].language, "und");
         assert_eq!(metadata.audio_tracks[1].ffprobe_index, Some(3));
         assert_eq!(metadata.subtitle_tracks[0].language, "spa");
+    }
+
+    #[test]
+    fn probe_video_fields_override_or_fill_mkvmerge_video_fields() {
+        let mut video = VideoInfo {
+            codec_id: "hevc".to_owned(),
+            width: Some(1920),
+            height: None,
+            fps: None,
+            bit_depth: Some(8),
+            hdr: true,
+            interlaced: None,
+            ffprobe_index: None,
+        };
+        merge_video_info(
+            &mut video,
+            &VideoInfo {
+                codec_id: "h264".to_owned(),
+                width: Some(1280),
+                height: Some(720),
+                fps: Some(23.976),
+                bit_depth: Some(10),
+                hdr: false,
+                interlaced: Some(false),
+                ffprobe_index: Some(2),
+            },
+        );
+        assert_eq!(video.codec_id, "h264");
+        assert_eq!(video.width, Some(1280));
+        assert_eq!(video.height, Some(720));
+        assert_eq!(video.fps, Some(23.976));
+        assert_eq!(video.bit_depth, Some(10));
+        assert!(!video.hdr);
+        assert_eq!(video.interlaced, Some(false));
+        assert_eq!(video.ffprobe_index, Some(2));
+
+        let mut partial = VideoInfo {
+            codec_id: "hevc".to_owned(),
+            width: Some(1920),
+            height: Some(1080),
+            bit_depth: Some(10),
+            ..VideoInfo::default()
+        };
+        merge_video_info(
+            &mut partial,
+            &VideoInfo {
+                codec_id: String::new(),
+                width: None,
+                height: None,
+                fps: Some(24.0),
+                bit_depth: None,
+                hdr: false,
+                interlaced: None,
+                ffprobe_index: None,
+            },
+        );
+        assert_eq!(partial.codec_id, "hevc");
+        assert_eq!(partial.width, Some(1920));
+        assert_eq!(partial.height, Some(1080));
+        assert_eq!(partial.fps, Some(24.0));
+        assert_eq!(partial.bit_depth, Some(10));
+    }
+
+    #[test]
+    fn mkvmerge_arguments_honor_chapter_title_and_metadata_settings() {
+        let arguments = build_arguments(
+            Path::new("source.mkv"),
+            Path::new("out/source.mkv"),
+            &fixture(),
+            &["eng".to_owned()],
+            &[],
+            false,
+            MkvRemuxSettings {
+                keep_chapters: false,
+                keep_metadata: false,
+                title: Some("Preserved title"),
+            },
+        )
+        .unwrap()
+        .unwrap()
+        .iter()
+        .map(|argument| argument.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+        assert!(arguments.iter().any(|argument| argument == "--no-chapters"));
+        assert!(
+            arguments
+                .iter()
+                .any(|argument| argument == "--no-global-tags")
+        );
+        assert!(
+            arguments
+                .windows(2)
+                .any(|pair| pair == ["--title", "Preserved title"])
+        );
     }
 
     #[test]

@@ -198,6 +198,28 @@ pub fn default_output_target(items: &[InputItem], container: Container) -> Outpu
     OutputTarget::Folder(root.join("converted"))
 }
 
+pub fn output_exclusions(target: &OutputTarget, items: &[InputItem]) -> Vec<PathBuf> {
+    match target {
+        OutputTarget::Folder(folder) => vec![folder.clone()],
+        OutputTarget::File(path) => {
+            let Some(parent) = path.parent() else {
+                return Vec::new();
+            };
+            items
+                .iter()
+                .filter_map(|item| match item {
+                    InputItem::Folder { path, .. } if parent.starts_with(path) => {
+                        Some(parent.to_path_buf())
+                    }
+                    _ => None,
+                })
+                .collect::<HashSet<_>>()
+                .into_iter()
+                .collect()
+        }
+    }
+}
+
 fn item_path(item: &InputItem) -> &Path {
     match item {
         InputItem::File(path) | InputItem::Folder { path, .. } => path,
@@ -463,5 +485,46 @@ mod tests {
             ),
             OutputTarget::Folder(PathBuf::from("movies/converted"))
         );
+    }
+
+    #[test]
+    fn excludes_the_effective_output_directory_from_folder_sources() {
+        let root = temp_dir();
+        let input = InputItem::Folder {
+            path: root.join("v"),
+            recursive: true,
+        };
+        let output = OutputTarget::Folder(root.join("v/converted"));
+        let exclude = output_exclusions(&output, std::slice::from_ref(&input));
+        touch(&root.join("v/a.mkv"));
+        touch(&root.join("v/converted/a.mkv"));
+
+        let files = expand(std::slice::from_ref(&input), &exclude);
+        assert_eq!(
+            files
+                .iter()
+                .map(|source| source.path.file_name().unwrap().to_string_lossy())
+                .collect::<Vec<_>>(),
+            ["a.mkv"]
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn file_target_excludes_its_parent_only_when_nested_in_a_source_folder() {
+        let root = temp_dir();
+        let folder = InputItem::Folder {
+            path: root.join("v"),
+            recursive: true,
+        };
+        let target = OutputTarget::File(root.join("v/converted/a.mkv"));
+        assert_eq!(
+            output_exclusions(&target, std::slice::from_ref(&folder)),
+            [root.join("v/converted")]
+        );
+        assert!(
+            output_exclusions(&target, &[InputItem::File(root.join("v/source.mkv"))]).is_empty()
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

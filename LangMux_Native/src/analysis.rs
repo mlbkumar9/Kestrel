@@ -71,7 +71,15 @@ pub fn detect_crop(ffmpeg: &Path, input: &Path, duration: f64) -> Option<Crop> {
         let output = tools::command(ffmpeg)
             .args(["-ss", &seek, "-i"])
             .arg(input)
-            .args(["-vf", "cropdetect", "-frames:v", "1", "-f", "null", "-"])
+            .args([
+                "-vf",
+                "cropdetect=round=2",
+                "-frames:v",
+                "12",
+                "-f",
+                "null",
+                "-",
+            ])
             .output()
             .ok()?;
         let stderr = String::from_utf8_lossy(&output.stderr);

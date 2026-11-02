@@ -745,6 +745,11 @@ fn process_queue_job(
             audio_languages,
             subtitle_languages,
             false,
+            mkv::MkvRemuxSettings {
+                keep_chapters: job.settings.keep_chapters,
+                keep_metadata: job.settings.keep_metadata,
+                title: job.settings.title.as_deref(),
+            },
         ) {
             Ok(Some(arguments)) => (mkvmerge.path.clone(), arguments, RemuxEngine::MkvToolNix),
             Ok(None) => queue_ffmpeg_arguments(job, engine_output, spec, text_burn_in_file)?,
@@ -1068,6 +1073,11 @@ fn process_file(
                 &spec.audio_languages,
                 &spec.subtitle_languages,
                 spec.dry_run,
+                mkv::MkvRemuxSettings {
+                    keep_chapters: true,
+                    keep_metadata: true,
+                    title: None,
+                },
             ) {
                 Ok(Some(arguments)) => (mkvmerge.path.clone(), arguments, RemuxEngine::MkvToolNix),
                 Ok(None) => return Ok(ProcessOutcome::Success),

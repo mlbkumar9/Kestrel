@@ -42,8 +42,12 @@ pub fn prepare_text_subtitle(
                     .arg(&path)
                     .stdin(Stdio::null())
                     .output()
-                    .map_err(|error| format!("Failed to prepare subtitle file: {error}"))?;
+                    .map_err(|error| {
+                        let _ = std::fs::remove_file(&path);
+                        format!("Failed to prepare subtitle file: {error}")
+                    })?;
                 if !output.status.success() {
+                    let _ = std::fs::remove_file(&path);
                     return Err(format!(
                         "FFmpeg subtitle extraction failed: {}",
                         String::from_utf8_lossy(&output.stderr).trim()

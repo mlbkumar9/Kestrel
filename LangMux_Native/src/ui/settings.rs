@@ -9,8 +9,11 @@ use crate::transcode::{
 use eframe::egui::{self, Align, ComboBox, Frame, Layout, RichText, ScrollArea, Slider, Stroke};
 
 pub fn show(app: &mut LangMuxApp, ui: &mut egui::Ui) {
-    if app.preview_source.is_none() {
-        app.preview_source = app.sources.first().map(|source| source.source.path.clone());
+    if app.preview_source.is_none()
+        && let Some(source) = app.sources.first()
+    {
+        app.preview_source = Some(source.source.path.clone());
+        app.mark_preview_dirty();
     }
     let before = format!("{:?}", app.preferences.current_settings);
     let content_height = ui.available_height();
@@ -1001,8 +1004,13 @@ fn preview_panel(app: &mut LangMuxApp, ui: &mut egui::Ui) {
                 ui.horizontal(|ui| {
                     ui.heading("Preview");
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        ui.selectable_value(&mut app.preview_original, false, "Filtered");
-                        ui.selectable_value(&mut app.preview_original, true, "Original");
+                        let filtered =
+                            ui.selectable_value(&mut app.preview_original, false, "Filtered");
+                        let original =
+                            ui.selectable_value(&mut app.preview_original, true, "Original");
+                        if filtered.changed() || original.changed() {
+                            app.mark_preview_dirty();
+                        }
                     });
                 });
                 if app.sources.is_empty() {
@@ -1025,7 +1033,9 @@ fn preview_panel(app: &mut LangMuxApp, ui: &mut egui::Ui) {
                             );
                         }
                     });
-                if selected != app.preview_source.clone().unwrap_or_default() {
+                if app.preview_source.is_none()
+                    || selected != app.preview_source.clone().unwrap_or_default()
+                {
                     app.preview_source = Some(selected);
                     app.mark_preview_dirty();
                 }
@@ -1050,14 +1060,18 @@ fn preview_panel(app: &mut LangMuxApp, ui: &mut egui::Ui) {
                 let slider_width = ui.max_rect().width();
                 ui.scope(|ui| {
                     style_slider(ui, slider_width);
-                    ui.add_sized(
-                        [slider_width, 28.0],
-                        Slider::new(&mut app.preview_time, 0.0..=duration.max(1.0))
-                            .show_value(false)
-                            .handle_shape(egui::style::HandleShape::Circle)
-                            .trailing_fill(true),
-                    )
-                    .on_hover_text("Preview updates after a short pause");
+                    let response = ui
+                        .add_sized(
+                            [slider_width, 28.0],
+                            Slider::new(&mut app.preview_time, 0.0..=duration.max(1.0))
+                                .show_value(false)
+                                .handle_shape(egui::style::HandleShape::Circle)
+                                .trailing_fill(true),
+                        )
+                        .on_hover_text("Preview updates after a short pause");
+                    if response.changed() {
+                        app.mark_preview_dirty();
+                    }
                 });
 
                 if let Some(bytes) = &app.preview_bytes {

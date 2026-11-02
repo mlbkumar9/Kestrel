@@ -31,6 +31,23 @@ pub fn show(app: &mut LangMuxApp, ui: &mut egui::Ui) {
         );
     });
     ui.add_space(12.0);
+    if app.tools.ffmpeg.is_none() && app.tools.mkvmerge.is_none() {
+        widgets::card(ui, |ui| {
+            ui.label(RichText::new("Media tools are not installed").strong());
+            ui.label(
+                RichText::new(
+                    "Install FFmpeg or MKVToolNix, or use the installer/zip which include them.",
+                )
+                .color(theme::MUTED),
+            );
+            ui.horizontal(|ui| {
+                ui.hyperlink_to("FFmpeg downloads", "https://ffmpeg.org/download.html");
+                ui.label(RichText::new("·").color(theme::SUBTLE));
+                ui.hyperlink_to("MKVToolNix downloads", "https://mkvtoolnix.download/");
+            });
+        });
+        ui.add_space(12.0);
+    }
     if app.sources.is_empty() {
         empty_state(app, ui);
     } else {
@@ -476,7 +493,6 @@ fn output_panel(app: &mut LangMuxApp, ui: &mut egui::Ui) {
         if selected.is_empty() {
             ui.label(RichText::new(reason).size(9.0).color(theme::SUBTLE));
         } else if widgets::primary_button(ui, "Continue →").clicked() {
-            app.preferences.output_target = Some(target);
             app.step = Step::Settings;
         }
     });

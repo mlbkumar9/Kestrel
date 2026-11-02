@@ -84,6 +84,8 @@ pub(crate) struct Preferences {
     pub(crate) input_directory: String,
     pub(crate) skip_existing: bool,
     pub(crate) legacy_banner_dismissed: bool,
+    #[serde(default)]
+    pub(crate) output_target_explicit: bool,
 }
 
 impl Default for Preferences {
@@ -106,16 +108,26 @@ impl Default for Preferences {
             input_directory: String::new(),
             skip_existing: true,
             legacy_banner_dismissed: false,
+            output_target_explicit: false,
         }
     }
 }
 
-fn migrate_preferences(preferences: &mut Preferences) {
-    if preferences.input_items.is_empty() && !preferences.input_directory.is_empty() {
-        preferences.input_items.push(InputItem::Folder {
-            path: PathBuf::from(&preferences.input_directory),
-            recursive: preferences.include_subfolders,
-        });
+fn migrate_preferences(preferences: &mut Preferences, from_legacy_record: bool) {
+    if from_legacy_record {
+        if preferences.input_items.is_empty() && !preferences.input_directory.is_empty() {
+            preferences.input_items.push(InputItem::Folder {
+                path: PathBuf::from(&preferences.input_directory),
+                recursive: preferences.include_subfolders,
+            });
+        }
+        preferences.existing = if preferences.skip_existing {
+            ExistingPolicy::Skip
+        } else {
+            ExistingPolicy::Overwrite
+        };
+        preferences.input_directory.clear();
+        preferences.skip_existing = true;
     }
     if preferences.output_target.is_none() && !preferences.output_directory.is_empty() {
         preferences.output_target = Some(OutputTarget::Folder(PathBuf::from(
@@ -126,9 +138,6 @@ fn migrate_preferences(preferences: &mut Preferences) {
         mkv::parse_language_field(&preferences.audio_languages);
     preferences.current_settings.subtitles.languages =
         mkv::parse_language_field(&preferences.subtitle_languages);
-    if !preferences.skip_existing && preferences.existing == ExistingPolicy::Skip {
-        preferences.existing = ExistingPolicy::Overwrite;
-    }
 }
 
 enum UiEvent {
@@ -229,14 +238,26 @@ impl LangMuxApp {
                     egui::TextureOptions::LINEAR,
                 )
             });
-        let mut preferences: Preferences = cc
-            .storage
-            .and_then(|storage| {
+        let (mut preferences, from_legacy_record) = cc.storage.map_or_else(
+            || (Preferences::default(), false),
+            |storage| {
                 eframe::get_value(storage, PREFERENCES_KEY)
-                    .or_else(|| eframe::get_value(storage, LEGACY_PREFERENCES_KEY))
-            })
-            .unwrap_or_default();
-        migrate_preferences(&mut preferences);
+                    .map(|preferences| (preferences, false))
+                    .or_else(|| {
+                        eframe::get_value(storage, LEGACY_PREFERENCES_KEY)
+                            .map(|preferences| (preferences, true))
+                    })
+                    .unwrap_or_else(|| (Preferences::default(), false))
+            },
+        );
+        migrate_preferences(&mut preferences, from_legacy_record);
+        #[cfg(debug_assertions)]
+        let tools = if std::env::var("LANGMUX_DEBUG_NO_TOOLS").as_deref() == Ok("1") {
+            Toolchain::default()
+        } else {
+            Toolchain::discover()
+        };
+        #[cfg(not(debug_assertions))]
         let tools = Toolchain::discover();
         let encoder_receiver = tools
             .ffmpeg
@@ -406,11 +427,23 @@ impl LangMuxApp {
                     .into_owned(),
                 InputItem::Folder { path, .. } => path.to_string_lossy().into_owned(),
             });
+        let output_target = if self.preferences.output_target_explicit {
+            self.preferences.output_target.clone()
+        } else {
+            Some(inputs::default_output_target(
+                &items,
+                self.preferences.current_settings.container,
+            ))
+        };
+        let exclude = output_target
+            .as_ref()
+            .map(|target| inputs::output_exclusions(target, &items))
+            .unwrap_or_default();
         let sender = self.ui_sender.clone();
         let tools = self.tools.clone();
         self.push_log("Scanning input sources");
         std::thread::spawn(move || {
-            for source in inputs::expand(&items, &[]) {
+            for source in inputs::expand(&items, &exclude) {
                 let info = FileInfo {
                     name: source
                         .relative
@@ -453,8 +486,9 @@ impl LangMuxApp {
     }
 
     pub(crate) fn clear_sources(&mut self) {
-        self.preferences.input_items.clear();
+        clear_source_preferences(&mut self.preferences);
         self.preferences.output_target = None;
+        self.preferences.output_target_explicit = false;
         self.preferences.output_directory.clear();
         self.sources.clear();
         self.scan_loading = false;
@@ -506,25 +540,15 @@ impl LangMuxApp {
     }
 
     pub(crate) fn output_target_for(&self, selected: &[usize]) -> OutputTarget {
-        if let Some(target) = &self.preferences.output_target {
-            return match (target, selected.len()) {
-                (OutputTarget::File(path), 1) => OutputTarget::File(path.clone()),
-                (OutputTarget::File(path), _) => OutputTarget::Folder(
-                    path.parent()
-                        .unwrap_or_else(|| Path::new("."))
-                        .to_path_buf(),
-                ),
-                (OutputTarget::Folder(path), _) => OutputTarget::Folder(path.clone()),
-            };
-        }
-        if selected.len() == 1 {
-            let path = &self.sources[selected[0]].source.path;
-            return inputs::default_output_target(
-                &[InputItem::File(path.clone())],
-                self.preferences.current_settings.container,
-            );
-        }
-        inputs::default_output_target(
+        let selected_paths = selected
+            .iter()
+            .filter_map(|index| self.sources.get(*index))
+            .map(|source| source.source.path.clone())
+            .collect::<Vec<_>>();
+        effective_output_target(
+            self.preferences.output_target.as_ref(),
+            self.preferences.output_target_explicit,
+            &selected_paths,
             &self.preferences.input_items,
             self.preferences.current_settings.container,
         )
@@ -540,6 +564,7 @@ impl LangMuxApp {
             OutputTarget::Folder(path) => path.to_string_lossy().into_owned(),
         };
         self.preferences.output_target = Some(target);
+        self.preferences.output_target_explicit = true;
         self.output_error = None;
     }
 
@@ -564,6 +589,7 @@ impl LangMuxApp {
 
     pub(crate) fn reset_output_target(&mut self) {
         self.preferences.output_target = None;
+        self.preferences.output_target_explicit = false;
         self.preferences.output_directory.clear();
         self.output_error = None;
     }
@@ -821,7 +847,15 @@ impl LangMuxApp {
             return;
         };
         let path = source.source.path.clone();
-        let key = format!("{:?}", self.preferences.current_settings);
+        let key = format!(
+            "{}:{:?}",
+            if self.preview_original {
+                "original"
+            } else {
+                "filtered"
+            },
+            self.preferences.current_settings
+        );
         let time_key = (self.preview_time.max(0.0) * 4.0).round() as u64;
         if let Some(bytes) = self
             .preview_cache
@@ -836,7 +870,11 @@ impl LangMuxApp {
         self.preview_source = Some(path.clone());
         self.preview_pending = true;
         self.preview_dirty_at = None;
-        let settings = self.preferences.current_settings.clone();
+        let mut settings = self.preferences.current_settings.clone();
+        if self.preview_original {
+            settings.video = crate::transcode::VideoSettings::Copy;
+            settings.subtitles.burn_in = crate::transcode::BurnIn::None;
+        }
         let sender = self.ui_sender.clone();
         let time = self.preview_time;
         std::thread::spawn(move || {
@@ -1109,4 +1147,115 @@ fn clock_time() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |duration| duration.as_secs() % 86_400);
     format!("{:02}:{:02}", seconds / 3600, seconds / 60 % 60)
+}
+
+fn clear_source_preferences(preferences: &mut Preferences) {
+    preferences.input_items.clear();
+    preferences.input_directory.clear();
+}
+
+fn effective_output_target(
+    stored_target: Option<&OutputTarget>,
+    target_is_explicit: bool,
+    selected_paths: &[PathBuf],
+    input_items: &[InputItem],
+    container: crate::formats::Container,
+) -> OutputTarget {
+    if target_is_explicit && let Some(target) = stored_target {
+        return match (target, selected_paths.len()) {
+            (OutputTarget::File(path), 1) => OutputTarget::File(path.clone()),
+            (OutputTarget::File(path), _) => OutputTarget::Folder(
+                path.parent()
+                    .unwrap_or_else(|| Path::new("."))
+                    .to_path_buf(),
+            ),
+            (OutputTarget::Folder(path), _) => OutputTarget::Folder(path.clone()),
+        };
+    }
+    if let [path] = selected_paths {
+        return inputs::default_output_target(&[InputItem::File(path.clone())], container);
+    }
+    inputs::default_output_target(input_items, container)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        Preferences, clear_source_preferences, effective_output_target, migrate_preferences,
+    };
+    use crate::formats::Container;
+    use crate::inputs::{ExistingPolicy, InputItem, OutputTarget};
+    use std::path::PathBuf;
+
+    #[test]
+    fn legacy_fields_migrate_only_from_the_legacy_record() {
+        let mut current = Preferences {
+            input_directory: "/v".to_owned(),
+            skip_existing: false,
+            ..Preferences::default()
+        };
+        migrate_preferences(&mut current, false);
+        assert!(current.input_items.is_empty());
+        assert_eq!(current.existing, ExistingPolicy::Skip);
+
+        migrate_preferences(&mut current, true);
+        assert_eq!(
+            current.input_items,
+            [InputItem::Folder {
+                path: PathBuf::from("/v"),
+                recursive: true
+            }]
+        );
+        assert_eq!(current.existing, ExistingPolicy::Overwrite);
+        assert!(current.input_directory.is_empty());
+        assert!(current.skip_existing);
+    }
+
+    #[test]
+    fn clearing_upgraded_sources_does_not_restore_them_after_restart() {
+        let mut preferences = Preferences {
+            input_directory: "/v".to_owned(),
+            ..Preferences::default()
+        };
+        migrate_preferences(&mut preferences, true);
+        clear_source_preferences(&mut preferences);
+        migrate_preferences(&mut preferences, false);
+        assert!(preferences.input_items.is_empty());
+        assert!(preferences.input_directory.is_empty());
+    }
+
+    #[test]
+    fn skip_choice_after_legacy_upgrade_survives_restart() {
+        let mut preferences = Preferences {
+            skip_existing: false,
+            ..Preferences::default()
+        };
+        migrate_preferences(&mut preferences, true);
+        assert_eq!(preferences.existing, ExistingPolicy::Overwrite);
+        preferences.existing = ExistingPolicy::Skip;
+        migrate_preferences(&mut preferences, false);
+        assert_eq!(preferences.existing, ExistingPolicy::Skip);
+    }
+
+    #[test]
+    fn inferred_single_file_target_tracks_the_current_selection() {
+        let stored = OutputTarget::File(PathBuf::from("/v/converted/a.mkv"));
+        let target = |path: &str| {
+            effective_output_target(
+                Some(&stored),
+                false,
+                &[PathBuf::from(path)],
+                &[InputItem::File(PathBuf::from(path))],
+                Container::Mkv,
+            )
+        };
+        assert_eq!(
+            target("/v/a.mkv"),
+            OutputTarget::File(PathBuf::from("/v/converted/a.mkv"))
+        );
+        assert_eq!(
+            target("/v/b.mkv"),
+            OutputTarget::File(PathBuf::from("/v/converted/b.mkv"))
+        );
+    }
 }

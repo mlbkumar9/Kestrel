@@ -54,6 +54,7 @@ npm install
 Download the latest native build from [GitHub Releases](https://github.com/mlbkumar9/LangMux/releases):
 
 - **Windows x64:** `langmux.exe` plus bundled FFmpeg/FFprobe and MKVToolNix tools.
+- The standalone executable requires FFmpeg or MKVToolNix to be installed separately.
 - **Windows installer (MSI):** Per-machine x64 installer available from [GitHub Releases](https://github.com/mlbkumar9/LangMux/releases).
 - **macOS Apple Silicon and Intel:** app binary, README, and license; install MKVToolNix or FFmpeg/FFprobe separately.
 - **Linux x64:** app binary, README, and license; install MKVToolNix or FFmpeg/FFprobe separately.

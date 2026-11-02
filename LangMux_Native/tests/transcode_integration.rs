@@ -4,7 +4,7 @@ use langmux::inputs::ExistingPolicy;
 use langmux::mkv::{self, MediaMetadata};
 use langmux::presets;
 use langmux::tools::{self, Toolchain};
-use langmux::transcode::{BurnIn, VideoEncoder};
+use langmux::transcode::{BurnIn, Crop, VideoEncoder};
 use langmux::worker::{self, FileStatus, JobSpec, QueueSpec, RemuxEngine, WorkerEvent};
 use std::collections::BTreeSet;
 use std::fs;
@@ -356,6 +356,60 @@ fn real_ffmpeg_burn_in_handles_special_paths_and_image_subtitles() {
     let text_output_metadata = mkv::read_metadata(None, Some(&ffprobe.path), &text_output).unwrap();
     assert!(text_output_metadata.video.is_some());
     assert!(text_output_metadata.subtitle_tracks.is_empty());
+}
+
+#[test]
+fn real_ffmpeg_detects_letterbox_crop_from_multiple_frames() {
+    let Some(ffmpeg) = Toolchain::discover().ffmpeg else {
+        println!("SKIP: crop detection integration test requires ffmpeg on PATH");
+        return;
+    };
+    let fixture_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/v3-integration");
+    fs::create_dir_all(&fixture_dir).expect("fixture directory should be created");
+    let input = fixture_dir.join("letterboxed-crop.mkv");
+    let output = tools::command(&ffmpeg.path)
+        .args([
+            "-hide_banner",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=640x360:rate=24:duration=3",
+            "-vf",
+            "pad=640:480:0:60:black",
+            "-an",
+            "-c:v",
+            "libx264",
+        ])
+        .arg(&input)
+        .output()
+        .expect("ffmpeg should generate the letterboxed fixture");
+    assert!(
+        output.status.success(),
+        "letterbox fixture generation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let crop = langmux::analysis::detect_crop(&ffmpeg.path, &input, 3.0)
+        .expect("crop detection should find the letterbox");
+    let Crop::Custom {
+        top,
+        bottom,
+        left,
+        right,
+    } = crop
+    else {
+        panic!("expected a custom crop for the letterboxed fixture");
+    };
+    assert!(top.abs_diff(60) <= 4, "top crop was {top}");
+    assert!(bottom.abs_diff(60) <= 4, "bottom crop was {bottom}");
+    assert!(left <= 4, "left crop was {left}");
+    assert!(right <= 4, "right crop was {right}");
+    assert!(
+        480_u32.abs_diff(top + bottom + 360) <= 4,
+        "detected crop height was {}",
+        480_u32.saturating_sub(top + bottom)
+    );
 }
 
 fn event_messages(events: &[WorkerEvent]) -> String {

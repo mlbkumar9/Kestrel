@@ -79,6 +79,10 @@ pub fn show(app: &mut LangMuxApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                     &app.preferences.user_presets,
                 );
                 let job = &mut app.queue[index];
+                let job_id = job.id;
+                let can_retry = matches!(job.status, FileStatus::Error | FileStatus::Cancelled);
+                let can_reveal = job.output.exists();
+                let queue_running = app.queue_running;
                 let output_path = job.output.display().to_string();
                 egui::Frame::new()
                     .fill(theme::SURFACE)
@@ -159,16 +163,37 @@ pub fn show(app: &mut LangMuxApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                 }
                             });
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                if ui.small_button("More").clicked() {
-                                    action = Some((job.id, "menu"));
-                                }
-                                if ui
-                                    .small_button("Reveal")
-                                    .on_hover_text("Reveal output")
-                                    .clicked()
-                                {
-                                    reveal(&job.output);
-                                }
+                                ui.menu_button("More", |ui| {
+                                    if ui
+                                        .add_enabled(!queue_running, Button::new("Edit"))
+                                        .clicked()
+                                    {
+                                        action = Some((job_id, "edit"));
+                                        ui.close();
+                                    }
+                                    if ui
+                                        .add_enabled(!queue_running, Button::new("Duplicate"))
+                                        .clicked()
+                                    {
+                                        action = Some((job_id, "duplicate"));
+                                        ui.close();
+                                    }
+                                    if can_retry && ui.button("Retry").clicked() {
+                                        action = Some((job_id, "retry"));
+                                        ui.close();
+                                    }
+                                    if ui
+                                        .add_enabled(!queue_running, Button::new("Remove"))
+                                        .clicked()
+                                    {
+                                        action = Some((job_id, "remove"));
+                                        ui.close();
+                                    }
+                                    if can_reveal && ui.button("Reveal output").clicked() {
+                                        action = Some((job_id, "reveal"));
+                                        ui.close();
+                                    }
+                                });
                                 if ui.small_button("Down").on_hover_text("Move down").clicked() {
                                     action = Some((job.id, "down"));
                                 }
@@ -178,15 +203,26 @@ pub fn show(app: &mut LangMuxApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                             });
                         });
                     });
-                if let Some((id, "menu")) = action {
-                    let _ = id;
-                    action = None;
-                }
             }
             if let Some((id, command)) = action {
                 match command {
                     "up" => app.move_job(id, -1),
                     "down" => app.move_job(id, 1),
+                    "edit" => app.edit_job(id),
+                    "duplicate" => app.duplicate_job(id),
+                    "retry" => app.retry_job(id),
+                    "remove" if !app.queue_running => app.queue.retain(|job| job.id != id),
+                    "reveal" => {
+                        if let Some(path) = app
+                            .queue
+                            .iter()
+                            .find(|job| job.id == id)
+                            .filter(|job| job.output.exists())
+                            .map(|job| job.output.clone())
+                        {
+                            reveal(&path);
+                        }
+                    }
                     _ => {}
                 }
             }
