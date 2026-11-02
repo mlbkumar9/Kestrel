@@ -2,7 +2,7 @@ use super::{logs, queue, settings, source};
 use crate::app::{LangMuxApp, Step};
 use crate::branding::APP_NAME;
 use crate::theme;
-use eframe::egui::{self, Align, Button, CornerRadius, Layout, RichText, Stroke};
+use eframe::egui::{self, Align, Button, CornerRadius, Layout, ProgressBar, RichText, Stroke};
 
 pub fn show(app: &mut LangMuxApp, root: &mut egui::Ui, ctx: &egui::Context) {
     egui::Panel::top("app-header")
@@ -74,7 +74,7 @@ pub fn show(app: &mut LangMuxApp, root: &mut egui::Ui, ctx: &egui::Context) {
                     .max_rect(right_rect)
                     .layout(Layout::right_to_left(Align::Center)),
             );
-            actions_ui.menu_button("⋯", |ui| {
+            actions_ui.menu_button("More", |ui| {
                 if ui.button("About").clicked() {
                     app.about_open = true;
                     ui.close();
@@ -101,7 +101,26 @@ pub fn show(app: &mut LangMuxApp, root: &mut egui::Ui, ctx: &egui::Context) {
                 }
             });
             if actions_ui
-                .selectable_label(app.preferences.logs_open, "Logs")
+                .add(
+                    Button::new(RichText::new("Logs").color(if app.preferences.logs_open {
+                        theme::ACCENT
+                    } else {
+                        theme::MUTED
+                    }))
+                    .fill(if app.preferences.logs_open {
+                        theme::ACCENT.gamma_multiply(0.14)
+                    } else {
+                        theme::BACKGROUND
+                    })
+                    .stroke(Stroke::new(
+                        1.0,
+                        if app.preferences.logs_open {
+                            theme::ACCENT.gamma_multiply(0.6)
+                        } else {
+                            theme::BORDER
+                        },
+                    )),
+                )
                 .clicked()
             {
                 app.preferences.logs_open = !app.preferences.logs_open;
@@ -153,7 +172,7 @@ pub fn show(app: &mut LangMuxApp, root: &mut egui::Ui, ctx: &egui::Context) {
             });
         });
     egui::Panel::bottom("queue-status")
-        .exact_size(30.0)
+        .exact_size(40.0)
         .frame(
             egui::Frame::new()
                 .fill(theme::SURFACE)
@@ -172,41 +191,72 @@ pub fn show(app: &mut LangMuxApp, root: &mut egui::Ui, ctx: &egui::Context) {
                         )
                     })
                     .count();
-                ui.label(
-                    RichText::new(if app.queue_running {
-                        format!("Queue running · {completed}/{}", app.queue.len())
-                    } else {
-                        format!("{} queued · {completed} completed", app.queue.len())
-                    })
-                    .size(10.0)
-                    .color(theme::MUTED),
-                );
+                let active_index = app
+                    .queue
+                    .iter()
+                    .position(|job| job.status == crate::worker::FileStatus::Processing)
+                    .map(|index| index + 1);
                 let active = app
                     .queue
                     .iter()
                     .find(|job| job.status == crate::worker::FileStatus::Processing);
-                if let Some(job) = active {
-                    ui.add(
-                        egui::ProgressBar::new(job.percent as f32 / 100.0)
-                            .desired_width(180.0)
-                            .desired_height(8.0),
-                    );
-                }
+                let status = if let Some(index) = active_index {
+                    let detail =
+                        active.map_or_else(String::new, |job| match (job.speed, job.eta) {
+                            (Some(speed), Some(eta)) => format!(
+                                " · {speed:.1}x · {} left",
+                                crate::ui::widgets::format_duration(eta)
+                            ),
+                            _ => String::new(),
+                        });
+                    format!("Encoding {index} of {}{detail}", app.queue.len())
+                } else if app.queue_running {
+                    "Queue running".to_owned()
+                } else {
+                    format!("Idle · {} queued · {completed} completed", app.queue.len())
+                };
+                ui.label(RichText::new(status).size(10.0).color(theme::MUTED));
+                let overall = if app.queue.is_empty() {
+                    0.0
+                } else {
+                    app.queue.iter().map(|job| job.percent as f32).sum::<f32>()
+                        / (100.0 * app.queue.len() as f32)
+                };
+                ui.add(
+                    ProgressBar::new(overall)
+                        .desired_width(ui.available_width().min(220.0))
+                        .desired_height(8.0),
+                );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if app.queue_running {
-                        if ui.small_button("Stop").clicked() {
-                            app.confirm_stop = true;
-                        }
-                        if ui
-                            .small_button(if app.paused { "Resume" } else { "Pause" })
-                            .clicked()
-                        {
-                            app.toggle_pause();
-                        }
+                    if ui
+                        .add_enabled(app.queue_running, Button::new("Stop"))
+                        .clicked()
+                    {
+                        app.confirm_stop = true;
+                    }
+                    if ui
+                        .add_enabled(
+                            app.queue_running,
+                            Button::new(if app.paused { "Resume" } else { "Pause" }),
+                        )
+                        .clicked()
+                    {
+                        app.toggle_pause();
                     }
                 });
             });
         });
+    if app.step == Step::Settings {
+        egui::Panel::bottom("settings-action-bar")
+            .exact_size(44.0)
+            .frame(
+                egui::Frame::new()
+                    .fill(theme::SURFACE)
+                    .stroke(Stroke::new(1.0, theme::BORDER))
+                    .inner_margin(egui::Margin::symmetric(14, 4)),
+            )
+            .show(root, |ui| settings::action_bar(app, ui, ctx));
+    }
     if app.preferences.logs_open {
         egui::Panel::bottom("logs-drawer")
             .resizable(true)
@@ -229,7 +279,7 @@ pub fn show(app: &mut LangMuxApp, root: &mut egui::Ui, ctx: &egui::Context) {
         )
         .show(root, |ui| match app.step {
             Step::Source => source::show(app, ui),
-            Step::Settings => settings::show(app, ui, ctx),
+            Step::Settings => settings::show(app, ui),
             Step::Queue => queue::show(app, ui, ctx),
         });
     if app.about_open {

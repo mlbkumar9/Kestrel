@@ -6,44 +6,61 @@ use crate::transcode::{
     AudioChoice, BurnIn, Deinterlace, Denoise, FrameRate, Mixdown, RateControl, TenBit,
     VideoEncode, VideoEncoder, VideoSettings,
 };
-use eframe::egui::{self, Align, ComboBox, Layout, RichText, ScrollArea, Slider};
+use eframe::egui::{self, Align, ComboBox, Frame, Layout, RichText, ScrollArea, Slider, Stroke};
 
-pub fn show(app: &mut LangMuxApp, ui: &mut egui::Ui, ctx: &egui::Context) {
+pub fn show(app: &mut LangMuxApp, ui: &mut egui::Ui) {
     if app.preview_source.is_none() {
         app.preview_source = app.sources.first().map(|source| source.source.path.clone());
     }
     let before = format!("{:?}", app.preferences.current_settings);
-    ui.horizontal_top(|ui| {
-        ui.allocate_ui_with_layout(
-            egui::vec2(180.0, ui.available_height()),
-            Layout::top_down(Align::Min),
-            |ui| presets_panel(app, ui),
-        );
-        ui.add_space(12.0);
-        let preview_width = 342.0_f32.min(ui.available_width() * 0.38);
-        let center_width = (ui.available_width() - preview_width - 12.0).max(430.0);
-        ui.allocate_ui_with_layout(
-            egui::vec2(center_width, ui.available_height()),
-            Layout::top_down(Align::Min),
-            |ui| settings_panel(app, ui),
-        );
-        ui.add_space(12.0);
-        ui.allocate_ui_with_layout(
-            egui::vec2(preview_width, ui.available_height()),
-            Layout::top_down(Align::Min),
-            |ui| preview_panel(app, ui),
-        );
-    });
+    let content_height = ui.available_height();
+    ui.allocate_ui_with_layout(
+        egui::vec2(ui.available_width(), content_height),
+        Layout::top_down(Align::Min),
+        |ui| {
+            ui.horizontal_top(|ui| {
+                ui.allocate_ui_with_layout(
+                    egui::vec2(180.0, content_height),
+                    Layout::top_down(Align::Min),
+                    |ui| presets_panel(app, ui),
+                );
+                ui.add_space(12.0);
+                let preview_width = 342.0_f32.min(ui.available_width() * 0.38);
+                let center_width = (ui.available_width() - preview_width - 12.0).max(430.0);
+                ui.allocate_ui_with_layout(
+                    egui::vec2(center_width, content_height),
+                    Layout::top_down(Align::Min),
+                    |ui| settings_panel(app, ui),
+                );
+                ui.add_space(12.0);
+                ui.allocate_ui_with_layout(
+                    egui::vec2(preview_width, content_height),
+                    Layout::top_down(Align::Min),
+                    |ui| preview_panel(app, ui),
+                );
+            });
+        },
+    );
     if before != format!("{:?}", app.preferences.current_settings) {
         app.mark_preview_dirty();
     }
-    ui.separator();
+}
+
+pub fn action_bar(app: &mut LangMuxApp, ui: &mut egui::Ui, ctx: &egui::Context) {
+    let preset_name = presets::builtins(&app.encoders)
+        .into_iter()
+        .chain(app.preferences.user_presets.clone())
+        .find(|preset| preset.id == app.preferences.selected_preset_id)
+        .map_or_else(
+            || app.preferences.selected_preset_id.clone(),
+            |preset| preset.name,
+        );
     ui.horizontal(|ui| {
         ui.label(
             RichText::new(format!(
-                "{} source(s) · {}",
+                "{} files · {}",
                 app.selected_source_indices().len(),
-                app.preferences.selected_preset_id
+                preset_name
             ))
             .size(10.0)
             .color(theme::MUTED),
@@ -80,16 +97,42 @@ fn presets_panel(app: &mut LangMuxApp, ui: &mut egui::Ui) {
             all.extend(app.preferences.user_presets.clone());
             for preset in all {
                 let selected = app.preferences.selected_preset_id == preset.id;
-                let response = ui.selectable_label(selected, RichText::new(&preset.name).strong());
+                let response = Frame::new()
+                    .fill(if selected {
+                        theme::ACCENT.gamma_multiply(0.13)
+                    } else {
+                        theme::SURFACE
+                    })
+                    .stroke(Stroke::new(
+                        1.0,
+                        if selected {
+                            theme::ACCENT
+                        } else {
+                            theme::BORDER
+                        },
+                    ))
+                    .corner_radius(egui::CornerRadius::same(6))
+                    .inner_margin(egui::Margin::symmetric(8, 6))
+                    .show(ui, |ui| {
+                        ui.set_min_width(ui.available_width());
+                        ui.label(RichText::new(&preset.name).strong());
+                        ui.label(
+                            RichText::new(&preset.description)
+                                .size(12.0)
+                                .color(theme::MUTED),
+                        );
+                    })
+                    .response;
+                let response = ui.interact(
+                    response.rect,
+                    egui::Id::new(("preset-card", &preset.id)),
+                    egui::Sense::click(),
+                );
                 if response.clicked() {
                     app.preferences.selected_preset_id = preset.id.clone();
                     app.preferences.current_settings = preset.settings.clone();
                 }
-                ui.label(
-                    RichText::new(preset.description)
-                        .size(9.0)
-                        .color(theme::SUBTLE),
-                );
+                response.on_hover_text(&preset.description);
                 ui.add_space(4.0);
             }
         });
@@ -187,86 +230,165 @@ fn settings_panel(app: &mut LangMuxApp, ui: &mut egui::Ui) {
 
 fn summary(app: &mut LangMuxApp, ui: &mut egui::Ui) {
     let settings = app.preferences.current_settings.clone();
+    let selected = app.selected_source_indices();
     ui.heading("Processing summary");
+    let audio_languages = summary_languages(app, &selected, &settings.audio.languages, true);
+    let subtitle_languages =
+        summary_languages(app, &selected, &settings.subtitles.languages, false);
     ui.label(
         RichText::new(format!(
-            "{} output · {} video · {} audio · {} subtitle handling",
-            settings.container.label(),
-            if matches!(settings.video, VideoSettings::Copy) {
-                "source video"
+            "Video: {}",
+            match &settings.video {
+                VideoSettings::Copy => "kept as is (no re-encode)".to_owned(),
+                VideoSettings::Encode(encode) => format!(
+                    "re-encoded as {}",
+                    match &encode.encoder {
+                        VideoEncoder::X264 => "H.264".to_owned(),
+                        VideoEncoder::X265 => "H.265".to_owned(),
+                        VideoEncoder::SvtAv1 => "AV1".to_owned(),
+                        VideoEncoder::Vp9 => "VP9".to_owned(),
+                        VideoEncoder::Hardware { codec, .. } => format!("{codec:?}"),
+                    }
+                ),
+            }
+        ))
+        .color(theme::TEXT),
+    );
+    ui.label(
+        RichText::new(format!(
+            "Audio: {audio_languages} — {}",
+            if settings.audio.codec == AudioChoice::Passthrough {
+                "copied"
             } else {
-                "re-encoded video"
-            },
-            format!("{:?}", settings.audio.codec).to_ascii_lowercase(),
-            format!("{:?}", settings.subtitles.burn_in).to_ascii_lowercase()
+                "encoded"
+            }
+        ))
+        .color(theme::TEXT),
+    );
+    ui.label(
+        RichText::new(format!(
+            "Subtitles: {}",
+            if settings.subtitles.include {
+                format!(
+                    "{subtitle_languages} — {}",
+                    match settings.subtitles.burn_in {
+                        BurnIn::None => "copied",
+                        BurnIn::ForcedOnly => "forced tracks burned in",
+                        BurnIn::FirstSelected => "first selected burned in",
+                    }
+                )
+            } else {
+                "excluded".to_owned()
+            }
+        ))
+        .color(theme::TEXT),
+    );
+    let target = app.output_target_for(&selected);
+    let target_path = match target {
+        crate::inputs::OutputTarget::File(path) | crate::inputs::OutputTarget::Folder(path) => path,
+    };
+    let target_name = target_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("output");
+    ui.label(
+        RichText::new(format!(
+            "Output: {} in …/{}",
+            settings.container.label(),
+            target_name
         ))
         .color(theme::MUTED),
     );
-    for index in app.selected_source_indices() {
+
+    let mut warning_sources = std::collections::BTreeMap::<String, Vec<String>>::new();
+    for index in selected.iter().copied() {
         if let Some(metadata) = app
             .sources
             .get(index)
             .and_then(|source| source.info.metadata.as_ref())
         {
             for warning in crate::compat::job_warnings(metadata, &settings) {
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("!").color(theme::WARNING));
-                    ui.label(RichText::new(warning).color(theme::TEXT));
-                    if ui.small_button("Use MKV").clicked() {
-                        app.preferences.current_settings.container = crate::formats::Container::Mkv;
-                    }
-                });
+                warning_sources
+                    .entry(warning)
+                    .or_default()
+                    .push(app.sources[index].source.relative.display().to_string());
             }
         }
     }
-    ui.add_space(12.0);
-    widgets::section_title(ui, "Advanced");
-    egui::CollapsingHeader::new("Advanced options")
-        .default_open(app.advanced_open)
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label("Remux engine");
-                ComboBox::from_id_salt("remux-engine")
-                    .selected_text(app.preferences.remux_engine.label())
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(
-                            &mut app.preferences.remux_engine,
-                            crate::worker::RemuxEngine::MkvToolNix,
-                            "MKVToolNix",
-                        );
-                        ui.selectable_value(
-                            &mut app.preferences.remux_engine,
-                            crate::worker::RemuxEngine::Ffmpeg,
-                            "FFmpeg",
-                        );
-                    });
+    for (warning, mut files) in warning_sources {
+        files.sort();
+        files.dedup();
+        Frame::new()
+            .fill(theme::WARNING.gamma_multiply(0.08))
+            .stroke(Stroke::new(1.0, theme::WARNING.gamma_multiply(0.45)))
+            .inner_margin(egui::Margin::symmetric(8, 5))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(warning.clone()).color(theme::TEXT))
+                        .on_hover_text(files.join("\n"));
+                    ui.label(
+                        RichText::new(format!("({} files)", files.len()))
+                            .size(10.0)
+                            .color(theme::MUTED),
+                    )
+                    .on_hover_text(files.join("\n"));
+                    if warning.starts_with("Video must be re-encoded")
+                        && matches!(app.preferences.current_settings.video, VideoSettings::Copy)
+                        && ui.small_button("Re-encode video").clicked()
+                    {
+                        app.preferences.current_settings.video =
+                            VideoSettings::Encode(VideoEncode::default());
+                    }
+                });
             });
-            ui.horizontal(|ui| {
-                ui.label("Existing outputs");
-                ComboBox::from_id_salt("settings-existing")
-                    .selected_text(format!("{:?}", app.preferences.existing))
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(
-                            &mut app.preferences.existing,
-                            crate::inputs::ExistingPolicy::Skip,
-                            "Skip",
-                        );
-                        ui.selectable_value(
-                            &mut app.preferences.existing,
-                            crate::inputs::ExistingPolicy::Overwrite,
-                            "Overwrite",
-                        );
-                        ui.selectable_value(
-                            &mut app.preferences.existing,
-                            crate::inputs::ExistingPolicy::Rename,
-                            "Rename",
-                        );
-                    });
-            });
-            let mut dry = app.preferences.dry_run;
-            widgets::toggle(ui, "Dry run", &mut dry);
-            app.preferences.dry_run = dry;
-        });
+    }
+}
+
+fn summary_languages(
+    app: &LangMuxApp,
+    selected: &[usize],
+    configured: &[String],
+    audio: bool,
+) -> String {
+    let mut languages = std::collections::BTreeSet::new();
+    if configured.is_empty() {
+        for index in selected {
+            if let Some(metadata) = app
+                .sources
+                .get(*index)
+                .and_then(|source| source.info.metadata.as_ref())
+            {
+                let tracks = if audio {
+                    &metadata.audio_tracks
+                } else {
+                    &metadata.subtitle_tracks
+                };
+                for track in tracks {
+                    if !track.language.is_empty() && track.language != "und" {
+                        languages.insert(language_name(&track.language));
+                    }
+                }
+            }
+        }
+    } else {
+        languages.extend(configured.iter().map(|code| language_name(code)));
+    }
+    if languages.is_empty() {
+        "all available languages".to_owned()
+    } else {
+        languages.into_iter().collect::<Vec<_>>().join(", ")
+    }
+}
+
+fn language_name(code: &str) -> String {
+    match code.to_ascii_lowercase().as_str() {
+        "eng" | "en" => "English".to_owned(),
+        "jpn" | "ja" => "Japanese".to_owned(),
+        "fra" | "fre" | "fr" => "French".to_owned(),
+        "deu" | "ger" | "de" => "German".to_owned(),
+        "spa" | "es" => "Spanish".to_owned(),
+        _ => code.to_owned(),
+    }
 }
 
 fn video_settings(app: &mut LangMuxApp, ui: &mut egui::Ui) {
@@ -574,6 +696,30 @@ fn metadata_settings(app: &mut LangMuxApp, ui: &mut egui::Ui) {
     {
         app.preferences.current_settings.title = (!title.is_empty()).then_some(title);
     }
+    egui::CollapsingHeader::new("Advanced")
+        .default_open(app.advanced_open)
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Remux engine");
+                ComboBox::from_id_salt("remux-engine")
+                    .selected_text(app.preferences.remux_engine.label())
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut app.preferences.remux_engine,
+                            crate::worker::RemuxEngine::MkvToolNix,
+                            "MKVToolNix",
+                        );
+                        ui.selectable_value(
+                            &mut app.preferences.remux_engine,
+                            crate::worker::RemuxEngine::Ffmpeg,
+                            "FFmpeg",
+                        );
+                    });
+            });
+            let mut dry = app.preferences.dry_run;
+            widgets::toggle(ui, "Dry run", &mut dry);
+            app.preferences.dry_run = dry;
+        });
 }
 
 fn language_chips(ui: &mut egui::Ui, languages: &[String], selected: &mut Vec<String>) {
@@ -640,9 +786,16 @@ fn preview_panel(app: &mut LangMuxApp, ui: &mut egui::Ui) {
             .and_then(|source| source.info.metadata.as_ref())
             .and_then(|metadata| metadata.duration)
             .unwrap_or(1.0);
+        let timestamp =
+            |seconds: f64| format!("{:02}:{:02}", seconds as u64 / 60, seconds as u64 % 60);
+        let preview_time = app.preview_time;
         ui.add(
             Slider::new(&mut app.preview_time, 0.0..=duration.max(1.0))
-                .text("Timeline")
+                .text(format!(
+                    "{} / {}",
+                    timestamp(preview_time),
+                    timestamp(duration)
+                ))
                 .show_value(false),
         )
         .on_hover_text("Preview updates after a short pause");
@@ -662,10 +815,12 @@ fn preview_panel(app: &mut LangMuxApp, ui: &mut egui::Ui) {
                 ));
             }
             if let Some(texture) = &app.preview_texture {
-                ui.add(
-                    egui::Image::new(texture)
-                        .fit_to_exact_size(egui::vec2(ui.available_width(), height)),
-                );
+                let source_size = texture.size_vec2();
+                let scale = (ui.available_width() / source_size.x).min(height / source_size.y);
+                let image_size = source_size * scale;
+                ui.horizontal_centered(|ui| {
+                    ui.add(egui::Image::new(texture).fit_to_exact_size(image_size));
+                });
             }
         } else if app.preview_pending {
             ui.allocate_ui_with_layout(

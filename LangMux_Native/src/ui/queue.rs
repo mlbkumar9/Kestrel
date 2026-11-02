@@ -149,20 +149,20 @@ pub fn show(app: &mut LangMuxApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                 }
                             });
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                if ui.small_button("⋯").clicked() {
+                                if ui.small_button("More").clicked() {
                                     action = Some((job.id, "menu"));
                                 }
                                 if ui
-                                    .small_button("↗")
+                                    .small_button("Reveal")
                                     .on_hover_text("Reveal output")
                                     .clicked()
                                 {
                                     reveal(&job.output);
                                 }
-                                if ui.small_button("↓").on_hover_text("Move down").clicked() {
+                                if ui.small_button("Down").on_hover_text("Move down").clicked() {
                                     action = Some((job.id, "down"));
                                 }
-                                if ui.small_button("↑").on_hover_text("Move up").clicked() {
+                                if ui.small_button("Up").on_hover_text("Move up").clicked() {
                                     action = Some((job.id, "up"));
                                 }
                             });

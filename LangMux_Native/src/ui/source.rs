@@ -4,17 +4,15 @@ use crate::formats::Container;
 use crate::inputs::{self, ExistingPolicy, OutputTarget};
 use crate::theme;
 use eframe::egui::{
-    self, Align, Button, ComboBox, CornerRadius, Frame, Layout, Margin, RichText, ScrollArea,
-    Stroke,
+    self, Align, Button, ComboBox, CornerRadius, Layout, RichText, ScrollArea, Stroke,
 };
-use std::path::Path;
 
 pub fn show(app: &mut LangMuxApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
-        if ui.button("＋ Add files").clicked() {
+        if ui.button("Add files…").clicked() {
             app.add_files_dialog();
         }
-        if ui.button("＋ Add folder").clicked() {
+        if ui.button("Add folder…").clicked() {
             app.add_folder_dialog();
         }
         if ui
@@ -67,25 +65,18 @@ fn empty_state(app: &mut LangMuxApp, ui: &mut egui::Ui) {
             ui.add_space(26.0);
             ui.label(RichText::new("Add media to begin").size(22.0).strong());
             ui.add_space(8.0);
-            ui.label(
-                RichText::new("Drop supported media here, or choose files and folders to scan.")
-                    .color(theme::MUTED),
-            );
+            ui.label(RichText::new("Drop video files or folders").color(theme::MUTED));
+            ui.label(RichText::new("MKV, MP4, MOV, WebM, AVI, TS and more").color(theme::SUBTLE));
             ui.add_space(16.0);
             ui.horizontal(|ui| {
-                if widgets::primary_button(ui, "Add files").clicked() {
+                if widgets::primary_button(ui, "Add files…").clicked() {
                     app.add_files_dialog();
                 }
-                if ui.button("Add folder").clicked() {
+                if ui.button("Add folder…").clicked() {
                     app.add_folder_dialog();
                 }
             });
             ui.add_space(12.0);
-            ui.label(
-                RichText::new("MKV · MP4 · MOV · WebM · AVI · MPEG · TS")
-                    .size(10.5)
-                    .color(theme::SUBTLE),
-            );
         });
     });
 }
@@ -117,44 +108,37 @@ fn source_table(app: &mut LangMuxApp, ui: &mut egui::Ui) {
         });
     });
     ui.add_space(6.0);
-    Frame::new()
-        .fill(theme::SURFACE)
-        .stroke(Stroke::new(1.0, theme::BORDER))
-        .corner_radius(CornerRadius::same(6))
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new("  NAME")
-                        .size(9.0)
-                        .strong()
-                        .color(theme::MUTED),
-                );
-                ui.add_space(160.0);
-                ui.label(
-                    RichText::new("CONTAINER")
-                        .size(9.0)
-                        .strong()
-                        .color(theme::MUTED),
-                );
-                ui.add_space(24.0);
-                ui.label(
-                    RichText::new("DURATION · VIDEO")
-                        .size(9.0)
-                        .strong()
-                        .color(theme::MUTED),
-                );
-                ui.add_space(55.0);
-                ui.label(
-                    RichText::new("AUDIO / SUBTITLES")
-                        .size(9.0)
-                        .strong()
-                        .color(theme::MUTED),
-                );
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.label(RichText::new("SIZE").size(9.0).strong().color(theme::MUTED));
-                });
-            });
-        });
+    let widths = source_column_widths(ui.available_width());
+    let header = [
+        "",
+        "NAME",
+        "FORMAT",
+        "DURATION",
+        "VIDEO",
+        "AUDIO",
+        "SUBTITLES",
+        "SIZE",
+        "",
+    ];
+    let table_width = widths.iter().sum::<f32>();
+    let header_rect = ui
+        .allocate_exact_size(egui::vec2(table_width, 30.0), egui::Sense::hover())
+        .0;
+    ui.painter()
+        .rect_filled(header_rect, CornerRadius::same(6), theme::SURFACE);
+    ui.painter().rect_stroke(
+        header_rect,
+        CornerRadius::same(6),
+        Stroke::new(1.0, theme::BORDER),
+        egui::StrokeKind::Inside,
+    );
+    for (rect, title) in source_column_rects(header_rect, &widths)
+        .into_iter()
+        .zip(header)
+    {
+        let mut cell = table_cell(ui, rect);
+        cell.label(RichText::new(title).size(9.0).strong().color(theme::MUTED));
+    }
     ScrollArea::vertical()
         .id_salt("source-files")
         .auto_shrink([false, false])
@@ -178,129 +162,140 @@ fn source_table(app: &mut LangMuxApp, ui: &mut egui::Ui) {
                 {
                     continue;
                 }
-                Frame::new()
-                    .fill(if index % 2 == 0 {
+                let relative = source.source.relative.display().to_string();
+                let full_path = source.source.path.display().to_string();
+                let row_rect = ui
+                    .allocate_exact_size(egui::vec2(table_width, 40.0), egui::Sense::hover())
+                    .0;
+                ui.painter().rect_filled(
+                    row_rect,
+                    CornerRadius::ZERO,
+                    if index % 2 == 0 {
                         theme::BACKGROUND
                     } else {
                         theme::SURFACE
-                    })
-                    .stroke(Stroke::new(0.5, theme::BORDER))
-                    .inner_margin(Margin::symmetric(8, 7))
-                    .show(ui, |ui| {
-                        ui.set_min_height(53.0);
-                        ui.horizontal(|ui| {
-                            ui.checkbox(&mut source.checked, "");
-                            ui.vertical(|ui| {
-                                ui.add(
-                                    egui::Label::new(
-                                        RichText::new(source.source.relative.to_string_lossy())
-                                            .size(11.0)
-                                            .color(theme::TEXT),
-                                    )
-                                    .truncate(),
-                                )
-                                .on_hover_text(source.source.path.display().to_string());
-                                ui.label(
-                                    RichText::new(
-                                        source
-                                            .source
-                                            .path
-                                            .parent()
-                                            .unwrap_or_else(|| Path::new(""))
-                                            .display()
-                                            .to_string(),
-                                    )
+                    },
+                );
+                ui.painter().rect_stroke(
+                    row_rect,
+                    CornerRadius::ZERO,
+                    Stroke::new(0.5, theme::BORDER),
+                    egui::StrokeKind::Inside,
+                );
+                let hovered = ui
+                    .interact(
+                        row_rect,
+                        egui::Id::new(("source-row", index)),
+                        egui::Sense::hover(),
+                    )
+                    .hovered();
+                let mut cells = source_column_rects(row_rect, &widths).into_iter();
+                let mut checkbox = table_cell(ui, cells.next().unwrap());
+                checkbox.checkbox(&mut source.checked, "");
+                let mut name = table_cell(ui, cells.next().unwrap());
+                name.add(
+                    egui::Label::new(RichText::new(&relative).size(11.0).color(theme::TEXT))
+                        .truncate(),
+                )
+                .on_hover_text(&full_path);
+                let format = source
+                    .source
+                    .path
+                    .extension()
+                    .unwrap_or_else(|| std::ffi::OsStr::new(""))
+                    .to_string_lossy()
+                    .to_ascii_uppercase();
+                widgets::chip(
+                    &mut table_cell(ui, cells.next().unwrap()),
+                    &format,
+                    theme::MUTED,
+                );
+                if let Some(metadata) = &source.info.metadata {
+                    let mut duration = table_cell(ui, cells.next().unwrap());
+                    duration.label(
+                        RichText::new(
+                            metadata
+                                .duration
+                                .map(widgets::format_duration)
+                                .unwrap_or_else(|| "—".into()),
+                        )
+                        .monospace()
+                        .size(10.0),
+                    );
+                    let mut video_cell = table_cell(ui, cells.next().unwrap());
+                    if let Some(video) = &metadata.video {
+                        let resolution = match (video.width, video.height) {
+                            (Some(width), Some(height)) => format!("{width}×{height}"),
+                            _ => video.codec_id.clone(),
+                        };
+                        video_cell
+                            .add(
+                                egui::Label::new(
+                                    RichText::new(format!(
+                                        "{} · {}{}",
+                                        video.codec_id.to_ascii_uppercase(),
+                                        resolution,
+                                        if video.hdr { " · HDR" } else { "" }
+                                    ))
                                     .size(9.0)
-                                    .color(theme::SUBTLE),
-                                );
-                            });
-                            ui.add_space(8.0);
-                            widgets::chip(
-                                ui,
-                                &source
-                                    .source
-                                    .path
-                                    .extension()
-                                    .unwrap_or_else(|| std::ffi::OsStr::new(""))
-                                    .to_string_lossy()
-                                    .to_ascii_uppercase(),
-                                theme::MUTED,
-                            );
-                            ui.add_space(8.0);
-                            if let Some(metadata) = &source.info.metadata {
-                                ui.vertical(|ui| {
-                                    ui.label(
-                                        RichText::new(
-                                            metadata
-                                                .duration
-                                                .map(widgets::format_duration)
-                                                .unwrap_or_else(|| "—".into()),
-                                        )
-                                        .monospace()
-                                        .size(10.0),
-                                    );
-                                    if let Some(video) = &metadata.video {
-                                        let resolution = match (video.width, video.height) {
-                                            (Some(width), Some(height)) => {
-                                                format!("{width}×{height}")
-                                            }
-                                            _ => video.codec_id.clone(),
-                                        };
-                                        ui.label(
-                                            RichText::new(format!(
-                                                "{} · {}{}",
-                                                video.codec_id.to_ascii_uppercase(),
-                                                resolution,
-                                                if video.hdr { " · HDR" } else { "" }
-                                            ))
-                                            .size(9.0)
-                                            .color(theme::MUTED),
-                                        );
-                                    }
-                                });
-                                ui.add_space(10.0);
-                                ui.vertical(|ui| {
-                                    ui.horizontal_wrapped(|ui| {
-                                        for track in metadata.audio_tracks.iter().take(3) {
-                                            widgets::chip(ui, &track.language, theme::TEXT);
-                                        }
-                                    });
-                                    ui.horizontal_wrapped(|ui| {
-                                        for track in metadata.subtitle_tracks.iter().take(3) {
-                                            widgets::chip(ui, &track.language, theme::MUTED);
-                                        }
-                                    });
-                                });
-                            } else if app.scan_loading {
-                                ui.spinner();
-                                ui.label(
-                                    RichText::new("Reading metadata…")
-                                        .size(10.0)
-                                        .color(theme::SUBTLE),
-                                );
-                            } else {
-                                ui.label(
-                                    RichText::new("Metadata unavailable")
-                                        .size(10.0)
-                                        .color(theme::SUBTLE),
+                                    .color(theme::MUTED),
+                                )
+                                .truncate(),
+                            )
+                            .on_hover_text(&video.codec_id);
+                    }
+                    for (cell_rect, tracks, color) in [
+                        (cells.next().unwrap(), &metadata.audio_tracks, theme::TEXT),
+                        (
+                            cells.next().unwrap(),
+                            &metadata.subtitle_tracks,
+                            theme::MUTED,
+                        ),
+                    ] {
+                        let mut cell = table_cell(ui, cell_rect);
+                        cell.horizontal(|cell| {
+                            let limit = if cell_rect.width() < 110.0 { 2 } else { 3 };
+                            for track in tracks.iter().take(limit) {
+                                widgets::chip(cell, &track.language, color);
+                            }
+                            if tracks.len() > limit {
+                                cell.label(
+                                    RichText::new(format!("+{}", tracks.len() - limit))
+                                        .size(9.0)
+                                        .color(theme::MUTED),
                                 );
                             }
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                ui.label(
-                                    RichText::new(widgets::format_size(source.info.size))
-                                        .monospace()
-                                        .size(10.0),
-                                );
-                                if ui
-                                    .small_button("×")
-                                    .on_hover_text("Remove source")
-                                    .clicked()
-                                {
-                                    remove = Some(index);
-                                }
-                            });
                         });
-                    });
+                    }
+                } else {
+                    for cell_rect in cells.by_ref().take(4) {
+                        let mut cell = table_cell(ui, cell_rect);
+                        if app.scan_loading {
+                            cell.spinner();
+                        } else {
+                            cell.label(RichText::new("—").color(theme::SUBTLE));
+                        }
+                    }
+                }
+                let mut size = table_cell(ui, cells.next().unwrap());
+                size.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.label(
+                        RichText::new(widgets::format_size(source.info.size))
+                            .monospace()
+                            .size(10.0),
+                    );
+                });
+                let mut remove_cell = table_cell(ui, cells.next().unwrap());
+                remove_cell.with_layout(Layout::right_to_left(Align::Center), |cell| {
+                    if hovered
+                        && cell
+                            .small_button("x")
+                            .on_hover_text("Remove source")
+                            .clicked()
+                    {
+                        remove = Some(index);
+                    }
+                });
             }
             if let Some(index) = remove {
                 let path = app.sources.remove(index).source.path;
@@ -309,6 +304,41 @@ fn source_table(app: &mut LangMuxApp, ui: &mut egui::Ui) {
                 );
             }
         });
+}
+
+fn source_column_rects(rect: egui::Rect, widths: &[f32; 9]) -> [egui::Rect; 9] {
+    let mut left = rect.left();
+    std::array::from_fn(|index| {
+        let cell = egui::Rect::from_min_size(
+            egui::pos2(left, rect.top()),
+            egui::vec2(widths[index], rect.height()),
+        );
+        left += widths[index];
+        cell
+    })
+}
+
+fn table_cell(ui: &mut egui::Ui, rect: egui::Rect) -> egui::Ui {
+    ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(rect.shrink2(egui::vec2(4.0, 0.0)))
+            .layout(Layout::left_to_right(Align::Center)),
+    )
+}
+
+fn source_column_widths(available: f32) -> [f32; 9] {
+    let flex = (available - 174.0).max(420.0);
+    [
+        26.0,
+        flex * 0.40,
+        58.0,
+        flex * 0.09,
+        flex * 0.20,
+        flex * 0.14,
+        flex * 0.17,
+        66.0,
+        24.0,
+    ]
 }
 
 fn output_panel(app: &mut LangMuxApp, ui: &mut egui::Ui) {
@@ -326,9 +356,9 @@ fn output_panel(app: &mut LangMuxApp, ui: &mut egui::Ui) {
         let target = app.output_target_for(&selected);
         ui.label(
             RichText::new(if selected.len() == 1 {
-                "File target"
+                "Save as"
             } else {
-                "Folder target"
+                "Save to folder"
             })
             .size(10.0)
             .color(theme::MUTED),
