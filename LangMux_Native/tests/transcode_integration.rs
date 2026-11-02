@@ -1,0 +1,257 @@
+use langmux::encoders::EncoderSet;
+use langmux::formats::Container;
+use langmux::inputs::ExistingPolicy;
+use langmux::mkv::{self, MediaMetadata};
+use langmux::presets;
+use langmux::tools::{self, Toolchain};
+use langmux::transcode::VideoEncoder;
+use langmux::worker::{self, FileStatus, JobSpec, QueueSpec, RemuxEngine, WorkerEvent};
+use std::collections::BTreeSet;
+use std::fs;
+use std::path::PathBuf;
+
+#[test]
+fn built_in_software_presets_transcode_supported_fixture_containers() {
+    let tools = Toolchain::discover();
+    let (Some(ffmpeg), Some(ffprobe)) = (&tools.ffmpeg, &tools.ffprobe) else {
+        println!("SKIP: integration fixtures require ffmpeg and ffprobe on PATH");
+        return;
+    };
+    let fixture_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/v3-integration");
+    fs::create_dir_all(&fixture_dir).expect("fixture directory should be created");
+    let subtitles = fixture_dir.join("english.srt");
+    fs::write(&subtitles, "1\n00:00:00,250 --> 00:00:02,500\nHello\n")
+        .expect("SRT fixture should be written");
+
+    let fixtures = [
+        (Container::Mp4, "libx264", "aac", Some("mov_text")),
+        (Container::Mkv, "libx264", "aac", Some("srt")),
+        (Container::Mkv, "mpeg4", "mp3", None),
+        (Container::WebM, "libvpx-vp9", "libopus", Some("webvtt")),
+    ];
+    let mut inputs = Vec::new();
+    for (container, video, audio, subtitle) in fixtures {
+        let extension = match (container, video) {
+            (Container::Mkv, "mpeg4") => "avi",
+            (container, _) => container.extension(),
+        };
+        let path = fixture_dir.join(format!("fixture-{video}.{extension}"));
+        let mut command = tools::command(&ffmpeg.path);
+        command.args([
+            "-hide_banner",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=320x240:rate=24:duration=3",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=3",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=660:duration=3",
+        ]);
+        if let Some(subtitle_codec) = subtitle {
+            command.arg("-i").arg(&subtitles);
+            command.args([
+                "-map",
+                "3:s:0",
+                "-metadata:s:s:0",
+                "language=eng",
+                "-c:s",
+                subtitle_codec,
+            ]);
+        }
+        let output = command
+            .args([
+                "-map",
+                "0:v:0",
+                "-map",
+                "1:a:0",
+                "-map",
+                "2:a:0",
+                "-metadata:s:a:0",
+                "language=eng",
+                "-metadata:s:a:1",
+                "language=jpn",
+                "-c:v",
+                video,
+                "-c:a",
+                audio,
+                "-t",
+                "3",
+            ])
+            .arg(&path)
+            .output()
+            .expect("ffmpeg should generate fixture");
+        assert!(
+            output.status.success(),
+            "fixture generation failed for {}: {}",
+            path.display(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        inputs.push(path);
+    }
+
+    let encoders = EncoderSet {
+        software: vec![
+            VideoEncoder::X264,
+            VideoEncoder::X265,
+            VideoEncoder::SvtAv1,
+            VideoEncoder::Vp9,
+        ],
+        hardware: Vec::new(),
+    };
+    let builtin_presets = presets::builtins(&EncoderSet::default())
+        .into_iter()
+        .filter(|preset| preset.id != "hardware")
+        .collect::<Vec<_>>();
+    let mut job_id = 0;
+    let mut generated_outputs = Vec::new();
+    for input in &inputs {
+        let metadata: MediaMetadata = mkv::read_metadata(
+            tools.mkvmerge.as_ref().map(|tool| tool.path.as_path()),
+            Some(&ffprobe.path),
+            input,
+        )
+        .expect("fixture metadata should be readable");
+        for preset in &builtin_presets {
+            let output_dir = fixture_dir.join("outputs").join(&preset.id);
+            fs::create_dir_all(&output_dir).expect("output directory should be created");
+            let output = output_dir.join(format!(
+                "{}.{}",
+                input.file_stem().unwrap().to_string_lossy(),
+                preset.settings.container.extension()
+            ));
+            let events = worker::run_queue_blocking(QueueSpec {
+                jobs: vec![JobSpec {
+                    id: job_id,
+                    input: input.clone(),
+                    output: output.clone(),
+                    metadata: metadata.clone(),
+                    settings: preset.settings.clone(),
+                }],
+                tools: tools.clone(),
+                encoders: encoders.clone(),
+                remux_engine: if tools.mkvmerge.is_some() {
+                    RemuxEngine::MkvToolNix
+                } else {
+                    RemuxEngine::Ffmpeg
+                },
+                existing: ExistingPolicy::Overwrite,
+                dry_run: false,
+            });
+            assert!(
+                events.iter().any(|event| matches!(
+                    event,
+                    WorkerEvent::JobUpdated { job_id: id, status: FileStatus::Success, .. }
+                        if *id == job_id
+                )),
+                "preset {} failed for {}",
+                preset.id,
+                input.display()
+            );
+            let output_metadata = mkv::read_metadata(None, Some(&ffprobe.path), &output)
+                .expect("output metadata should be readable");
+            assert_eq!(
+                output.extension().and_then(|extension| extension.to_str()),
+                Some(preset.settings.container.extension())
+            );
+            let expected_format = match preset.settings.container {
+                Container::Mkv => "matroska",
+                Container::Mp4 | Container::Mov => "mov",
+                Container::WebM => "webm",
+            };
+            assert!(
+                output_metadata
+                    .container
+                    .as_deref()
+                    .is_some_and(|format| format.contains(expected_format)),
+                "unexpected output container for preset {}: {:?}",
+                preset.id,
+                output_metadata.container
+            );
+            assert!(
+                output_metadata.video.is_some(),
+                "output video stream missing"
+            );
+            let expected_video_codec = match preset.id.as_str() {
+                "smaller" => "hevc",
+                "anywhere" => "h264",
+                "archive" => "av1",
+                "web" => "vp9",
+                _ => metadata.video.as_ref().unwrap().codec_id.as_str(),
+            };
+            assert_eq!(
+                output_metadata.video.as_ref().unwrap().codec_id,
+                expected_video_codec,
+                "unexpected video codec for preset {} and {}",
+                preset.id,
+                input.display()
+            );
+            assert_eq!(output_metadata.audio_tracks.len(), 2);
+            for (index, track) in output_metadata.audio_tracks.iter().enumerate() {
+                let expected_codec = match preset.id.as_str() {
+                    "anywhere" => "aac",
+                    "web" => "opus",
+                    _ => metadata.audio_tracks[index].codec_id.as_str(),
+                };
+                assert_eq!(
+                    track.codec_id,
+                    expected_codec,
+                    "unexpected audio codec for preset {} and {}",
+                    preset.id,
+                    input.display()
+                );
+            }
+            let audio_languages = output_metadata
+                .audio_tracks
+                .iter()
+                .map(|track| track.language.as_str())
+                .collect::<BTreeSet<_>>();
+            if input.extension().and_then(|ext| ext.to_str()) == Some("avi") {
+                assert!(
+                    output_metadata
+                        .audio_tracks
+                        .iter()
+                        .all(|track| track.language == "und")
+                );
+            } else {
+                assert!(audio_languages.contains("eng"));
+                assert!(audio_languages.contains("jpn"));
+            }
+            let source_has_subtitles =
+                input.extension().and_then(|ext| ext.to_str()) != Some("avi");
+            let expected_subtitle_count = usize::from(source_has_subtitles);
+            assert_eq!(
+                output_metadata.subtitle_tracks.len(),
+                expected_subtitle_count
+            );
+            if source_has_subtitles && preset.settings.container == Container::Mp4 {
+                assert_eq!(output_metadata.subtitle_tracks[0].codec_id, "mov_text");
+            } else if source_has_subtitles && preset.settings.container == Container::WebM {
+                assert_eq!(output_metadata.subtitle_tracks[0].codec_id, "webvtt");
+            }
+            generated_outputs.push(output);
+            job_id += 1;
+        }
+    }
+    for output in generated_outputs {
+        let parent = output.parent().unwrap();
+        assert!(
+            fs::read_dir(parent).unwrap().flatten().all(|entry| !entry
+                .file_name()
+                .to_string_lossy()
+                .contains("langmux-partial")),
+            "partial output leaked in {}",
+            parent.display()
+        );
+    }
+    assert!(fixture_dir.exists());
+    println!(
+        "Generated real-FFmpeg fixtures and outputs: {}",
+        fixture_dir.display()
+    );
+}
