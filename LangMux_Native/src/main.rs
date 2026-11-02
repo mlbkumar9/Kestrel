@@ -21,7 +21,7 @@ fn main() -> eframe::Result {
         .with_app_id(branding::APP_ID)
         .with_title(branding::APP_NAME)
         .with_inner_size([1440.0, 920.0])
-        .with_min_inner_size([1060.0, 700.0])
+        .with_min_inner_size([1100.0, 700.0])
         .with_icon(app_icon().unwrap_or_default());
     let options = eframe::NativeOptions {
         viewport,
