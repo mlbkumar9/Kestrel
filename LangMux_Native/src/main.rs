@@ -1,12 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod app;
-mod mkv;
-mod theme;
-mod tools;
-mod worker;
-
 use eframe::egui;
+use langmux::{app, branding};
 use std::sync::Arc;
 
 fn app_icon() -> Option<Arc<egui::IconData>> {
@@ -21,9 +16,10 @@ fn app_icon() -> Option<Arc<egui::IconData>> {
 }
 
 fn main() -> eframe::Result {
+    branding::migrate_storage();
     let viewport = egui::ViewportBuilder::default()
-        .with_app_id("langmux")
-        .with_title("LangMux")
+        .with_app_id(branding::APP_ID)
+        .with_title(branding::APP_NAME)
         .with_inner_size([1440.0, 920.0])
         .with_min_inner_size([1060.0, 700.0])
         .with_icon(app_icon().unwrap_or_default());
@@ -35,7 +31,7 @@ fn main() -> eframe::Result {
     };
 
     eframe::run_native(
-        "LangMux",
+        branding::APP_NAME,
         options,
         Box::new(|cc| Ok(Box::new(app::LangMuxApp::new(cc)))),
     )

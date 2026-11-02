@@ -1,7 +1,12 @@
+use crate::encoders::EncoderSet;
+use crate::formats::Container;
+use crate::inputs::ExistingPolicy;
 use crate::mkv::{self, AvailableLanguages, BatchStats, FileInfo, MediaMetadata};
 use crate::tools::{self, Toolchain};
+use crate::transcode::{JobSettings, build_ffmpeg_job_arguments};
 use eframe::egui;
 use serde::{Deserialize, Serialize};
+use std::ffi::OsString;
 use std::fs::OpenOptions;
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
@@ -59,6 +64,19 @@ pub enum WorkerEvent {
         percent: u32,
         detail: Option<String>,
     },
+    JobUpdated {
+        job_id: u64,
+        status: FileStatus,
+        percent: u32,
+        detail: Option<String>,
+    },
+    Progress {
+        job_id: u64,
+        percent: u32,
+        fps: Option<f64>,
+        speed: Option<f64>,
+        eta_seconds: Option<f64>,
+    },
     Log(String),
     BatchFinished {
         cancelled: bool,
@@ -115,6 +133,25 @@ pub struct BatchSpec {
     pub audio_languages: Vec<String>,
     pub subtitle_languages: Vec<String>,
     pub skip_existing: bool,
+    pub dry_run: bool,
+}
+
+#[derive(Clone)]
+pub struct JobSpec {
+    pub id: u64,
+    pub input: PathBuf,
+    pub output: PathBuf,
+    pub metadata: MediaMetadata,
+    pub settings: JobSettings,
+}
+
+#[derive(Clone)]
+pub struct QueueSpec {
+    pub jobs: Vec<JobSpec>,
+    pub tools: Toolchain,
+    pub encoders: EncoderSet,
+    pub remux_engine: RemuxEngine,
+    pub existing: ExistingPolicy,
     pub dry_run: bool,
 }
 
@@ -418,6 +455,528 @@ fn mark_cancelled(
                 detail: Some("Not started".to_owned()),
             },
         );
+    }
+}
+
+pub fn start_queue(
+    spec: QueueSpec,
+    control: WorkerControl,
+    sender: mpsc::Sender<WorkerEvent>,
+    ctx: egui::Context,
+) {
+    control.reset();
+    std::thread::spawn(move || run_queue(spec, control, sender, ctx));
+}
+
+pub fn run_queue_blocking(spec: QueueSpec) -> Vec<WorkerEvent> {
+    let (sender, receiver) = mpsc::channel();
+    let context = egui::Context::default();
+    run_queue(spec, WorkerControl::default(), sender, context);
+    receiver.into_iter().collect()
+}
+
+fn run_queue(
+    spec: QueueSpec,
+    control: WorkerControl,
+    sender: mpsc::Sender<WorkerEvent>,
+    ctx: egui::Context,
+) {
+    let started = Instant::now();
+    send(
+        &sender,
+        &ctx,
+        WorkerEvent::Log(format!(
+            "{} batch started for {} job(s)",
+            if spec.dry_run { "Dry-run" } else { "Transcode" },
+            spec.jobs.len()
+        )),
+    );
+    let mut cancelled = false;
+    for (index, job) in spec.jobs.iter().enumerate() {
+        if control.is_cancelled() {
+            cancelled = true;
+            for not_started in &spec.jobs[index..] {
+                send(
+                    &sender,
+                    &ctx,
+                    WorkerEvent::JobUpdated {
+                        job_id: not_started.id,
+                        status: FileStatus::Cancelled,
+                        percent: 0,
+                        detail: Some("Not started".to_owned()),
+                    },
+                );
+            }
+            break;
+        }
+        while control.paused.load(Ordering::SeqCst) && !control.is_cancelled() {
+            std::thread::sleep(std::time::Duration::from_millis(80));
+        }
+        if !spec.dry_run
+            && let Some(parent) = job.output.parent()
+            && let Err(error) = std::fs::create_dir_all(parent)
+        {
+            queue_update(
+                &sender,
+                &ctx,
+                job.id,
+                FileStatus::Error,
+                0,
+                Some(error.to_string()),
+            );
+            continue;
+        }
+        let output = match queue_output(&job.output, spec.existing, spec.dry_run) {
+            Ok(Some(output)) => output,
+            Ok(None) => {
+                queue_update(
+                    &sender,
+                    &ctx,
+                    job.id,
+                    FileStatus::Skipped,
+                    100,
+                    Some("Output already exists".to_owned()),
+                );
+                continue;
+            }
+            Err(error) => {
+                queue_update(&sender, &ctx, job.id, FileStatus::Error, 0, Some(error));
+                continue;
+            }
+        };
+        if !spec.dry_run
+            && let Err(error) = validate_output_paths(&job.input, &output)
+        {
+            queue_update(&sender, &ctx, job.id, FileStatus::Error, 0, Some(error));
+            continue;
+        }
+        queue_update(&sender, &ctx, job.id, FileStatus::Processing, 0, None);
+        for warning in crate::compat::job_warnings(&job.metadata, &job.settings) {
+            send(
+                &sender,
+                &ctx,
+                WorkerEvent::Log(format!("{} — {warning}", job.input.display())),
+            );
+        }
+        let result = process_queue_job(job, &output, &spec, &control, &sender, &ctx);
+        match result {
+            Ok(outcome) => {
+                let detail = match &outcome {
+                    ProcessOutcome::Success => None,
+                    ProcessOutcome::Warnings(_) => Some("Warnings".to_owned()),
+                };
+                queue_update(&sender, &ctx, job.id, FileStatus::Success, 100, detail);
+                if let ProcessOutcome::Warnings(warnings) = outcome {
+                    send(
+                        &sender,
+                        &ctx,
+                        WorkerEvent::Log(format!("{} finished with warnings", job.input.display())),
+                    );
+                    for warning in warnings.lines {
+                        send(
+                            &sender,
+                            &ctx,
+                            WorkerEvent::Log(format!("{} — {warning}", job.input.display())),
+                        );
+                    }
+                    if warnings.omitted > 0 {
+                        send(
+                            &sender,
+                            &ctx,
+                            WorkerEvent::Log(format!(
+                                "{} — ...and {} more warnings",
+                                job.input.display(),
+                                warnings.omitted
+                            )),
+                        );
+                    }
+                }
+            }
+            Err(error) if control.is_cancelled() => {
+                cancelled = true;
+                queue_update(
+                    &sender,
+                    &ctx,
+                    job.id,
+                    FileStatus::Cancelled,
+                    0,
+                    Some("Stopped by user".to_owned()),
+                );
+                send(
+                    &sender,
+                    &ctx,
+                    WorkerEvent::Log(format!("{} — {error}", job.input.display())),
+                );
+                for not_started in &spec.jobs[index + 1..] {
+                    send(
+                        &sender,
+                        &ctx,
+                        WorkerEvent::JobUpdated {
+                            job_id: not_started.id,
+                            status: FileStatus::Cancelled,
+                            percent: 0,
+                            detail: Some("Not started".to_owned()),
+                        },
+                    );
+                }
+                break;
+            }
+            Err(error) => {
+                queue_update(
+                    &sender,
+                    &ctx,
+                    job.id,
+                    FileStatus::Error,
+                    0,
+                    Some(error.clone()),
+                );
+                send(
+                    &sender,
+                    &ctx,
+                    WorkerEvent::Log(format!("{} — {error}", job.input.display())),
+                );
+            }
+        }
+    }
+    send(
+        &sender,
+        &ctx,
+        WorkerEvent::BatchFinished {
+            cancelled,
+            elapsed_seconds: started.elapsed().as_secs_f64(),
+        },
+    );
+}
+
+fn queue_update(
+    sender: &mpsc::Sender<WorkerEvent>,
+    ctx: &egui::Context,
+    job_id: u64,
+    status: FileStatus,
+    percent: u32,
+    detail: Option<String>,
+) {
+    send(
+        sender,
+        ctx,
+        WorkerEvent::JobUpdated {
+            job_id,
+            status,
+            percent,
+            detail,
+        },
+    );
+}
+
+fn queue_output(
+    output: &Path,
+    existing: ExistingPolicy,
+    dry_run: bool,
+) -> Result<Option<PathBuf>, String> {
+    if dry_run || existing != ExistingPolicy::Skip || !output.exists() {
+        if existing == ExistingPolicy::Rename && output.exists() {
+            let stem = output.file_stem().unwrap_or_default().to_string_lossy();
+            let extension = output.extension().unwrap_or_default().to_string_lossy();
+            for suffix in 2..1000 {
+                let candidate = output.with_file_name(format!("{stem} ({suffix}).{extension}"));
+                if !candidate.exists() {
+                    return Ok(Some(candidate));
+                }
+            }
+            return Err("Could not find an unused output name".to_owned());
+        }
+        return Ok(Some(output.to_path_buf()));
+    }
+    Ok(None)
+}
+
+fn process_queue_job(
+    job: &JobSpec,
+    output: &Path,
+    spec: &QueueSpec,
+    control: &WorkerControl,
+    sender: &mpsc::Sender<WorkerEvent>,
+    ctx: &egui::Context,
+) -> Result<ProcessOutcome, String> {
+    let uses_mkvmerge = mkvmerge_engine_eligible(
+        &job.input,
+        &job.metadata,
+        &job.settings,
+        spec.remux_engine,
+        spec.tools.mkvmerge.is_some(),
+    );
+    let temporary = if spec.dry_run {
+        None
+    } else {
+        Some(TemporaryOutput::create(output)?)
+    };
+    let engine_output = temporary
+        .as_ref()
+        .map(TemporaryOutput::path)
+        .unwrap_or(output);
+
+    let (executable, arguments, engine) = if uses_mkvmerge {
+        let mkvmerge = spec.tools.mkvmerge.as_ref().unwrap();
+        let audio_languages = &job.settings.audio.languages;
+        let subtitle_languages = &job.settings.subtitles.languages;
+        match mkv::build_arguments(
+            &job.input,
+            engine_output,
+            &job.metadata,
+            audio_languages,
+            subtitle_languages,
+            false,
+        ) {
+            Ok(Some(arguments)) => (mkvmerge.path.clone(), arguments, RemuxEngine::MkvToolNix),
+            Ok(None) => queue_ffmpeg_arguments(job, engine_output, spec)?,
+            Err(error) if error.contains("track IDs are unavailable") => {
+                queue_ffmpeg_arguments(job, engine_output, spec)?
+            }
+            Err(error) => return Err(error),
+        }
+    } else {
+        queue_ffmpeg_arguments(job, engine_output, spec)?
+    };
+    if control.is_cancelled() {
+        return Err("Stopped by user".to_owned());
+    }
+    let command_text = std::iter::once(executable.to_string_lossy().into_owned())
+        .chain(
+            arguments
+                .iter()
+                .map(|argument| argument.to_string_lossy().into_owned()),
+        )
+        .collect::<Vec<_>>()
+        .join(" ");
+    send(
+        sender,
+        ctx,
+        WorkerEvent::Log(format!("{}: {command_text}", job.input.display())),
+    );
+    if spec.dry_run {
+        return Ok(ProcessOutcome::Success);
+    }
+    let partial = temporary.as_ref().unwrap().path();
+    let mut child = tools::command(&executable)
+        .args(&arguments)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("Failed to start {}: {error}", engine.label()))?;
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let mut guard = control
+        .active_child
+        .lock()
+        .map_err(|_| "Could not register child process".to_owned())?;
+    *guard = Some(child);
+    if control.is_cancelled()
+        && let Some(child) = guard.as_mut()
+    {
+        let _ = child.kill();
+    }
+    drop(guard);
+
+    let warnings = Arc::new(Mutex::new(WarningSummary::default()));
+    let output_reader = stdout.map(|stdout| {
+        let sender = sender.clone();
+        let ctx = ctx.clone();
+        let duration = job.metadata.duration;
+        let job_id = job.id;
+        std::thread::spawn(move || {
+            let mut current = QueueProgress::default();
+            for line in std::io::BufReader::new(stdout)
+                .lines()
+                .map_while(Result::ok)
+            {
+                current.read(&line, duration);
+                if line.starts_with("progress=") || mkv::parse_progress_line(&line).is_some() {
+                    send(
+                        &sender,
+                        &ctx,
+                        WorkerEvent::Progress {
+                            job_id,
+                            percent: current.percent,
+                            fps: current.fps,
+                            speed: current.speed,
+                            eta_seconds: current.eta,
+                        },
+                    );
+                }
+            }
+        })
+    });
+    let error_reader = stderr.map(|stderr| {
+        let warnings = warnings.clone();
+        std::thread::spawn(move || {
+            let mut diagnostic = Vec::new();
+            for line in std::io::BufReader::new(stderr)
+                .lines()
+                .map_while(Result::ok)
+            {
+                if line.to_ascii_lowercase().contains("warning")
+                    && let Ok(mut summary) = warnings.lock()
+                {
+                    summary.record(&line);
+                }
+                diagnostic.push(line);
+                if diagnostic.len() > 20 {
+                    diagnostic.remove(0);
+                }
+            }
+            diagnostic.join("\n")
+        })
+    });
+    if let Some(reader) = output_reader {
+        let _ = reader.join();
+    }
+    let diagnostic = error_reader
+        .and_then(|reader| reader.join().ok())
+        .unwrap_or_default();
+    let mut child = control
+        .active_child
+        .lock()
+        .ok()
+        .and_then(|mut guard| guard.take())
+        .ok_or_else(|| "Child process handle lost".to_owned())?;
+    let status = child
+        .wait()
+        .map_err(|error| format!("Could not wait for {}: {error}", engine.label()))?;
+    if control.is_cancelled() {
+        return Err("Stopped by user".to_owned());
+    }
+    let output_exists =
+        std::fs::metadata(partial).is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0);
+    let outcome = mkv::classify_remux_exit(
+        engine == RemuxEngine::MkvToolNix,
+        status.code(),
+        output_exists,
+    );
+    if outcome == mkv::RemuxExitOutcome::Failure {
+        return Err(if diagnostic.trim().is_empty() {
+            format!(
+                "{} failed with exit code {:?}",
+                engine.label(),
+                status.code()
+            )
+        } else {
+            format!("{} failed: {}", engine.label(), diagnostic.trim())
+        });
+    }
+    finalize_output(partial, output)?;
+    match outcome {
+        mkv::RemuxExitOutcome::Success => Ok(ProcessOutcome::Success),
+        mkv::RemuxExitOutcome::SuccessWithWarnings => Ok(ProcessOutcome::Warnings(
+            warnings
+                .lock()
+                .map(|warnings| warnings.clone())
+                .unwrap_or_default(),
+        )),
+        mkv::RemuxExitOutcome::Failure => unreachable!(),
+    }
+}
+
+fn mkvmerge_engine_eligible(
+    input: &Path,
+    metadata: &MediaMetadata,
+    settings: &JobSettings,
+    selected_engine: RemuxEngine,
+    mkvmerge_available: bool,
+) -> bool {
+    if !settings.is_remux_only()
+        || settings.container != Container::Mkv
+        || selected_engine != RemuxEngine::MkvToolNix
+        || !mkvmerge_available
+        || !is_matroska_input(input, metadata)
+    {
+        return false;
+    }
+
+    if !settings.subtitles.include {
+        return true;
+    }
+    let languages = mkv::normalize_languages(&settings.subtitles.languages);
+    metadata
+        .subtitle_tracks
+        .iter()
+        .filter(|track| {
+            languages.is_empty() || languages.contains(&track.language.to_ascii_lowercase())
+        })
+        .all(|track| {
+            matches!(
+                crate::compat::subtitle_plan(&track.codec_id, Container::Mkv),
+                crate::compat::StreamPlan::Copy
+            )
+        })
+}
+
+fn is_matroska_input(input: &Path, metadata: &MediaMetadata) -> bool {
+    input
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            ["mkv", "mk3d", "webm"]
+                .iter()
+                .any(|supported| extension.eq_ignore_ascii_case(supported))
+        })
+        || metadata
+            .container
+            .as_deref()
+            .is_some_and(|format| format.to_ascii_lowercase().contains("matroska"))
+}
+
+fn queue_ffmpeg_arguments(
+    job: &JobSpec,
+    output: &Path,
+    spec: &QueueSpec,
+) -> Result<(PathBuf, Vec<OsString>, RemuxEngine), String> {
+    let ffmpeg = spec.tools.ffmpeg.as_ref().ok_or_else(|| {
+        if spec.remux_engine == RemuxEngine::MkvToolNix {
+            "FFmpeg is unavailable and this job cannot use MKVToolNix".to_owned()
+        } else {
+            "FFmpeg is unavailable".to_owned()
+        }
+    })?;
+    let arguments = build_ffmpeg_job_arguments(
+        &job.input,
+        output,
+        &job.metadata,
+        &job.settings,
+        &spec.encoders,
+    )?;
+    Ok((ffmpeg.path.clone(), arguments, RemuxEngine::Ffmpeg))
+}
+
+#[derive(Default)]
+struct QueueProgress {
+    percent: u32,
+    fps: Option<f64>,
+    speed: Option<f64>,
+    eta: Option<f64>,
+}
+
+impl QueueProgress {
+    fn read(&mut self, line: &str, duration: Option<f64>) {
+        if let Some(percent) = mkv::parse_progress_line(line) {
+            self.percent = percent;
+        } else if let Some(value) = line.strip_prefix("out_time_us=")
+            && let (Ok(microseconds), Some(duration)) = (
+                value.trim().parse::<u64>(),
+                duration.filter(|duration| *duration > 0.0),
+            )
+        {
+            let elapsed = microseconds as f64 / 1_000_000.0;
+            self.percent = (elapsed / duration * 100.0).clamp(0.0, 100.0) as u32;
+            self.eta = self
+                .speed
+                .filter(|speed| *speed > 0.0)
+                .map(|speed| (duration - elapsed).max(0.0) / speed);
+        } else if let Some(value) = line.strip_prefix("fps=") {
+            self.fps = value.parse().ok();
+        } else if let Some(value) = line.strip_prefix("speed=") {
+            self.speed = value.trim_end_matches('x').parse().ok();
+        }
     }
 }
 
@@ -824,8 +1383,13 @@ fn should_skip_existing(skip_existing: bool, dry_run: bool, output_exists: bool)
 
 #[cfg(test)]
 mod tests {
-    use super::{TemporaryOutput, WarningSummary, should_skip_existing, validate_output_paths};
-    use crate::mkv;
+    use super::{
+        RemuxEngine, TemporaryOutput, WarningSummary, mkvmerge_engine_eligible,
+        should_skip_existing, validate_output_paths,
+    };
+    use crate::mkv::{self, MediaMetadata, TrackInfo};
+    use crate::transcode::{JobSettings, SubtitleSettings, VideoEncode, VideoSettings};
+    use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -834,6 +1398,92 @@ mod tests {
         assert!(should_skip_existing(true, false, true));
         assert!(!should_skip_existing(false, false, true));
         assert!(!should_skip_existing(true, false, false));
+    }
+
+    #[test]
+    fn selects_mkvmerge_only_for_eligible_matroska_remux_jobs() {
+        let settings = JobSettings::default();
+        let metadata = MediaMetadata {
+            container: Some("mov,mp4,m4a,3gp,3g2,mj2".to_owned()),
+            ..MediaMetadata::default()
+        };
+        assert!(!mkvmerge_engine_eligible(
+            Path::new("film.mp4"),
+            &metadata,
+            &settings,
+            RemuxEngine::MkvToolNix,
+            true
+        ));
+        assert!(mkvmerge_engine_eligible(
+            Path::new("film.MKV"),
+            &metadata,
+            &settings,
+            RemuxEngine::MkvToolNix,
+            true
+        ));
+        assert!(mkvmerge_engine_eligible(
+            Path::new("film.mk3d"),
+            &metadata,
+            &settings,
+            RemuxEngine::MkvToolNix,
+            true
+        ));
+        assert!(mkvmerge_engine_eligible(
+            Path::new("film.webm"),
+            &metadata,
+            &settings,
+            RemuxEngine::MkvToolNix,
+            true
+        ));
+        assert!(mkvmerge_engine_eligible(
+            Path::new("film.bin"),
+            &MediaMetadata {
+                container: Some("matroska,webm".to_owned()),
+                ..MediaMetadata::default()
+            },
+            &settings,
+            RemuxEngine::MkvToolNix,
+            true
+        ));
+        assert!(!mkvmerge_engine_eligible(
+            Path::new("film.mkv"),
+            &metadata,
+            &settings,
+            RemuxEngine::Ffmpeg,
+            true
+        ));
+        assert!(!mkvmerge_engine_eligible(
+            Path::new("film.mkv"),
+            &metadata,
+            &settings,
+            RemuxEngine::MkvToolNix,
+            false
+        ));
+        assert!(!mkvmerge_engine_eligible(
+            Path::new("film.mkv"),
+            &MediaMetadata {
+                subtitle_tracks: vec![TrackInfo {
+                    codec_id: "mov_text".to_owned(),
+                    language: "eng".to_owned(),
+                    ..TrackInfo::default()
+                }],
+                ..MediaMetadata::default()
+            },
+            &settings,
+            RemuxEngine::MkvToolNix,
+            true
+        ));
+        assert!(!mkvmerge_engine_eligible(
+            Path::new("film.mkv"),
+            &metadata,
+            &JobSettings {
+                video: VideoSettings::Encode(VideoEncode::default()),
+                subtitles: SubtitleSettings::default(),
+                ..JobSettings::default()
+            },
+            RemuxEngine::MkvToolNix,
+            true
+        ));
     }
 
     #[test]

@@ -1,7 +1,13 @@
+use crate::encoders::{self, EncoderSet};
+use crate::inputs::{self, ExistingPolicy, InputItem, OutputTarget, SourceFile};
 use crate::mkv::{self, AvailableLanguages, BatchStats, FileInfo};
+use crate::presets;
 use crate::theme;
 use crate::tools::{Tool, Toolchain};
-use crate::worker::{self, BatchSpec, FileStatus, RemuxEngine, WorkerControl, WorkerEvent};
+use crate::transcode::JobSettings;
+use crate::worker::{
+    self, FileStatus, JobSpec, QueueSpec, RemuxEngine, WorkerControl, WorkerEvent,
+};
 use eframe::CreationContext;
 use eframe::egui;
 use eframe::egui::{
@@ -13,19 +19,30 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-const PREFERENCES_KEY: &str = "langmux.preferences";
+const PREFERENCES_KEY: &str = "app.preferences.v3";
+const LEGACY_PREFERENCES_KEY: &str = "langmux.preferences";
 
 #[derive(Clone, Serialize, Deserialize)]
+#[serde(default)]
 struct Preferences {
     input_directory: String,
     output_directory: String,
     audio_languages: String,
     subtitle_languages: String,
-    #[serde(default)]
-    engine: RemuxEngine,
+    #[serde(default, alias = "engine")]
+    remux_engine: RemuxEngine,
     skip_existing: bool,
     dry_run: bool,
     logs_open: bool,
+    selected_preset_id: String,
+    current_settings: JobSettings,
+    user_presets: Vec<presets::Preset>,
+    existing: ExistingPolicy,
+    include_subfolders: bool,
+    last_input_dir: String,
+    output_override: Option<PathBuf>,
+    #[serde(skip)]
+    inputs: Vec<InputItem>,
 }
 
 impl Default for Preferences {
@@ -35,11 +52,58 @@ impl Default for Preferences {
             output_directory: String::new(),
             audio_languages: "eng, jpn".to_owned(),
             subtitle_languages: "eng".to_owned(),
-            engine: RemuxEngine::MkvToolNix,
+            remux_engine: RemuxEngine::MkvToolNix,
             skip_existing: true,
             dry_run: false,
             logs_open: false,
+            selected_preset_id: "remux".to_owned(),
+            current_settings: JobSettings::default(),
+            user_presets: Vec::new(),
+            existing: ExistingPolicy::Skip,
+            include_subfolders: true,
+            last_input_dir: String::new(),
+            output_override: None,
+            inputs: Vec::new(),
         }
+    }
+}
+
+fn migrate_preferences(preferences: &mut Preferences) {
+    preferences.last_input_dir = preferences.input_directory.clone();
+    preferences.output_override = (!preferences.output_directory.is_empty())
+        .then(|| PathBuf::from(&preferences.output_directory));
+    preferences.current_settings.audio.languages =
+        mkv::parse_language_field(&preferences.audio_languages);
+    preferences.current_settings.subtitles.languages =
+        mkv::parse_language_field(&preferences.subtitle_languages);
+    preferences.existing = if preferences.skip_existing {
+        ExistingPolicy::Skip
+    } else {
+        ExistingPolicy::Overwrite
+    };
+}
+
+#[cfg(test)]
+mod preferences_tests {
+    use super::*;
+
+    #[test]
+    fn migrates_legacy_settings_into_v3_preferences() {
+        let mut preferences: Preferences = serde_json::from_str(
+            r#"{"input_directory":"/media","output_directory":"/converted","audio_languages":"eng, jpn","subtitle_languages":"eng","engine":"Ffmpeg","skip_existing":false,"dry_run":true,"logs_open":true}"#,
+        )
+        .expect("legacy preferences should deserialize");
+        migrate_preferences(&mut preferences);
+        assert_eq!(preferences.remux_engine, RemuxEngine::Ffmpeg);
+        assert_eq!(preferences.last_input_dir, "/media");
+        assert_eq!(
+            preferences.output_override,
+            Some(PathBuf::from("/converted"))
+        );
+        assert_eq!(preferences.current_settings.audio.languages, ["eng", "jpn"]);
+        assert_eq!(preferences.current_settings.subtitles.languages, ["eng"]);
+        assert_eq!(preferences.existing, ExistingPolicy::Overwrite);
+        assert!(preferences.include_subfolders);
     }
 }
 
@@ -59,6 +123,8 @@ pub struct LangMuxApp {
     languages: Option<AvailableLanguages>,
     scan_loading: bool,
     tools: Toolchain,
+    encoders: EncoderSet,
+    encoder_receiver: Option<mpsc::Receiver<Result<EncoderSet, String>>>,
     sender: mpsc::Sender<WorkerEvent>,
     receiver: mpsc::Receiver<WorkerEvent>,
     control: WorkerControl,
@@ -89,12 +155,20 @@ impl LangMuxApp {
             });
         let mut preferences: Preferences = cc
             .storage
-            .and_then(|storage| eframe::get_value(storage, PREFERENCES_KEY))
+            .and_then(|storage| {
+                eframe::get_value(storage, PREFERENCES_KEY)
+                    .or_else(|| eframe::get_value(storage, LEGACY_PREFERENCES_KEY))
+            })
             .unwrap_or_default();
-        let (sender, receiver) = mpsc::channel();
+        migrate_preferences(&mut preferences);
         let tools = Toolchain::discover();
+        let encoder_receiver = tools
+            .ffmpeg
+            .as_ref()
+            .map(|ffmpeg| encoders::detect_async(ffmpeg.path.clone()));
+        let (sender, receiver) = mpsc::channel();
         if tools.mkvmerge.is_none() {
-            preferences.engine = RemuxEngine::Ffmpeg;
+            preferences.remux_engine = RemuxEngine::Ffmpeg;
         }
         let mut app = Self {
             preferences,
@@ -105,6 +179,8 @@ impl LangMuxApp {
             languages: None,
             scan_loading: false,
             tools,
+            encoders: EncoderSet::default(),
+            encoder_receiver,
             sender,
             receiver,
             control: WorkerControl::default(),
@@ -149,6 +225,7 @@ impl LangMuxApp {
         let use_default = self.preferences.output_directory.is_empty()
             || Path::new(&self.preferences.output_directory) == previous_default.as_path();
         self.preferences.input_directory = directory.to_string_lossy().into_owned();
+        self.preferences.last_input_dir = self.preferences.input_directory.clone();
         if use_default {
             self.preferences.output_directory = mkv::default_output_dir(&directory)
                 .to_string_lossy()
@@ -186,6 +263,7 @@ impl LangMuxApp {
         };
         if let Some(directory) = dialog.pick_folder() {
             self.preferences.output_directory = directory.to_string_lossy().into_owned();
+            self.preferences.output_override = Some(directory.clone());
             self.start_error = None;
             self.push_log(format!("Output folder set to {}", directory.display()));
         }
@@ -194,7 +272,7 @@ impl LangMuxApp {
     fn accept_drop(&mut self, path: PathBuf, ctx: &egui::Context) {
         let directory = if path.is_dir() {
             Some(path)
-        } else if mkv::is_mkv_path(&path) {
+        } else if crate::formats::is_supported_input(&path) {
             path.parent().map(Path::to_path_buf)
         } else {
             None
@@ -210,7 +288,7 @@ impl LangMuxApp {
         }
         self.start_error = None;
         if self.files.is_empty() {
-            self.push_log("Choose a folder with MKV files before starting");
+            self.push_log("Choose a folder with supported media files before starting");
             return;
         }
         let output_directory = if self.preferences.output_directory.trim().is_empty() {
@@ -220,6 +298,7 @@ impl LangMuxApp {
         } else {
             PathBuf::from(&self.preferences.output_directory)
         };
+        self.preferences.output_override = Some(output_directory.clone());
         if !self.preferences.dry_run {
             match mkv::directories_resolve_to_same_path(
                 Path::new(&self.preferences.input_directory),
@@ -242,27 +321,64 @@ impl LangMuxApp {
             return;
         };
         let audio_languages = mkv::parse_language_field(&self.preferences.audio_languages);
-        if audio_languages.is_empty() {
-            self.push_log("At least one audio language is required");
-            return;
-        }
         let subtitle_languages = mkv::parse_language_field(&self.preferences.subtitle_languages);
-
+        let mut settings = presets::builtin_preset("remux")
+            .map(|preset| preset.settings)
+            .unwrap_or_default();
+        settings.audio.languages = audio_languages;
+        settings.subtitles.languages = subtitle_languages;
+        self.preferences.current_settings = settings.clone();
+        self.preferences.selected_preset_id = "remux".to_owned();
+        self.preferences.existing = if self.preferences.skip_existing {
+            ExistingPolicy::Skip
+        } else {
+            ExistingPolicy::Overwrite
+        };
+        let sources = self
+            .files
+            .iter()
+            .map(|file| SourceFile {
+                path: file.path.clone(),
+                relative: file.path.file_name().map(PathBuf::from).unwrap_or_default(),
+            })
+            .collect::<Vec<_>>();
+        let plans = match inputs::plan_outputs(
+            &sources,
+            &OutputTarget::Folder(output_directory.clone()),
+            settings.container,
+        ) {
+            Ok(plans) => plans,
+            Err(error) => {
+                self.start_error = Some(error);
+                return;
+            }
+        };
+        let jobs = self
+            .files
+            .iter()
+            .zip(plans)
+            .enumerate()
+            .map(|(index, (file, plan))| JobSpec {
+                id: index as u64,
+                input: plan.input,
+                output: plan.output,
+                metadata: file.metadata.clone().unwrap_or_default(),
+                settings: settings.clone(),
+            })
+            .collect();
         self.progress = vec![FileProgress::default(); self.files.len()];
         self.elapsed_seconds = 0.0;
         self.batch_has_finished = false;
         self.batch_started = Some(Instant::now());
         self.is_running = true;
         self.is_paused = false;
-        worker::start_batch(
-            BatchSpec {
-                files: self.files.clone(),
+        worker::start_queue(
+            QueueSpec {
+                jobs,
                 tools: self.tools.clone(),
-                engine: self.preferences.engine,
-                output_directory,
-                audio_languages,
-                subtitle_languages,
-                skip_existing: self.preferences.skip_existing,
+                encoders: self.encoders.clone(),
+                remux_engine: self.preferences.remux_engine,
+                existing: self.preferences.existing,
                 dry_run: self.preferences.dry_run,
             },
             self.control.clone(),
@@ -272,7 +388,7 @@ impl LangMuxApp {
     }
 
     fn selected_engine_error(&self) -> Option<String> {
-        match self.preferences.engine {
+        match self.preferences.remux_engine {
             RemuxEngine::MkvToolNix if self.tools.mkvmerge.is_none() => {
                 Some("MKVToolNix is unavailable; choose the FFmpeg engine".to_owned())
             }
@@ -355,6 +471,15 @@ impl LangMuxApp {
     }
 
     fn receive_events(&mut self) {
+        if let Some(receiver) = &self.encoder_receiver
+            && let Ok(result) = receiver.try_recv()
+        {
+            match result {
+                Ok(encoders) => self.encoders = encoders,
+                Err(error) => self.push_log(error),
+            }
+            self.encoder_receiver = None;
+        }
         let events: Vec<WorkerEvent> = self.receiver.try_iter().collect();
         for event in events {
             match event {
@@ -366,7 +491,10 @@ impl LangMuxApp {
                     self.progress = vec![FileProgress::default(); files.len()];
                     self.files = files;
                     self.stats = stats;
-                    self.push_log(format!("Found {} MKV file(s)", self.files.len()));
+                    self.push_log(format!(
+                        "Found {} supported media file(s)",
+                        self.files.len()
+                    ));
                 }
                 WorkerEvent::ScanLanguages {
                     directory,
@@ -401,6 +529,25 @@ impl LangMuxApp {
                         progress.status = status;
                         progress.percent = percent.min(100);
                         progress.detail = detail;
+                    }
+                }
+                WorkerEvent::JobUpdated {
+                    job_id,
+                    status,
+                    percent,
+                    detail,
+                } => {
+                    if let Some(progress) = self.progress.get_mut(job_id as usize) {
+                        progress.status = status;
+                        progress.percent = percent.min(100);
+                        progress.detail = detail;
+                    }
+                }
+                WorkerEvent::Progress {
+                    job_id, percent, ..
+                } => {
+                    if let Some(progress) = self.progress.get_mut(job_id as usize) {
+                        progress.percent = percent.min(100);
                     }
                 }
                 WorkerEvent::Log(message) => self.push_log(message),
@@ -540,7 +687,7 @@ impl LangMuxApp {
                 if input {
                     "Choose a source folder"
                 } else {
-                    "Defaults to input/remuxed"
+                    "Defaults to input/converted"
                 }
             } else {
                 path.as_str()
@@ -691,11 +838,11 @@ impl LangMuxApp {
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         ComboBox::from_id_salt("remux-engine")
                             .width(132.0)
-                            .selected_text(self.preferences.engine.label())
+                            .selected_text(self.preferences.remux_engine.label())
                             .show_ui(ui, |ui| {
                                 ui.add_enabled_ui(self.tools.mkvmerge.is_some(), |ui| {
                                     ui.selectable_value(
-                                        &mut self.preferences.engine,
+                                        &mut self.preferences.remux_engine,
                                         RemuxEngine::MkvToolNix,
                                         "MKVToolNix",
                                     );
@@ -704,7 +851,7 @@ impl LangMuxApp {
                                     self.tools.ffmpeg.is_some() && self.tools.ffprobe.is_some(),
                                     |ui| {
                                         ui.selectable_value(
-                                            &mut self.preferences.engine,
+                                            &mut self.preferences.remux_engine,
                                             RemuxEngine::Ffmpeg,
                                             "FFmpeg",
                                         );
