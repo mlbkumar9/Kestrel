@@ -121,6 +121,9 @@ fn migrate_preferences(preferences: &mut Preferences, from_legacy_record: bool) 
                 recursive: preferences.include_subfolders,
             });
         }
+        preferences.output_target_explicit = !preferences.output_directory.is_empty()
+            && Path::new(&preferences.output_directory)
+                != mkv::default_output_dir(Path::new(&preferences.input_directory));
         preferences.existing = if preferences.skip_existing {
             ExistingPolicy::Skip
         } else {
@@ -1209,6 +1212,49 @@ mod tests {
         assert_eq!(current.existing, ExistingPolicy::Overwrite);
         assert!(current.input_directory.is_empty());
         assert!(current.skip_existing);
+    }
+
+    #[test]
+    fn legacy_custom_output_directory_remains_explicit_for_jobs() {
+        let mut preferences = Preferences {
+            input_directory: "/movies".to_owned(),
+            output_directory: "/exports".to_owned(),
+            ..Preferences::default()
+        };
+        migrate_preferences(&mut preferences, true);
+
+        assert!(preferences.output_target_explicit);
+        let target = effective_output_target(
+            preferences.output_target.as_ref(),
+            preferences.output_target_explicit,
+            &[PathBuf::from("/movies/film.mkv")],
+            &preferences.input_items,
+            Container::Mkv,
+        );
+        assert_eq!(target, OutputTarget::Folder(PathBuf::from("/exports")));
+    }
+
+    #[test]
+    fn legacy_default_output_directory_remains_inferred() {
+        let mut preferences = Preferences {
+            input_directory: "/movies".to_owned(),
+            output_directory: "/movies/converted".to_owned(),
+            ..Preferences::default()
+        };
+        migrate_preferences(&mut preferences, true);
+
+        assert!(!preferences.output_target_explicit);
+        let target = effective_output_target(
+            preferences.output_target.as_ref(),
+            preferences.output_target_explicit,
+            &[PathBuf::from("/movies/film.mkv")],
+            &preferences.input_items,
+            Container::Mkv,
+        );
+        assert_eq!(
+            target,
+            OutputTarget::File(PathBuf::from("/movies/converted/film.mkv"))
+        );
     }
 
     #[test]
