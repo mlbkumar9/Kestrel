@@ -36,7 +36,7 @@ cp "$repo_root/LICENSE" "$stage/LICENSE"
 if [[ "$platform" == "linux" ]]; then
   mkdir -p "$stage/share/applications" "$stage/share/icons/hicolor/512x512/apps"
   cp "$repo_root/packaging/linux/kestrel.desktop" "$stage/share/applications/kestrel.desktop"
-  cp "$repo_root/LangMux_Native/assets/kestrel.png" "$stage/share/icons/hicolor/512x512/apps/kestrel.png"
+  cp "$repo_root/packaging/linux/kestrel.png" "$stage/share/icons/hicolor/512x512/apps/kestrel.png"
 fi
 
 if [[ "$platform" == "linux" && "$arch" == "x64" ]]; then
