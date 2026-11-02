@@ -50,14 +50,11 @@ pub fn expand(items: &[InputItem], exclude: &[PathBuf]) -> Vec<SourceFile> {
     for item in items {
         match item {
             InputItem::File(path) => {
-                if formats::is_supported_input(path) && !is_partial_path(path) {
-                    push_source(
-                        path.clone(),
-                        file_relative(path),
-                        &excluded,
-                        &mut seen,
-                        &mut sources,
-                    );
+                if formats::is_supported_input(path)
+                    && !is_partial_path(path)
+                    && !is_exactly_excluded(path, &excluded)
+                {
+                    push_source(path.clone(), file_relative(path), &mut seen, &mut sources);
                 }
             }
             InputItem::Folder { path, recursive } => {
@@ -97,12 +94,13 @@ fn expand_folder(
         } else if file_type.is_file()
             && formats::is_supported_input(&path)
             && !is_partial_path(&path)
+            && !is_excluded(&path, excluded)
         {
             let relative = path
                 .strip_prefix(root)
                 .map(Path::to_path_buf)
                 .unwrap_or_else(|_| file_relative(&path));
-            push_source(path, relative, excluded, seen, sources);
+            push_source(path, relative, seen, sources);
         }
     }
 }
@@ -110,13 +108,9 @@ fn expand_folder(
 fn push_source(
     path: PathBuf,
     relative: PathBuf,
-    excluded: &[PathBuf],
     seen: &mut HashSet<PathBuf>,
     sources: &mut Vec<SourceFile>,
 ) {
-    if is_excluded(&path, excluded) {
-        return;
-    }
     let key = resolved_path(&path);
     if seen.insert(key) {
         sources.push(SourceFile { path, relative });
@@ -128,6 +122,11 @@ fn is_excluded(path: &Path, excluded: &[PathBuf]) -> bool {
     excluded
         .iter()
         .any(|candidate| path == *candidate || path.starts_with(candidate))
+}
+
+fn is_exactly_excluded(path: &Path, excluded: &[PathBuf]) -> bool {
+    let path = resolved_path(path);
+    excluded.contains(&path)
 }
 
 fn resolved_path(path: &Path) -> PathBuf {
@@ -204,7 +203,11 @@ pub fn default_output_target(items: &[InputItem], container: Container) -> Outpu
     OutputTarget::Folder(root.join("converted"))
 }
 
-pub fn output_exclusions(target: &OutputTarget, items: &[InputItem]) -> Vec<PathBuf> {
+pub fn output_exclusions(
+    target: &OutputTarget,
+    items: &[InputItem],
+    container: Container,
+) -> Vec<PathBuf> {
     match target {
         OutputTarget::Folder(path) => {
             let folder = normalize_path(path);
@@ -215,17 +218,20 @@ pub fn output_exclusions(target: &OutputTarget, items: &[InputItem]) -> Vec<Path
                 }
                 InputItem::File(_) => false,
             });
-            let contains_input_item = items.iter().any(|item| {
-                let source = normalize_path(item_path(item));
-                source == folder || source.starts_with(&folder)
+            let contains_source_folder = items.iter().any(|item| match item {
+                InputItem::Folder { path, .. } => {
+                    let source = normalize_path(path);
+                    source == folder || source.starts_with(&folder)
+                }
+                InputItem::File(_) => false,
             });
-            if nested_in_source_folder && !contains_input_item {
+            if nested_in_source_folder && !contains_source_folder {
                 vec![path.clone()]
             } else {
                 Vec::new()
             }
         }
-        OutputTarget::File(path) => vec![path.clone()],
+        OutputTarget::File(path) => vec![path.with_extension(container.extension())],
     }
 }
 
@@ -504,7 +510,7 @@ mod tests {
             recursive: true,
         };
         let output = OutputTarget::Folder(root.join("v/converted"));
-        let exclude = output_exclusions(&output, std::slice::from_ref(&input));
+        let exclude = output_exclusions(&output, std::slice::from_ref(&input), Container::Mkv);
         touch(&root.join("v/a.mkv"));
         touch(&root.join("v/converted/a.mkv"));
 
@@ -515,6 +521,33 @@ mod tests {
                 .map(|source| source.path.file_name().unwrap().to_string_lossy())
                 .collect::<Vec<_>>(),
             ["a.mkv"]
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn explicit_file_inside_excluded_output_folder_is_still_expanded() {
+        let root = temp_dir();
+        let source_folder = InputItem::Folder {
+            path: root.clone(),
+            recursive: true,
+        };
+        let special = root.join("converted/special.mkv");
+        touch(&special);
+        touch(&root.join("converted/old-export.mkv"));
+
+        let items = [source_folder, InputItem::File(special.clone())];
+        let target = OutputTarget::Folder(root.join("converted"));
+        let exclude = output_exclusions(&target, &items, Container::Mkv);
+        assert_eq!(exclude, [root.join("converted")]);
+
+        let files = expand(&items, &exclude);
+        assert_eq!(
+            files
+                .iter()
+                .map(|source| source.path.file_name().unwrap().to_string_lossy())
+                .collect::<Vec<_>>(),
+            ["special.mkv"]
         );
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -531,7 +564,7 @@ mod tests {
         touch(&film);
         touch(&final_output);
         let target = OutputTarget::File(final_output.clone());
-        let exclude = output_exclusions(&target, std::slice::from_ref(&folder));
+        let exclude = output_exclusions(&target, std::slice::from_ref(&folder), Container::Mkv);
         assert_eq!(exclude, [final_output]);
 
         let files = expand(std::slice::from_ref(&folder), &exclude);
@@ -557,7 +590,7 @@ mod tests {
         touch(&sibling);
         touch(&final_output);
         let target = OutputTarget::File(final_output);
-        let exclude = output_exclusions(&target, std::slice::from_ref(&folder));
+        let exclude = output_exclusions(&target, std::slice::from_ref(&folder), Container::Mkv);
 
         let files = expand(std::slice::from_ref(&folder), &exclude);
         assert_eq!(
@@ -571,6 +604,33 @@ mod tests {
     }
 
     #[test]
+    fn file_target_exclusion_uses_the_selected_container_extension() {
+        let root = temp_dir();
+        let folder = InputItem::Folder {
+            path: root.clone(),
+            recursive: true,
+        };
+        let film = root.join("film.mkv");
+        let final_output = root.join("converted/final.mkv");
+        touch(&film);
+        touch(&final_output);
+
+        let target = OutputTarget::File(root.join("converted/final.mp4"));
+        let exclude = output_exclusions(&target, std::slice::from_ref(&folder), Container::Mkv);
+        assert_eq!(exclude, [final_output]);
+
+        let files = expand(std::slice::from_ref(&folder), &exclude);
+        assert_eq!(
+            files
+                .iter()
+                .map(|source| source.path.file_name().unwrap().to_string_lossy())
+                .collect::<Vec<_>>(),
+            ["film.mkv"]
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn folder_target_does_not_exclude_source_roots_or_ancestor_paths() {
         let root = temp_dir();
         let folder = InputItem::Folder {
@@ -578,10 +638,12 @@ mod tests {
             recursive: true,
         };
         let target = OutputTarget::Folder(root.clone());
-        assert!(output_exclusions(&target, std::slice::from_ref(&folder)).is_empty());
+        assert!(
+            output_exclusions(&target, std::slice::from_ref(&folder), Container::Mkv).is_empty()
+        );
 
         let nested_file = InputItem::File(root.join("sub/film.mkv"));
-        assert!(output_exclusions(&target, &[nested_file]).is_empty());
+        assert!(output_exclusions(&target, &[nested_file], Container::Mkv).is_empty());
         std::fs::remove_dir_all(root).unwrap();
     }
 }

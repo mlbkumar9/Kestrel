@@ -440,7 +440,13 @@ impl LangMuxApp {
         };
         let exclude = output_target
             .as_ref()
-            .map(|target| inputs::output_exclusions(target, &items))
+            .map(|target| {
+                inputs::output_exclusions(
+                    target,
+                    &items,
+                    self.preferences.current_settings.container,
+                )
+            })
             .unwrap_or_default();
         let sender = self.ui_sender.clone();
         let tools = self.tools.clone();
