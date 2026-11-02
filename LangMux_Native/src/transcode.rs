@@ -243,10 +243,17 @@ pub enum BurnIn {
 }
 
 pub fn video_filter_chain(
-    input: &Path,
+    _input: &Path,
     metadata: &MediaMetadata,
     settings: &JobSettings,
+    text_burn_in_file: Option<&str>,
 ) -> Result<Vec<String>, String> {
+    if selected_burn_in_subtitle(metadata, settings)
+        .is_some_and(|(_, track)| is_text_subtitle(&track.codec_id))
+        && text_burn_in_file.is_none()
+    {
+        return Err("internal: subtitle file not prepared".to_owned());
+    }
     let Some(encode) = (match &settings.video {
         VideoSettings::Copy => None,
         VideoSettings::Encode(encode) => Some(encode),
@@ -302,22 +309,23 @@ pub fn video_filter_chain(
         Denoise::Strong => filters.push("hqdn3d=8:6:12:9".to_owned()),
     }
 
-    if let Some((subtitle_index, _track)) = selected_burn_in_subtitle(metadata, settings)
-        && is_text_subtitle(&metadata.subtitle_tracks[subtitle_index].codec_id)
+    if let Some((_, track)) = selected_burn_in_subtitle(metadata, settings)
+        && is_text_subtitle(&track.codec_id)
     {
-        filters.push(format!(
-            "subtitles='{}':si={subtitle_index}",
-            escape_filter_path(input)
-        ));
+        let filename = text_burn_in_file.expect("validated above");
+        filters.push(format!("subtitles=filename={filename}"));
     }
 
     let is_hardware = matches!(&encode.encoder, VideoEncoder::Hardware { .. });
     match encode.ten_bit {
+        TenBit::MatchSource if matches!(&encode.encoder, VideoEncoder::X264) => {
+            filters.push("format=yuv420p".to_owned());
+        }
         TenBit::MatchSource => {}
         TenBit::Off if !matches!(&encode.encoder, VideoEncoder::X264) => {
             filters.push("format=yuv420p".to_owned());
         }
-        TenBit::Off => {}
+        TenBit::Off => filters.push("format=yuv420p".to_owned()),
         TenBit::On if is_hardware => filters.push("format=p010le".to_owned()),
         TenBit::On => filters.push("format=yuv420p10le".to_owned()),
     }
@@ -343,6 +351,7 @@ pub fn build_ffmpeg_job_arguments(
     metadata: &MediaMetadata,
     settings: &JobSettings,
     encoders: &EncoderSet,
+    text_burn_in_file: Option<&str>,
 ) -> Result<Vec<OsString>, String> {
     let audio_tracks = selected_audio_tracks(metadata, settings);
     let subtitles = if settings.subtitles.include {
@@ -354,7 +363,7 @@ pub fn build_ffmpeg_job_arguments(
     let (burn_in_index, burn_track) = burn_in
         .map(|(index, track)| (Some(index), Some(track)))
         .unwrap_or((None, None));
-    let video_filters = video_filter_chain(input, metadata, settings)?;
+    let video_filters = video_filter_chain(input, metadata, settings, text_burn_in_file)?;
     if burn_track.is_some() && matches!(&settings.video, VideoSettings::Copy) {
         return Err("Subtitle burn-in requires video re-encoding".to_owned());
     }
@@ -396,14 +405,11 @@ pub fn build_ffmpeg_job_arguments(
             return Err("Subtitle burn-in requires video re-encoding".to_owned());
         }
         let chain = video_filters.join(",");
-        let base = if chain.is_empty() {
-            "[0:v:0]null[vbase]".to_owned()
+        let filter_complex = if chain.is_empty() {
+            format!("[0:v:0][0:s:{subtitle_index}]overlay=eof_action=pass[vout]")
         } else {
-            format!("[0:v:0]{chain}[vbase]")
+            format!("[0:v:0][0:s:{subtitle_index}]overlay=eof_action=pass[ov];[ov]{chain}[vout]")
         };
-        let filter_complex = format!(
-            "{base};[0:s:{subtitle_index}]setpts=PTS-STARTPTS[subtitle];[vbase][subtitle]overlay=eof_action=pass[vout]"
-        );
         arguments.extend(["-filter_complex".into(), filter_complex.into()]);
         arguments.extend(["-map".into(), "[vout]".into()]);
     } else {
@@ -604,7 +610,7 @@ fn selected_subtitle_tracks<'a>(
         .collect()
 }
 
-fn selected_burn_in_subtitle<'a>(
+pub fn selected_burn_in_subtitle<'a>(
     metadata: &'a MediaMetadata,
     settings: &JobSettings,
 ) -> Option<(usize, &'a TrackInfo)> {
@@ -624,22 +630,11 @@ fn selected_burn_in_subtitle<'a>(
         })
 }
 
-fn is_text_subtitle(codec_id: &str) -> bool {
+pub fn is_text_subtitle(codec_id: &str) -> bool {
     matches!(
         codec_id.to_ascii_lowercase().as_str(),
         "subrip" | "srt" | "ass" | "ssa" | "webvtt" | "text" | "mov_text"
     )
-}
-
-fn escape_filter_path(path: &Path) -> String {
-    path.to_string_lossy()
-        .replace('\\', "\\\\")
-        .replace(':', "\\:")
-        .replace('\'', "\\'")
-        .replace(',', "\\,")
-        .replace(';', "\\;")
-        .replace('[', "\\[")
-        .replace(']', "\\]")
 }
 
 pub fn video_encoder_name_for_detection(encoder: &VideoEncoder) -> &'static str {
@@ -895,6 +890,7 @@ mod tests {
             &fixture_metadata(),
             settings,
             &all_software_encoders(),
+            None,
         )
         .unwrap()
         .iter()
@@ -971,7 +967,8 @@ mod tests {
             }),
             ..JobSettings::default()
         };
-        let filters = video_filter_chain(Path::new("input.mkv"), &metadata, &settings).unwrap();
+        let filters =
+            video_filter_chain(Path::new("input.mkv"), &metadata, &settings, None).unwrap();
         assert_eq!(
             filters,
             [
@@ -984,8 +981,30 @@ mod tests {
 
         let mut hdr = metadata;
         hdr.video.as_mut().unwrap().hdr = true;
-        let filters = video_filter_chain(Path::new("input.mkv"), &hdr, &settings).unwrap();
+        let filters = video_filter_chain(Path::new("input.mkv"), &hdr, &settings, None).unwrap();
         assert!(filters[1].starts_with("zscale=t=linear"));
+    }
+
+    #[test]
+    fn x264_uses_eight_bit_420_for_match_source_and_off() {
+        for ten_bit in [TenBit::MatchSource, TenBit::Off] {
+            let settings = JobSettings {
+                video: VideoSettings::Encode(VideoEncode {
+                    encoder: VideoEncoder::X264,
+                    ten_bit,
+                    ..VideoEncode::default()
+                }),
+                ..JobSettings::default()
+            };
+            let filters = video_filter_chain(
+                Path::new("source.mkv"),
+                &fixture_metadata(),
+                &settings,
+                None,
+            )
+            .unwrap();
+            assert!(filters.iter().any(|filter| filter == "format=yuv420p"));
+        }
     }
 
     #[test]
@@ -1043,6 +1062,41 @@ mod tests {
     #[test]
     fn emits_text_subtitle_burn_in_filter() {
         let settings = JobSettings {
+            video: VideoSettings::Encode(VideoEncode {
+                max_height: Some(120),
+                crop: Crop::Custom {
+                    top: 2,
+                    bottom: 2,
+                    left: 4,
+                    right: 4,
+                },
+                ..VideoEncode::default()
+            }),
+            subtitles: SubtitleSettings {
+                burn_in: BurnIn::FirstSelected,
+                ..SubtitleSettings::default()
+            },
+            ..JobSettings::default()
+        };
+        let input = Path::new("/tmp/Bob's, [test]; x:y/movie.mkv");
+        let arguments = build_ffmpeg_job_arguments(
+            input,
+            Path::new("output.mp4"),
+            &fixture_metadata(),
+            &settings,
+            &all_software_encoders(),
+            Some("langmux-sub-1-0.ass"),
+        )
+        .unwrap();
+        let filter =
+            arguments.windows(2).find(|pair| pair[0] == "-vf").unwrap()[1].to_string_lossy();
+        assert!(filter.contains("subtitles=filename=langmux-sub-1-0.ass"));
+        assert!(!filter.contains("/tmp/Bob's, [test]; x:y"));
+    }
+
+    #[test]
+    fn text_burn_in_requires_a_prepared_subtitle_file() {
+        let settings = JobSettings {
             video: VideoSettings::Encode(VideoEncode::default()),
             subtitles: SubtitleSettings {
                 burn_in: BurnIn::FirstSelected,
@@ -1050,12 +1104,10 @@ mod tests {
             },
             ..JobSettings::default()
         };
-        let filters =
-            video_filter_chain(Path::new("input.mkv"), &fixture_metadata(), &settings).unwrap();
-        assert!(
-            filters
-                .iter()
-                .any(|filter| { filter.starts_with("subtitles='input.mkv':si=0") })
+        assert_eq!(
+            video_filter_chain(Path::new("input.mkv"), &fixture_metadata(), &settings, None)
+                .unwrap_err(),
+            "internal: subtitle file not prepared"
         );
     }
 
@@ -1070,6 +1122,7 @@ mod tests {
             &metadata,
             &JobSettings::default(),
             &all_software_encoders(),
+            None,
         )
         .unwrap()
         .iter()
@@ -1082,7 +1135,16 @@ mod tests {
     fn burn_in_omits_the_burned_track_and_uses_image_overlay() {
         let settings = JobSettings {
             container: Container::Mp4,
-            video: VideoSettings::Encode(VideoEncode::default()),
+            video: VideoSettings::Encode(VideoEncode {
+                max_height: Some(120),
+                crop: Crop::Custom {
+                    top: 2,
+                    bottom: 2,
+                    left: 4,
+                    right: 4,
+                },
+                ..VideoEncode::default()
+            }),
             audio: AudioSettings {
                 languages: vec!["eng".to_owned()],
                 ..AudioSettings::default()
@@ -1101,6 +1163,10 @@ mod tests {
             .unwrap()[1]
             .clone();
         assert!(complex.contains("[0:s:1]"));
+        assert!(
+            complex.starts_with("[0:v:0][0:s:1]overlay=eof_action=pass[ov];[ov]crop=iw-4-4:ih-2-2:4:2,scale=-2:'min(ih,120)'"),
+            "unexpected image-subtitle filtergraph: {complex}"
+        );
         assert!(args.windows(2).any(|pair| pair == ["-map", "0:3"]));
         assert!(!args.windows(2).any(|pair| pair == ["-map", "0:4"]));
     }

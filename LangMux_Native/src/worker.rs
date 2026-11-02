@@ -2,6 +2,7 @@ use crate::encoders::EncoderSet;
 use crate::formats::Container;
 use crate::inputs::ExistingPolicy;
 use crate::mkv::{self, AvailableLanguages, BatchStats, FileInfo, MediaMetadata};
+use crate::subtitles::{absolute_path, prepare_text_subtitle};
 use crate::tools::{self, Toolchain};
 use crate::transcode::{JobSettings, build_ffmpeg_job_arguments};
 use eframe::egui;
@@ -698,6 +699,24 @@ fn process_queue_job(
     sender: &mpsc::Sender<WorkerEvent>,
     ctx: &egui::Context,
 ) -> Result<ProcessOutcome, String> {
+    let prepared_text_subtitle =
+        crate::transcode::selected_burn_in_subtitle(&job.metadata, &job.settings)
+            .filter(|(_, track)| crate::transcode::is_text_subtitle(&track.codec_id))
+            .map(|(_, track)| {
+                let ffmpeg = spec
+                    .tools
+                    .ffmpeg
+                    .as_ref()
+                    .ok_or_else(|| "FFmpeg is unavailable for subtitle burn-in".to_owned())?;
+                let index = track
+                    .ffprobe_index
+                    .ok_or_else(|| "Subtitle stream index is unavailable".to_owned())?;
+                prepare_text_subtitle(&ffmpeg.path, &job.input, index)
+            })
+            .transpose()?;
+    let text_burn_in_file = prepared_text_subtitle
+        .as_ref()
+        .map(|subtitle| subtitle.filename());
     let uses_mkvmerge = mkvmerge_engine_eligible(
         &job.input,
         &job.metadata,
@@ -728,14 +747,14 @@ fn process_queue_job(
             false,
         ) {
             Ok(Some(arguments)) => (mkvmerge.path.clone(), arguments, RemuxEngine::MkvToolNix),
-            Ok(None) => queue_ffmpeg_arguments(job, engine_output, spec)?,
+            Ok(None) => queue_ffmpeg_arguments(job, engine_output, spec, text_burn_in_file)?,
             Err(error) if error.contains("track IDs are unavailable") => {
-                queue_ffmpeg_arguments(job, engine_output, spec)?
+                queue_ffmpeg_arguments(job, engine_output, spec, text_burn_in_file)?
             }
             Err(error) => return Err(error),
         }
     } else {
-        queue_ffmpeg_arguments(job, engine_output, spec)?
+        queue_ffmpeg_arguments(job, engine_output, spec, text_burn_in_file)?
     };
     if control.is_cancelled() {
         return Err("Stopped by user".to_owned());
@@ -757,8 +776,12 @@ fn process_queue_job(
         return Ok(ProcessOutcome::Success);
     }
     let partial = temporary.as_ref().unwrap().path();
-    let mut child = tools::command(&executable)
-        .args(&arguments)
+    let mut command = tools::command(&executable);
+    command.args(&arguments);
+    if prepared_text_subtitle.is_some() {
+        command.current_dir(std::env::temp_dir());
+    }
+    let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -930,6 +953,7 @@ fn queue_ffmpeg_arguments(
     job: &JobSpec,
     output: &Path,
     spec: &QueueSpec,
+    text_burn_in_file: Option<&str>,
 ) -> Result<(PathBuf, Vec<OsString>, RemuxEngine), String> {
     let ffmpeg = spec.tools.ffmpeg.as_ref().ok_or_else(|| {
         if spec.remux_engine == RemuxEngine::MkvToolNix {
@@ -939,11 +963,20 @@ fn queue_ffmpeg_arguments(
         }
     })?;
     let arguments = build_ffmpeg_job_arguments(
-        &job.input,
-        output,
+        &if text_burn_in_file.is_some() {
+            absolute_path(&job.input)?
+        } else {
+            job.input.clone()
+        },
+        &if text_burn_in_file.is_some() {
+            absolute_path(output)?
+        } else {
+            output.to_path_buf()
+        },
         &job.metadata,
         &job.settings,
         &spec.encoders,
+        text_burn_in_file,
     )?;
     Ok((ffmpeg.path.clone(), arguments, RemuxEngine::Ffmpeg))
 }

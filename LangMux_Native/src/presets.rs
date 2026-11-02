@@ -145,6 +145,7 @@ fn builtins_without_hardware() -> Vec<Preset> {
                     rate: RateControl::Quality(60),
                     speed: 2,
                     max_height: Some(1080),
+                    tone_map_to_sdr: true,
                     ..VideoEncode::default()
                 }),
                 audio: AudioSettings {
@@ -237,6 +238,9 @@ mod tests {
         );
         assert_eq!(presets[2].settings.container, Container::Mp4);
         assert_eq!(presets[2].settings.subtitles.burn_in, BurnIn::ForcedOnly);
+        assert!(
+            matches!(&presets[2].settings.video, VideoSettings::Encode(encode) if encode.tone_map_to_sdr)
+        );
         assert_eq!(
             presets[3].settings.video,
             VideoSettings::Encode(VideoEncode {

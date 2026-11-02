@@ -1,7 +1,11 @@
 use crate::encoders::EncoderSet;
 use crate::mkv::MediaMetadata;
+use crate::subtitles::{absolute_path, prepare_text_subtitle};
 use crate::tools;
-use crate::transcode::{Crop, JobSettings, RateControl, VideoSettings, build_ffmpeg_job_arguments};
+use crate::transcode::{
+    Crop, JobSettings, RateControl, VideoSettings, build_ffmpeg_job_arguments, is_text_subtitle,
+    selected_burn_in_subtitle, video_filter_chain,
+};
 use std::ffi::OsString;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -12,29 +16,43 @@ pub fn extract_frame(
     ffmpeg: &Path,
     input: &Path,
     at_seconds: f64,
-    filter_chain: Option<&str>,
+    metadata: &MediaMetadata,
+    settings: &JobSettings,
     max_width: u32,
 ) -> Result<Vec<u8>, String> {
-    let mut filters = Vec::new();
-    if let Some(filter_chain) = filter_chain.filter(|chain| !chain.trim().is_empty()) {
-        filters.push(filter_chain.to_owned());
-    }
+    let selected = selected_burn_in_subtitle(metadata, settings);
+    let prepared = selected
+        .filter(|(_, track)| is_text_subtitle(&track.codec_id))
+        .map(|(_, track)| {
+            let index = track
+                .ffprobe_index
+                .ok_or_else(|| "Subtitle stream index is unavailable".to_owned())?;
+            prepare_text_subtitle(ffmpeg, input, index)
+        })
+        .transpose()?;
+    let filename = prepared.as_ref().map(|file| file.filename());
+    let mut filters = video_filter_chain(input, metadata, settings, filename)?;
     filters.push(format!("scale='min(iw,{max_width})':-2"));
-    let filter = filters.join(",");
-    let output = tools::command(ffmpeg)
-        .args(["-ss", &at_seconds.max(0.0).to_string(), "-i"])
-        .arg(input)
-        .args([
-            "-frames:v",
-            "1",
-            "-vf",
-            &filter,
-            "-f",
-            "image2pipe",
-            "-vcodec",
-            "png",
-            "-",
-        ])
+    let image_burn = selected.filter(|(_, track)| !is_text_subtitle(&track.codec_id));
+    let mut command = tools::command(ffmpeg);
+    command
+        .args(["-nostdin", "-ss", &at_seconds.max(0.0).to_string(), "-i"])
+        .arg(absolute_path(input)?);
+    if let Some((subtitle_index, _)) = image_burn {
+        let chain = filters.join(",");
+        command.args([
+            "-filter_complex",
+            &format!("[0:v:0][0:s:{subtitle_index}]overlay=eof_action=pass[ov];[ov]{chain}[vout]"),
+            "-map",
+            "[vout]",
+        ]);
+    } else {
+        command.args(["-vf", &filters.join(",")]);
+    }
+    let output = command
+        .args(["-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "-"])
+        .stdin(std::process::Stdio::null())
+        .current_dir(std::env::temp_dir())
         .output()
         .map_err(|error| format!("Failed to extract preview frame: {error}"))?;
     if !output.status.success() {
@@ -118,14 +136,33 @@ pub fn estimate_size(
 
     let extension = settings.container.extension();
     let mut sample_sizes = Vec::new();
+    let selected = selected_burn_in_subtitle(metadata, settings);
+    let prepared = selected
+        .filter(|(_, track)| is_text_subtitle(&track.codec_id))
+        .map(|(_, track)| {
+            let index = track
+                .ffprobe_index
+                .ok_or_else(|| "Subtitle stream index is unavailable".to_owned())?;
+            prepare_text_subtitle(ffmpeg, input, index)
+        })
+        .transpose()?;
+    let filename = prepared.as_ref().map(|file| file.filename());
     for percentage in [0.25, 0.5, 0.75] {
         let sample_file = reserve_sample_path(extension)?;
         let sample_start = duration * percentage;
-        let arguments =
-            build_ffmpeg_job_arguments(input, &sample_file.path, metadata, settings, encoders)?;
+        let arguments = build_ffmpeg_job_arguments(
+            &absolute_path(input)?,
+            &sample_file.path,
+            metadata,
+            settings,
+            encoders,
+            filename,
+        )?;
         let arguments = insert_sampling_options(arguments, sample_start);
         let output = tools::command(ffmpeg)
             .args(arguments)
+            .stdin(std::process::Stdio::null())
+            .current_dir(std::env::temp_dir())
             .output()
             .map_err(|error| format!("Failed to estimate output size: {error}"))?;
         if !output.status.success() {

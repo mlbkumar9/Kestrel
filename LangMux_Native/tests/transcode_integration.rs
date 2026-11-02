@@ -1,10 +1,10 @@
-use langmux::encoders::EncoderSet;
+use langmux::encoders::{self, EncoderSet};
 use langmux::formats::Container;
 use langmux::inputs::ExistingPolicy;
 use langmux::mkv::{self, MediaMetadata};
 use langmux::presets;
 use langmux::tools::{self, Toolchain};
-use langmux::transcode::VideoEncoder;
+use langmux::transcode::{BurnIn, VideoEncoder};
 use langmux::worker::{self, FileStatus, JobSpec, QueueSpec, RemuxEngine, WorkerEvent};
 use std::collections::BTreeSet;
 use std::fs;
@@ -254,4 +254,121 @@ fn built_in_software_presets_transcode_supported_fixture_containers() {
         "Generated real-FFmpeg fixtures and outputs: {}",
         fixture_dir.display()
     );
+}
+
+#[test]
+fn real_ffmpeg_burn_in_handles_special_paths_and_image_subtitles() {
+    let tools = Toolchain::discover();
+    let (Some(ffmpeg), Some(ffprobe)) = (&tools.ffmpeg, &tools.ffprobe) else {
+        println!("SKIP: integration fixtures require ffmpeg and ffprobe on PATH");
+        return;
+    };
+    let fixture_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/v3-integration");
+    let special_dir = fixture_dir.join("Bob's, [test]");
+    fs::create_dir_all(&special_dir).expect("special-path fixture directory should be created");
+    let subtitles = fixture_dir.join("burn-in.srt");
+    fs::write(
+        &subtitles,
+        "1\n00:00:00,250 --> 00:00:02,500\nBurned text\n",
+    )
+    .expect("subtitle fixture should be written");
+
+    let text_input = special_dir.join("text-burn-in.mkv");
+    let generated = tools::command(&ffmpeg.path)
+        .args([
+            "-hide_banner",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=320x240:rate=24:duration=3",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=3",
+            "-i",
+        ])
+        .arg(&subtitles)
+        .args([
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:a:0",
+            "-map",
+            "2:s:0",
+            "-c:v",
+            "libx264",
+            "-c:a",
+            "aac",
+            "-c:s",
+            "srt",
+            "-metadata:s:s:0",
+            "language=eng",
+            "-t",
+            "3",
+        ])
+        .arg(&text_input)
+        .output()
+        .expect("ffmpeg should generate special-path fixture");
+    assert!(
+        generated.status.success(),
+        "text fixture generation failed: {}",
+        String::from_utf8_lossy(&generated.stderr)
+    );
+    let text_metadata = mkv::read_metadata(
+        tools.mkvmerge.as_ref().map(|tool| tool.path.as_path()),
+        Some(&ffprobe.path),
+        &text_input,
+    )
+    .expect("text fixture metadata should be readable");
+    let encoder_set =
+        encoders::detect(&ffmpeg.path).expect("FFmpeg encoder list should be readable");
+    let mut anywhere = presets::builtin_preset("anywhere").unwrap();
+    anywhere.settings.subtitles.burn_in = BurnIn::FirstSelected;
+    let text_output = fixture_dir.join("outputs/burn-in/text-output.mp4");
+    fs::create_dir_all(text_output.parent().unwrap()).unwrap();
+    let text_events = worker::run_queue_blocking(QueueSpec {
+        jobs: vec![JobSpec {
+            id: 901,
+            input: text_input,
+            output: text_output.clone(),
+            metadata: text_metadata,
+            settings: anywhere.settings,
+        }],
+        tools: tools.clone(),
+        encoders: encoder_set.clone(),
+        remux_engine: RemuxEngine::Ffmpeg,
+        existing: ExistingPolicy::Overwrite,
+        dry_run: false,
+    });
+    assert!(
+        text_events.iter().any(|event| matches!(
+            event,
+            WorkerEvent::JobUpdated {
+                job_id: 901,
+                status: FileStatus::Success,
+                ..
+            }
+        )),
+        "special-path text burn-in failed: {}",
+        event_messages(&text_events)
+    );
+    let text_output_metadata = mkv::read_metadata(None, Some(&ffprobe.path), &text_output).unwrap();
+    assert!(text_output_metadata.video.is_some());
+    assert!(text_output_metadata.subtitle_tracks.is_empty());
+}
+
+fn event_messages(events: &[WorkerEvent]) -> String {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            WorkerEvent::Log(message) => Some(message.clone()),
+            WorkerEvent::JobUpdated {
+                detail: Some(message),
+                ..
+            } => Some(message.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
