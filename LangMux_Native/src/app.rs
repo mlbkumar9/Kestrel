@@ -111,13 +111,17 @@ impl Default for Preferences {
 }
 
 fn migrate_preferences(preferences: &mut Preferences, from_legacy_record: bool) {
+    if preferences.input_items.is_empty() && !preferences.input_directory.is_empty() {
+        preferences.input_items.push(InputItem::Folder {
+            path: PathBuf::from(&preferences.input_directory),
+            recursive: if from_legacy_record {
+                preferences.include_subfolders
+            } else {
+                true
+            },
+        });
+    }
     if from_legacy_record {
-        if preferences.input_items.is_empty() && !preferences.input_directory.is_empty() {
-            preferences.input_items.push(InputItem::Folder {
-                path: PathBuf::from(&preferences.input_directory),
-                recursive: preferences.include_subfolders,
-            });
-        }
         preferences.output_target_explicit = !preferences.output_directory.is_empty()
             && Path::new(&preferences.output_directory)
                 != mkv::default_output_dir(Path::new(&preferences.input_directory));
@@ -126,13 +130,13 @@ fn migrate_preferences(preferences: &mut Preferences, from_legacy_record: bool) 
         } else {
             ExistingPolicy::Overwrite
         };
+        if preferences.output_target.is_none() && !preferences.output_directory.is_empty() {
+            preferences.output_target = Some(OutputTarget::Folder(PathBuf::from(
+                &preferences.output_directory,
+            )));
+        }
         preferences.input_directory.clear();
         preferences.skip_existing = true;
-    }
-    if preferences.output_target.is_none() && !preferences.output_directory.is_empty() {
-        preferences.output_target = Some(OutputTarget::Folder(PathBuf::from(
-            &preferences.output_directory,
-        )));
     }
     preferences.current_settings.audio.languages =
         mkv::parse_language_field(&preferences.audio_languages);
@@ -1200,6 +1204,7 @@ mod tests {
     };
     use crate::formats::Container;
     use crate::inputs::{ExistingPolicy, InputItem, OutputTarget};
+    use eframe::Storage;
     use std::collections::HashMap;
     use std::path::PathBuf;
 
@@ -1300,6 +1305,95 @@ mod tests {
     }
 
     #[test]
+    fn early_v3_record_restores_input_directory_without_changing_other_preferences() {
+        let mut storage = MemoryStorage::default();
+        let key = "app.preferences.v3";
+        eframe::set_value(
+            &mut storage,
+            key,
+            &Preferences {
+                input_directory: "/movies".to_owned(),
+                output_directory: "/custom-output".to_owned(),
+                output_target: Some(OutputTarget::Folder(PathBuf::from("/movies/converted"))),
+                output_target_explicit: false,
+                existing: ExistingPolicy::Rename,
+                skip_existing: true,
+                ..Preferences::default()
+            },
+        );
+        let mut record = storage.get_string(key).unwrap();
+        let input_items_start = record.find("input_items:").unwrap();
+        let input_items_end =
+            input_items_start + record[input_items_start..].find(',').unwrap() + 1;
+        record.replace_range(input_items_start..input_items_end, "");
+        storage.set_string(key, record);
+
+        let (mut preferences, from_legacy) = load_preferences(&storage);
+        assert!(!from_legacy);
+        migrate_preferences(&mut preferences, from_legacy);
+
+        assert_eq!(
+            preferences.input_items,
+            [InputItem::Folder {
+                path: PathBuf::from("/movies"),
+                recursive: true,
+            }]
+        );
+        assert_eq!(preferences.existing, ExistingPolicy::Rename);
+        assert!(preferences.skip_existing);
+        assert_eq!(preferences.output_directory, "/custom-output");
+        assert_eq!(
+            preferences.output_target,
+            Some(OutputTarget::Folder(PathBuf::from("/movies/converted",)))
+        );
+        assert!(!preferences.output_target_explicit);
+        assert_eq!(
+            effective_output_target(
+                preferences.output_target.as_ref(),
+                preferences.output_target_explicit,
+                &[],
+                &preferences.input_items,
+                Container::Mkv,
+            ),
+            OutputTarget::Folder(PathBuf::from("/movies/converted"))
+        );
+    }
+
+    #[test]
+    fn v3_record_keeps_existing_input_items_when_input_directory_differs() {
+        let mut storage = MemoryStorage::default();
+        let input_items = [InputItem::Folder {
+            path: PathBuf::from("/selected"),
+            recursive: false,
+        }];
+        eframe::set_value(
+            &mut storage,
+            "app.preferences.v3",
+            &Preferences {
+                input_items: input_items.to_vec(),
+                input_directory: "/different".to_owned(),
+                output_target: Some(OutputTarget::Folder(PathBuf::from("/selected/converted"))),
+                output_target_explicit: false,
+                existing: ExistingPolicy::Rename,
+                ..Preferences::default()
+            },
+        );
+
+        let (mut preferences, from_legacy) = load_preferences(&storage);
+        assert!(!from_legacy);
+        migrate_preferences(&mut preferences, from_legacy);
+
+        assert_eq!(preferences.input_items, input_items);
+        assert_eq!(preferences.input_directory, "/different");
+        assert_eq!(preferences.existing, ExistingPolicy::Rename);
+        assert_eq!(
+            preferences.output_target,
+            Some(OutputTarget::Folder(PathBuf::from("/selected/converted",)))
+        );
+        assert!(!preferences.output_target_explicit);
+    }
+
+    #[test]
     fn legacy_fields_migrate_only_from_the_legacy_record() {
         let mut current = Preferences {
             input_directory: "/v".to_owned(),
@@ -1307,8 +1401,15 @@ mod tests {
             ..Preferences::default()
         };
         migrate_preferences(&mut current, false);
-        assert!(current.input_items.is_empty());
+        assert_eq!(
+            current.input_items,
+            [InputItem::Folder {
+                path: PathBuf::from("/v"),
+                recursive: true
+            }]
+        );
         assert_eq!(current.existing, ExistingPolicy::Skip);
+        assert_eq!(current.input_directory, "/v");
 
         migrate_preferences(&mut current, true);
         assert_eq!(
