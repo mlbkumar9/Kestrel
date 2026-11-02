@@ -39,8 +39,16 @@ pub enum ExistingPolicy {
     Rename,
 }
 
-pub fn expand(items: &[InputItem], exclude: &[PathBuf]) -> Vec<SourceFile> {
+pub fn expand(
+    items: &[InputItem],
+    exclude: &[PathBuf],
+    exact_file_exclusions: &[PathBuf],
+) -> Vec<SourceFile> {
     let excluded = exclude
+        .iter()
+        .map(|path| resolved_path(path))
+        .collect::<Vec<_>>();
+    let exact_file_exclusions = exact_file_exclusions
         .iter()
         .map(|path| resolved_path(path))
         .collect::<Vec<_>>();
@@ -58,7 +66,15 @@ pub fn expand(items: &[InputItem], exclude: &[PathBuf]) -> Vec<SourceFile> {
                 }
             }
             InputItem::Folder { path, recursive } => {
-                expand_folder(path, path, *recursive, &excluded, &mut seen, &mut sources);
+                expand_folder(
+                    path,
+                    path,
+                    *recursive,
+                    &excluded,
+                    &exact_file_exclusions,
+                    &mut seen,
+                    &mut sources,
+                );
             }
         }
     }
@@ -72,6 +88,7 @@ fn expand_folder(
     directory: &Path,
     recursive: bool,
     excluded: &[PathBuf],
+    exact_file_exclusions: &[PathBuf],
     seen: &mut HashSet<PathBuf>,
     sources: &mut Vec<SourceFile>,
 ) {
@@ -89,12 +106,21 @@ fn expand_folder(
         };
         if file_type.is_dir() {
             if recursive {
-                expand_folder(root, &path, recursive, excluded, seen, sources);
+                expand_folder(
+                    root,
+                    &path,
+                    recursive,
+                    excluded,
+                    exact_file_exclusions,
+                    seen,
+                    sources,
+                );
             }
         } else if file_type.is_file()
             && formats::is_supported_input(&path)
             && !is_partial_path(&path)
             && !is_excluded(&path, excluded)
+            && !is_exactly_excluded(&path, exact_file_exclusions)
         {
             let relative = path
                 .strip_prefix(root)
@@ -129,7 +155,7 @@ fn is_exactly_excluded(path: &Path, excluded: &[PathBuf]) -> bool {
     excluded.contains(&path)
 }
 
-fn resolved_path(path: &Path) -> PathBuf {
+pub(crate) fn resolved_path(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| normalize_path(path))
 }
 
@@ -416,7 +442,7 @@ mod tests {
             path: root.clone(),
             recursive: true,
         };
-        let files = expand(&[input], &[root.join("converted")]);
+        let files = expand(&[input], &[root.join("converted")], &[]);
         let relatives = files
             .iter()
             .map(|file| file.relative.to_string_lossy().into_owned())
@@ -432,6 +458,7 @@ mod tests {
         touch(&file);
         let files = expand(
             &[InputItem::File(file.clone()), InputItem::File(file.clone())],
+            &[],
             &[],
         );
         assert_eq!(files.len(), 1);
@@ -514,7 +541,7 @@ mod tests {
         touch(&root.join("v/a.mkv"));
         touch(&root.join("v/converted/a.mkv"));
 
-        let files = expand(std::slice::from_ref(&input), &exclude);
+        let files = expand(std::slice::from_ref(&input), &exclude, &[]);
         assert_eq!(
             files
                 .iter()
@@ -541,7 +568,7 @@ mod tests {
         let exclude = output_exclusions(&target, &items, Container::Mkv);
         assert_eq!(exclude, [root.join("converted")]);
 
-        let files = expand(&items, &exclude);
+        let files = expand(&items, &exclude, &[]);
         assert_eq!(
             files
                 .iter()
@@ -549,6 +576,35 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["special.mkv"]
         );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn exact_file_exclusions_apply_to_folder_traversal_not_explicit_inputs() {
+        let root = temp_dir();
+        let file = root.join("removed.mkv");
+        touch(&file);
+
+        let folder = InputItem::Folder {
+            path: root.clone(),
+            recursive: true,
+        };
+        assert!(
+            expand(
+                std::slice::from_ref(&folder),
+                &[],
+                std::slice::from_ref(&file)
+            )
+            .is_empty()
+        );
+
+        let explicit = expand(
+            &[InputItem::File(file.clone())],
+            &[],
+            std::slice::from_ref(&file),
+        );
+        assert_eq!(explicit.len(), 1);
+        assert_eq!(explicit[0].path, file);
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -567,7 +623,7 @@ mod tests {
         let exclude = output_exclusions(&target, std::slice::from_ref(&folder), Container::Mkv);
         assert_eq!(exclude, [final_output]);
 
-        let files = expand(std::slice::from_ref(&folder), &exclude);
+        let files = expand(std::slice::from_ref(&folder), &exclude, &[]);
         assert_eq!(
             files
                 .iter()
@@ -592,7 +648,7 @@ mod tests {
         let target = OutputTarget::File(final_output);
         let exclude = output_exclusions(&target, std::slice::from_ref(&folder), Container::Mkv);
 
-        let files = expand(std::slice::from_ref(&folder), &exclude);
+        let files = expand(std::slice::from_ref(&folder), &exclude, &[]);
         assert_eq!(
             files
                 .iter()
@@ -619,7 +675,7 @@ mod tests {
         let exclude = output_exclusions(&target, std::slice::from_ref(&folder), Container::Mkv);
         assert_eq!(exclude, [final_output]);
 
-        let files = expand(std::slice::from_ref(&folder), &exclude);
+        let files = expand(std::slice::from_ref(&folder), &exclude, &[]);
         assert_eq!(
             files
                 .iter()

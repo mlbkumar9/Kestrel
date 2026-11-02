@@ -64,6 +64,8 @@ pub(crate) struct QueueEntry {
 #[serde(default)]
 pub(crate) struct Preferences {
     pub(crate) input_items: Vec<InputItem>,
+    #[serde(default)]
+    pub(crate) removed_sources: Vec<PathBuf>,
     pub(crate) output_directory: String,
     pub(crate) audio_languages: String,
     pub(crate) subtitle_languages: String,
@@ -89,6 +91,7 @@ impl Default for Preferences {
     fn default() -> Self {
         Self {
             input_items: Vec::new(),
+            removed_sources: Vec::new(),
             output_directory: String::new(),
             audio_languages: "eng, jpn".to_owned(),
             subtitle_languages: "eng".to_owned(),
@@ -358,7 +361,7 @@ impl KestrelApp {
                     path,
                     recursive: self.preferences.include_subfolders,
                 }
-            } else if inputs::expand(&[InputItem::File(path.clone())], &[]).is_empty() {
+            } else if inputs::expand(&[InputItem::File(path.clone())], &[], &[]).is_empty() {
                 continue;
             } else {
                 self.preferences.last_input_dir = path
@@ -368,9 +371,7 @@ impl KestrelApp {
                     .into_owned();
                 InputItem::File(path)
             };
-            if !self.preferences.input_items.contains(&item) {
-                self.preferences.input_items.push(item);
-            }
+            add_input_item(&mut self.preferences, item);
         }
         self.refresh_sources();
         self.step = Step::Source;
@@ -440,11 +441,12 @@ impl KestrelApp {
                 )
             })
             .unwrap_or_default();
+        let exact_file_exclusions = self.preferences.removed_sources.clone();
         let sender = self.ui_sender.clone();
         let tools = self.tools.clone();
         self.push_log("Scanning input sources");
         std::thread::spawn(move || {
-            for source in inputs::expand(&items, &exclude) {
+            for source in inputs::expand(&items, &exclude, &exact_file_exclusions) {
                 let info = FileInfo {
                     name: source
                         .relative
@@ -1091,6 +1093,13 @@ impl KestrelApp {
             if self.step == Step::Queue {
                 self.remove_selected_queue();
             } else {
+                let paths = self
+                    .sources
+                    .iter()
+                    .filter(|source| source.checked)
+                    .map(|source| source.source.path.clone())
+                    .collect::<Vec<_>>();
+                remove_sources(&mut self.preferences, &paths);
                 self.sources.retain(|source| !source.checked);
             }
         }
@@ -1153,15 +1162,48 @@ fn clock_time() -> String {
 
 fn clear_source_preferences(preferences: &mut Preferences) {
     preferences.input_items.clear();
+    preferences.removed_sources.clear();
     preferences.input_directory.clear();
 }
 
-pub(crate) fn remove_source_input(preferences: &mut Preferences, path: &Path) {
-    preferences
-        .input_items
-        .retain(|item| !matches!(item, InputItem::File(file) if file.as_path() == path));
+pub(crate) fn remove_sources(preferences: &mut Preferences, paths: &[PathBuf]) {
+    let mut processed = Vec::new();
+    for path in paths {
+        let resolved = inputs::resolved_path(path);
+        if processed.contains(&resolved) {
+            continue;
+        }
+        processed.push(resolved.clone());
+        let is_explicit_file = preferences.input_items.iter().any(
+            |item| matches!(item, InputItem::File(file) if inputs::resolved_path(file) == resolved),
+        );
+        if is_explicit_file {
+            preferences.input_items.retain(
+                |item| !matches!(item, InputItem::File(file) if inputs::resolved_path(file) == resolved),
+            );
+        } else if !preferences
+            .removed_sources
+            .iter()
+            .any(|removed| inputs::resolved_path(removed) == resolved)
+        {
+            preferences.removed_sources.push(resolved);
+        }
+    }
     if preferences.input_items.is_empty() {
         preferences.input_directory.clear();
+        preferences.removed_sources.clear();
+    }
+}
+
+fn add_input_item(preferences: &mut Preferences, item: InputItem) {
+    if let InputItem::File(path) = &item {
+        let resolved = inputs::resolved_path(path);
+        preferences
+            .removed_sources
+            .retain(|removed| inputs::resolved_path(removed) != resolved);
+    }
+    if !preferences.input_items.contains(&item) {
+        preferences.input_items.push(item);
     }
 }
 
@@ -1169,6 +1211,7 @@ fn preferences_for_save(preferences: &Preferences) -> Preferences {
     let mut preferences = preferences.clone();
     if preferences.input_items.is_empty() {
         preferences.input_directory.clear();
+        preferences.removed_sources.clear();
     }
     preferences
 }
@@ -1217,14 +1260,34 @@ fn effective_output_target(
 #[cfg(test)]
 mod tests {
     use super::{
-        Preferences, clear_source_preferences, effective_output_target, load_preferences,
-        migrate_preferences, preferences_for_save, remove_source_input,
+        Preferences, add_input_item, clear_source_preferences, effective_output_target,
+        load_preferences, migrate_preferences, preferences_for_save, remove_sources,
     };
     use crate::formats::Container;
     use crate::inputs::{ExistingPolicy, InputItem, OutputTarget};
     use eframe::Storage;
     use std::collections::HashMap;
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+
+    static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
+
+    fn temp_dir() -> PathBuf {
+        let id = NEXT_TEMP.fetch_add(1, AtomicOrdering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "kestrel-removed-sources-{}-{id}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    fn touch(path: &std::path::Path) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(path, b"fixture").unwrap();
+    }
 
     #[derive(Default)]
     struct MemoryStorage(HashMap<String, String>);
@@ -1278,17 +1341,41 @@ mod tests {
     }
 
     #[test]
-    fn removing_last_explicit_file_then_saving_does_not_restore_it() {
-        let input_file = PathBuf::from("/movies/only.mkv");
+    fn deleting_explicit_and_folder_sources_persists_exact_exclusions() {
+        let root = temp_dir();
+        let folder = root.join("folder");
+        let explicit_file = root.join("explicit.mkv");
+        let removed_folder_file = folder.join("removed.mkv");
+        let sibling = folder.join("sibling.mkv");
+        touch(&explicit_file);
+        touch(&removed_folder_file);
+        touch(&sibling);
+
         let mut preferences = Preferences {
-            input_items: vec![InputItem::File(input_file.clone())],
-            input_directory: "/movies".to_owned(),
+            input_items: vec![
+                InputItem::File(explicit_file.clone()),
+                InputItem::Folder {
+                    path: folder.clone(),
+                    recursive: true,
+                },
+            ],
+            input_directory: root.to_string_lossy().into_owned(),
             ..Preferences::default()
         };
-        remove_source_input(&mut preferences, &input_file);
+        remove_sources(
+            &mut preferences,
+            &[
+                explicit_file.clone(),
+                explicit_file,
+                removed_folder_file.clone(),
+                removed_folder_file.clone(),
+            ],
+        );
 
-        assert!(preferences.input_items.is_empty());
-        assert!(preferences.input_directory.is_empty());
+        assert_eq!(
+            preferences.removed_sources,
+            [crate::inputs::resolved_path(&removed_folder_file)]
+        );
 
         let saved = preferences_for_save(&preferences);
         let mut storage = MemoryStorage::default();
@@ -1296,7 +1383,64 @@ mod tests {
         let (mut loaded, from_legacy) = load_preferences(&storage);
         assert!(!from_legacy);
         migrate_preferences(&mut loaded, from_legacy);
-        assert!(loaded.input_items.is_empty());
+        let sources = crate::inputs::expand(&loaded.input_items, &[], &loaded.removed_sources);
+        assert_eq!(
+            sources
+                .iter()
+                .map(|source| source.path.file_name().unwrap().to_string_lossy())
+                .collect::<Vec<_>>(),
+            ["sibling.mkv"]
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn adding_a_removed_file_explicitly_restores_it() {
+        let root = temp_dir();
+        let removed_file = root.join("removed.mkv");
+        let sibling = root.join("sibling.mkv");
+        touch(&removed_file);
+        touch(&sibling);
+
+        let mut preferences = Preferences {
+            input_items: vec![InputItem::Folder {
+                path: root.clone(),
+                recursive: true,
+            }],
+            removed_sources: vec![crate::inputs::resolved_path(&removed_file)],
+            ..Preferences::default()
+        };
+        add_input_item(&mut preferences, InputItem::File(removed_file.clone()));
+
+        assert!(preferences.removed_sources.is_empty());
+        let sources =
+            crate::inputs::expand(&preferences.input_items, &[], &preferences.removed_sources);
+        assert_eq!(
+            sources
+                .iter()
+                .map(|source| source.path.file_name().unwrap().to_string_lossy())
+                .collect::<Vec<_>>(),
+            ["removed.mkv", "sibling.mkv"]
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn clear_source_preferences_resets_removed_sources() {
+        let mut preferences = Preferences {
+            input_items: vec![InputItem::Folder {
+                path: PathBuf::from("/movies"),
+                recursive: true,
+            }],
+            removed_sources: vec![PathBuf::from("/movies/removed.mkv")],
+            input_directory: "/movies".to_owned(),
+            ..Preferences::default()
+        };
+        clear_source_preferences(&mut preferences);
+
+        assert!(preferences.input_items.is_empty());
+        assert!(preferences.removed_sources.is_empty());
+        assert!(preferences.input_directory.is_empty());
     }
 
     #[test]
@@ -1307,6 +1451,7 @@ mod tests {
         };
         let saved = preferences_for_save(&preferences);
         assert!(saved.input_directory.is_empty());
+        assert!(saved.removed_sources.is_empty());
 
         let mut storage = MemoryStorage::default();
         eframe::set_value(&mut storage, crate::branding::PREFERENCES_KEY, &saved);

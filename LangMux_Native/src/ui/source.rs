@@ -316,7 +316,7 @@ fn source_table(app: &mut KestrelApp, ui: &mut egui::Ui) {
             }
             if let Some(index) = remove {
                 let path = app.sources.remove(index).source.path;
-                crate::app::remove_source_input(&mut app.preferences, &path);
+                crate::app::remove_sources(&mut app.preferences, &[path]);
             }
         });
 }
