@@ -83,17 +83,17 @@ try {
     Get-ChildItem -LiteralPath $mkvmergeExe.Directory.FullName -Filter "*.dll" -File |
         Copy-Item -Destination $mkvtoolnixBin
 
-    Copy-Item -LiteralPath $binary -Destination (Join-Path $stage "langmux.exe")
+    Copy-Item -LiteralPath $binary -Destination (Join-Path $stage "kestrel.exe")
     Copy-Item -LiteralPath (Join-Path $repoRoot "README.md") -Destination $stage
     Copy-Item -LiteralPath (Join-Path $repoRoot "LICENSE") -Destination $stage
     Copy-Item -LiteralPath (Join-Path $repoRoot "THIRD_PARTY_NOTICES.md") -Destination $stage
 
-    $archive = Join-Path $output "LangMux-$Tag-windows-x64.zip"
+    $archive = Join-Path $output "Kestrel-$Tag-windows-x64.zip"
     if (Test-Path -LiteralPath $archive) {
         Remove-Item -LiteralPath $archive -Force
     }
     Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $archive -CompressionLevel Optimal
-    Write-Output "Packaged LangMux $Tag with FFmpeg $ffmpegVersion and MKVToolNix ${mkvtoolnixVersion}: $archive"
+    Write-Output "Packaged Kestrel $Tag with FFmpeg $ffmpegVersion and MKVToolNix ${mkvtoolnixVersion}: $archive"
 }
 finally {
     if (Test-Path -LiteralPath $work) {

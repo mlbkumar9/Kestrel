@@ -1,5 +1,15 @@
 # Changelog
 
+## [3.0.0] - 2026-11-02
+
+LangMux is now Kestrel.
+
+### Added
+- Multi-step native workflow for source selection, conversion settings, and queue management
+- Configurable video, audio, and subtitle processing with presets and per-job snapshots
+- Frame preview, output-size estimates, and detailed queue progress reporting
+- Windows installer upgrade support for earlier MSI releases and in-app cleanup of older per-user installs
+
 ## [2.0.0] - 2026-10-30
 
 ### Added

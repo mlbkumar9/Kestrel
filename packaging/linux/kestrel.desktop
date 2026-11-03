@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Kestrel
+Comment=Native media remuxer and transcoder
+Exec=kestrel
+Icon=kestrel
+Terminal=false
+Categories=AudioVideo;Video;Utility;

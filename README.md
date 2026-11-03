@@ -1,4 +1,4 @@
-# LangMux
+# Kestrel
 
 **Selective MKV language remuxer** — batch remux Matroska (`.mkv`) files with chosen audio and subtitle tracks by ISO 639-2 language code. The native Rust desktop app is the recommended daily-use interface; the existing Tauri, Python GUI, CLI, and Flask API remain available.
 
@@ -51,10 +51,12 @@ npm install
 
 ## Downloads
 
-Download the latest native build from [GitHub Releases](https://github.com/mlbkumar9/LangMux/releases):
+Download the latest Kestrel native build from [GitHub Releases](https://github.com/mlbkumar9/LangMux/releases):
 
-- **Windows x64:** `langmux.exe` plus bundled FFmpeg/FFprobe and MKVToolNix tools.
+- **Windows x64:** `kestrel.exe` plus bundled FFmpeg/FFprobe and MKVToolNix tools.
+- The standalone Windows executable requires FFmpeg/FFprobe and MKVToolNix to be installed separately.
 - **Windows installer (MSI):** Per-machine x64 installer available from [GitHub Releases](https://github.com/mlbkumar9/LangMux/releases).
+
 - **macOS Apple Silicon and Intel:** app binary, README, and license; install MKVToolNix or FFmpeg/FFprobe separately.
 - **Linux x64:** app binary, README, and license; install MKVToolNix or FFmpeg/FFprobe separately.
 
@@ -151,7 +153,7 @@ curl -s -X POST http://127.0.0.1:5000/api/scan -H "Content-Type: application/jso
 
 ```
 LangMux/
-├── LangMux_Native/            # Recommended native Rust + egui desktop app
+├── LangMux_Native/            # Kestrel native Rust + egui desktop app
 │   ├── src/                   # UI, theme, remux logic, and worker
 │   ├── tests/fixtures/        # mkvmerge and ffprobe JSON fixtures
 │   └── assets/                # Embedded fonts and licenses
@@ -160,7 +162,7 @@ LangMux/
 │   ├── REMUX_ModernGUI.py    # CustomTkinter GUI
 │   ├── REMUX_Script.py       # Rich CLI
 │   └── backend.py            # Flask API
-├── REMUX_Tauri/              # Tauri + React desktop app (LangMux)
+├── REMUX_Tauri/              # Earlier Tauri + React desktop app
 │   ├── src/                  # React frontend
 │   ├── src-tauri/            # Rust backend
 │   └── public/               # Static assets (app-icon.png)

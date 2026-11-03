@@ -1,16 +1,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod app;
-mod mkv;
-mod theme;
-mod tools;
-mod worker;
-
 use eframe::egui;
+use kestrel_media::{app, branding};
 use std::sync::Arc;
 
 fn app_icon() -> Option<Arc<egui::IconData>> {
-    let image = image::load_from_memory(include_bytes!("../../logo.png"))
+    let image = image::load_from_memory(include_bytes!("../assets/kestrel.png"))
         .ok()?
         .into_rgba8();
     Some(Arc::new(egui::IconData {
@@ -21,11 +16,12 @@ fn app_icon() -> Option<Arc<egui::IconData>> {
 }
 
 fn main() -> eframe::Result {
+    branding::migrate_storage();
     let viewport = egui::ViewportBuilder::default()
-        .with_app_id("langmux")
-        .with_title("LangMux")
+        .with_app_id(branding::APP_ID)
+        .with_title(branding::APP_NAME)
         .with_inner_size([1440.0, 920.0])
-        .with_min_inner_size([1060.0, 700.0])
+        .with_min_inner_size([1100.0, 700.0])
         .with_icon(app_icon().unwrap_or_default());
     let options = eframe::NativeOptions {
         viewport,
@@ -35,8 +31,8 @@ fn main() -> eframe::Result {
     };
 
     eframe::run_native(
-        "LangMux",
+        branding::APP_NAME,
         options,
-        Box::new(|cc| Ok(Box::new(app::LangMuxApp::new(cc)))),
+        Box::new(|cc| Ok(Box::new(app::KestrelApp::new(cc)))),
     )
 }

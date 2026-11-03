@@ -30,10 +30,19 @@ mkdir -p "$output_directory"
 stage="$(mktemp -d)"
 trap 'rm -rf "$stage"' EXIT
 
-cp "$binary" "$stage/langmux"
+cp "$binary" "$stage/kestrel"
 cp "$repo_root/README.md" "$stage/README.md"
 cp "$repo_root/LICENSE" "$stage/LICENSE"
+if [[ "$platform" == "linux" ]]; then
+  mkdir -p "$stage/share/applications" "$stage/share/icons/hicolor/512x512/apps"
+  cp "$repo_root/packaging/linux/kestrel.desktop" "$stage/share/applications/kestrel.desktop"
+  cp "$repo_root/packaging/linux/kestrel.png" "$stage/share/icons/hicolor/512x512/apps/kestrel.png"
+fi
 
-archive="$output_directory/LangMux-$tag-$platform-$arch.tar.gz"
+if [[ "$platform" == "linux" && "$arch" == "x64" ]]; then
+  archive="$output_directory/Kestrel-$tag-linux-x64.tar.gz"
+else
+  archive="$output_directory/Kestrel-$tag-$platform-$arch.tar.gz"
+fi
 tar -czf "$archive" -C "$stage" .
 printf 'Created %s\n' "$archive"

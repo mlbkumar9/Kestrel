@@ -37,7 +37,7 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           ./scripts/package-windows.ps1 `
-            -BinaryPath "LangMux_Native/target/x86_64-pc-windows-msvc/release/langmux.exe" `
+            -BinaryPath "LangMux_Native/target/x86_64-pc-windows-msvc/release/kestrel.exe" `
             -Tag "$env:RELEASE_TAG" `
             -OutputDirectory "dist"
       - uses: actions/upload-artifact@v4
@@ -69,20 +69,20 @@ jobs:
         run: |
           set -euo pipefail
           version="${RELEASE_TAG#v}"
-          archive="dist/LangMux-${RELEASE_TAG}-windows-x64.zip"
+          archive="dist/Kestrel-${RELEASE_TAG}-windows-x64.zip"
           stage="windows-stage"
           mkdir -p "$stage"
           unzip -q "$archive" -d "$stage"
           ./scripts/build-msi.sh "$stage" "$version" \
-            "dist/LangMux-${RELEASE_TAG}-windows-x64.msi"
-          cp "$stage/langmux.exe" \
-            "dist/LangMux-${RELEASE_TAG}-windows-x64.exe"
+            "dist/Kestrel-${RELEASE_TAG}-windows-x64.msi"
+          cp "$stage/kestrel.exe" \
+            "dist/Kestrel-${RELEASE_TAG}-windows-x64.exe"
       - uses: actions/upload-artifact@v4
         with:
           name: windows-msi
           path: |
-            dist/LangMux-*-windows-x64.msi
-            dist/LangMux-*-windows-x64.exe
+            dist/Kestrel-*-windows-x64.msi
+            dist/Kestrel-*-windows-x64.exe
           if-no-files-found: error
 
   macos-arm64:
@@ -107,7 +107,7 @@ jobs:
         run: |
           mkdir -p dist
           ./scripts/package-unix.sh "$RELEASE_TAG" macos aarch64 \
-            "LangMux_Native/target/aarch64-apple-darwin/release/langmux" dist
+            "LangMux_Native/target/aarch64-apple-darwin/release/kestrel" dist
       - uses: actions/upload-artifact@v4
         with:
           name: macos-arm64-release
@@ -136,7 +136,7 @@ jobs:
         run: |
           mkdir -p dist
           ./scripts/package-unix.sh "$RELEASE_TAG" macos x86_64 \
-            "LangMux_Native/target/x86_64-apple-darwin/release/langmux" dist
+            "LangMux_Native/target/x86_64-apple-darwin/release/kestrel" dist
       - uses: actions/upload-artifact@v4
         with:
           name: macos-x64-release
@@ -182,7 +182,7 @@ jobs:
         run: |
           mkdir -p dist
           ./scripts/package-unix.sh "$RELEASE_TAG" linux x64 \
-            "LangMux_Native/target/x86_64-unknown-linux-gnu/release/langmux" dist
+            "LangMux_Native/target/x86_64-unknown-linux-gnu/release/kestrel" dist
       - uses: actions/upload-artifact@v4
         with:
           name: linux-x64-release
@@ -209,7 +209,7 @@ jobs:
       - name: Create checksums
         run: |
           cd dist
-          sha256sum LangMux-* > SHA256SUMS.txt
+          sha256sum Kestrel-* > SHA256SUMS.txt
       - name: Extract release notes for tag
         env:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}

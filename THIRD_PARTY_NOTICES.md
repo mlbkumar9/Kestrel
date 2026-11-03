@@ -16,4 +16,4 @@ The Windows release bundle includes the following third-party command-line tools
 - Pinned Windows archive: <https://mkvtoolnix.download/windows/releases/99.0/mkvtoolnix-64-bit-99.0.7z>
 - License: GPL-2.0; see `tools/mkvtoolnix/COPYING` in the Windows package.
 
-LangMux does not modify these tools. The bundled copies are redistributed with their accompanying license texts and the source URLs above.
+Kestrel does not modify these tools. The bundled copies are redistributed with their accompanying license texts and the source URLs above.
