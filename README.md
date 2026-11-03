@@ -37,8 +37,8 @@ Optional Python packages are listed in `requirements.txt` (Rich, CustomTkinter, 
 ## Installation
 
 ```bash
-git clone https://github.com/mlbkumar9/LangMux.git
-cd LangMux
+git clone https://github.com/mlbkumar9/Kestrel.git
+cd Kestrel
 pip install -r requirements.txt
 ```
 
@@ -51,11 +51,11 @@ npm install
 
 ## Downloads
 
-Download the latest Kestrel native build from [GitHub Releases](https://github.com/mlbkumar9/LangMux/releases):
+Download the latest Kestrel native build from [GitHub Releases](https://github.com/mlbkumar9/Kestrel/releases):
 
 - **Windows x64:** `kestrel.exe` plus bundled FFmpeg/FFprobe and MKVToolNix tools.
 - The standalone Windows executable requires FFmpeg/FFprobe and MKVToolNix to be installed separately.
-- **Windows installer (MSI):** Per-machine x64 installer available from [GitHub Releases](https://github.com/mlbkumar9/LangMux/releases).
+- **Windows installer (MSI):** Per-machine x64 installer available from [GitHub Releases](https://github.com/mlbkumar9/Kestrel/releases).
 
 - **macOS Apple Silicon and Intel:** app binary, README, and license; install MKVToolNix or FFmpeg/FFprobe separately.
 - **Linux x64:** app binary, README, and license; install MKVToolNix or FFmpeg/FFprobe separately.
