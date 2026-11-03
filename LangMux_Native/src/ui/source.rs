@@ -16,7 +16,12 @@ pub fn show(app: &mut KestrelApp, ui: &mut egui::Ui) {
             app.add_folder_dialog();
         }
         if ui
-            .add_enabled(!app.sources.is_empty(), Button::new("Clear"))
+            .add_enabled(
+                !app.sources.is_empty()
+                    || !app.preferences.input_items.is_empty()
+                    || !app.preferences.removed_sources.is_empty(),
+                Button::new("Clear"),
+            )
             .clicked()
         {
             app.clear_sources();

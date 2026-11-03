@@ -1196,11 +1196,19 @@ pub(crate) fn remove_sources(preferences: &mut Preferences, paths: &[PathBuf]) {
 }
 
 fn add_input_item(preferences: &mut Preferences, item: InputItem) {
-    if let InputItem::File(path) = &item {
-        let resolved = inputs::resolved_path(path);
-        preferences
-            .removed_sources
-            .retain(|removed| inputs::resolved_path(removed) != resolved);
+    match &item {
+        InputItem::File(path) => {
+            let resolved = inputs::resolved_path(path);
+            preferences
+                .removed_sources
+                .retain(|removed| inputs::resolved_path(removed) != resolved);
+        }
+        InputItem::Folder { path, .. } => {
+            let folder = inputs::resolved_path(path);
+            preferences
+                .removed_sources
+                .retain(|removed| !inputs::resolved_path(removed).starts_with(&folder));
+        }
     }
     if !preferences.input_items.contains(&item) {
         preferences.input_items.push(item);
@@ -1391,6 +1399,83 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["sibling.mkv"]
         );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn readding_a_folder_restores_its_removed_files() {
+        let root = temp_dir();
+        let file = root.join("a.mkv");
+        touch(&file);
+
+        let mut preferences = Preferences {
+            input_items: vec![InputItem::Folder {
+                path: root.clone(),
+                recursive: true,
+            }],
+            ..Preferences::default()
+        };
+        remove_sources(&mut preferences, std::slice::from_ref(&file));
+        assert_eq!(
+            preferences.removed_sources,
+            [crate::inputs::resolved_path(&file)]
+        );
+
+        add_input_item(
+            &mut preferences,
+            InputItem::Folder {
+                path: root.clone(),
+                recursive: true,
+            },
+        );
+
+        assert!(preferences.removed_sources.is_empty());
+        let sources =
+            crate::inputs::expand(&preferences.input_items, &[], &preferences.removed_sources);
+        assert_eq!(
+            sources
+                .iter()
+                .map(|source| source.path.file_name().unwrap().to_string_lossy())
+                .collect::<Vec<_>>(),
+            ["a.mkv"]
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn adding_a_different_folder_preserves_existing_removals() {
+        let root = temp_dir();
+        let movies = root.join("movies");
+        let shows = root.join("shows");
+        std::fs::create_dir_all(&movies).unwrap();
+        std::fs::create_dir_all(&shows).unwrap();
+        let removed_file = movies.join("removed.mkv");
+        touch(&removed_file);
+
+        let mut preferences = Preferences {
+            input_items: vec![InputItem::Folder {
+                path: movies,
+                recursive: true,
+            }],
+            removed_sources: vec![crate::inputs::resolved_path(&removed_file)],
+            ..Preferences::default()
+        };
+        add_input_item(
+            &mut preferences,
+            InputItem::Folder {
+                path: shows.clone(),
+                recursive: true,
+            },
+        );
+
+        assert_eq!(
+            preferences.removed_sources,
+            [crate::inputs::resolved_path(&removed_file)]
+        );
+        assert!(preferences.input_items.contains(&InputItem::Folder {
+            path: shows,
+            recursive: true,
+        }));
         std::fs::remove_dir_all(root).unwrap();
     }
 
