@@ -1,5 +1,11 @@
 # Changelog
 
+## [3.0.1] - 2026-11-02
+
+### Fixed
+- Adding a parent folder without subfolders no longer brings back files you removed from a subfolder source
+- The Windows executable now shows the Kestrel icon in Explorer and the Start Menu
+
 ## [3.0.0] - 2026-11-02
 
 LangMux is now Kestrel.
