@@ -91,12 +91,27 @@ if not any(row[0] == "KestrelStartMenuShortcut" for row in shortcuts):
     raise SystemExit("Kestrel Start Menu shortcut is missing.")
 
 upgrade_rows = exported_rows("Upgrade")
-upgrade_codes = {
-    row[0].strip("{}").casefold(): row
-    for row in upgrade_rows
-}
 version_one_code = "e110f64d-5c3d-5e2d-9b02-53217f2caea5"
 version_two_code = "bba02aaf-78ca-41e3-8586-b84b471755ed"
+if len(upgrade_rows) != 3:
+    raise SystemExit(f"Expected three Upgrade rows; got {upgrade_rows}")
+if any(
+    row[0].strip("{}").casefold() != version_one_code
+    for row in upgrade_rows[:2]
+):
+    raise SystemExit(
+        f"Upgrade rows 1 and 2 must use the v1.0.0 UpgradeCode; got {upgrade_rows[:2]}"
+    )
+version_two = upgrade_rows[2]
+if (
+    version_two[0].strip("{}").casefold() != version_two_code
+    or version_two[6] != "LEGACY_V2_FOUND"
+):
+    raise SystemExit(
+        "Upgrade row 3 must use the v2.0.0 UpgradeCode and LEGACY_V2_FOUND; "
+        f"got {version_two}"
+    )
+
 version_one_rows = [
     row for row in upgrade_rows
     if row[0].strip("{}").casefold() == version_one_code
@@ -105,8 +120,7 @@ if {int(row[4]) for row in version_one_rows} != {1, 2}:
     raise SystemExit(
         f"v1.0.0 Upgrade rows should have attributes 1 and 2; got {version_one_rows}"
     )
-version_two = upgrade_codes.get(version_two_code)
-if version_two is None or int(version_two[4]) != 256 or version_two[6] != "LEGACY_V2_FOUND":
+if int(version_two[4]) != 256:
     raise SystemExit(
         f"v2.0.0 Upgrade row should use attributes 256 and LEGACY_V2_FOUND; got {version_two}"
     )

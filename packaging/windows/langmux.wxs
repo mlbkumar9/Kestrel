@@ -3,11 +3,12 @@
   <Product Id="*" Name="Kestrel" Language="1033" Version="$(var.Version)"
            Manufacturer="Kestrel" UpgradeCode="{E110F64D-5C3D-5E2D-9B02-53217F2CAEA5}">
     <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" />
-    <MajorUpgrade DowngradeErrorMessage="A newer version of Kestrel is already installed." />
+    <!-- Keep this Upgrade before MajorUpgrade: Windows Installer rejects wixl's row order otherwise (error 2229). -->
     <Upgrade Id="{bba02aaf-78ca-41e3-8586-b84b471755ed}">
       <UpgradeVersion Minimum="0.0.0" IncludeMinimum="yes" Maximum="$(var.Version)" IncludeMaximum="no"
                       Property="LEGACY_V2_FOUND" OnlyDetect="no"/>
     </Upgrade>
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Kestrel is already installed." />
     <Media Id="1" Cabinet="Kestrel.cab" EmbedCab="yes" />
     <Icon Id="KestrelIcon" SourceFile="$(var.StageDir)/kestrel.ico" />
     <Property Id="ARPPRODUCTICON" Value="KestrelIcon" />
