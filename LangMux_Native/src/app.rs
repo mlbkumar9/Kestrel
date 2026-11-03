@@ -1203,11 +1203,17 @@ fn add_input_item(preferences: &mut Preferences, item: InputItem) {
                 .removed_sources
                 .retain(|removed| inputs::resolved_path(removed) != resolved);
         }
-        InputItem::Folder { path, .. } => {
+        InputItem::Folder { path, recursive } => {
             let folder = inputs::resolved_path(path);
-            preferences
-                .removed_sources
-                .retain(|removed| !inputs::resolved_path(removed).starts_with(&folder));
+            preferences.removed_sources.retain(|removed| {
+                let removed = inputs::resolved_path(removed);
+                let covered = if *recursive {
+                    removed.starts_with(&folder) && removed != folder
+                } else {
+                    removed.parent() == Some(folder.as_path())
+                };
+                !covered
+            });
         }
     }
     if !preferences.input_items.contains(&item) {
@@ -1439,6 +1445,102 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["a.mkv"]
         );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn adding_nonrecursive_parent_preserves_nested_source_removal() {
+        let root = temp_dir();
+        let folder = root.join("v");
+        let shows = folder.join("shows");
+        let removed_file = shows.join("e.mkv");
+        touch(&removed_file);
+
+        let mut preferences = Preferences {
+            input_items: vec![InputItem::Folder {
+                path: shows,
+                recursive: false,
+            }],
+            ..Preferences::default()
+        };
+        remove_sources(&mut preferences, std::slice::from_ref(&removed_file));
+        add_input_item(
+            &mut preferences,
+            InputItem::Folder {
+                path: folder,
+                recursive: false,
+            },
+        );
+
+        assert_eq!(
+            preferences.removed_sources,
+            [crate::inputs::resolved_path(&removed_file)]
+        );
+        let sources =
+            crate::inputs::expand(&preferences.input_items, &[], &preferences.removed_sources);
+        assert!(!sources.iter().any(|source| source.path == removed_file));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn readding_nonrecursive_folder_restores_direct_child() {
+        let root = temp_dir();
+        let folder = root.join("v");
+        let file = folder.join("a.mkv");
+        touch(&file);
+
+        let item = InputItem::Folder {
+            path: folder,
+            recursive: false,
+        };
+        let mut preferences = Preferences {
+            input_items: vec![item.clone()],
+            ..Preferences::default()
+        };
+        remove_sources(&mut preferences, std::slice::from_ref(&file));
+        assert_eq!(
+            preferences.removed_sources,
+            [crate::inputs::resolved_path(&file)]
+        );
+
+        add_input_item(&mut preferences, item.clone());
+
+        assert!(preferences.removed_sources.is_empty());
+        assert_eq!(preferences.input_items, [item]);
+        let sources =
+            crate::inputs::expand(&preferences.input_items, &[], &preferences.removed_sources);
+        assert!(sources.iter().any(|source| source.path == file));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn adding_recursive_parent_restores_nested_source_removal() {
+        let root = temp_dir();
+        let folder = root.join("v");
+        let shows = folder.join("shows");
+        let removed_file = shows.join("e.mkv");
+        touch(&removed_file);
+
+        let mut preferences = Preferences {
+            input_items: vec![InputItem::Folder {
+                path: shows,
+                recursive: false,
+            }],
+            ..Preferences::default()
+        };
+        remove_sources(&mut preferences, std::slice::from_ref(&removed_file));
+        add_input_item(
+            &mut preferences,
+            InputItem::Folder {
+                path: folder,
+                recursive: true,
+            },
+        );
+
+        assert!(preferences.removed_sources.is_empty());
+        let sources =
+            crate::inputs::expand(&preferences.input_items, &[], &preferences.removed_sources);
+        assert!(sources.iter().any(|source| source.path == removed_file));
         std::fs::remove_dir_all(root).unwrap();
     }
 
