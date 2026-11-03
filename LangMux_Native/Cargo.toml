@@ -1,6 +1,6 @@
 [package]
 name = "kestrel-media"
-version = "3.0.1"
+version = "3.0.2"
 edition = "2024"
 rust-version = "1.92"
 authors = ["mlbkumar9", "Devin <158243242+devin-ai-integration[bot]@users.noreply.github.com>"]
