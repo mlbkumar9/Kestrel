@@ -83,7 +83,8 @@ if actual_files != expected_files:
     missing = expected_files - actual_files
     unexpected = actual_files - expected_files
     raise SystemExit(
-        f"File table mismatch; missing={dict(missing)}, unexpected={dict(unexpected)}"
+        f"File table mismatch; missing={dict(missing)}, "
+        f"unexpected={dict(unexpected)}"
     )
 
 shortcuts = exported_rows("Shortcut")
@@ -100,16 +101,26 @@ expected_cleanup = {
 }
 if not expected_cleanup <= remove_files:
     raise SystemExit(
-        f"LangMux 1.0.0 shortcut cleanup rows are missing; got {sorted(remove_files)}"
+        "LangMux 1.0.0 shortcut cleanup rows are missing; "
+        f"got {sorted(remove_files)}"
     )
 
+version_one_product_code = "B8A9B972-0392-476D-91E5-99DE012FDFCB"
 cleanup_component = next(
-    (row for row in exported_rows("Component") if row[0] == "LegacyLangMuxCleanup"),
+    (
+        row
+        for row in exported_rows("Component")
+        if row[0] == "LegacyLangMuxCleanup"
+    ),
     None,
 )
-if cleanup_component is None or "B8A9B972-0392-476D-91E5-99DE012FDFCB" not in cleanup_component[4]:
+if (
+    cleanup_component is None
+    or version_one_product_code not in cleanup_component[4]
+):
     raise SystemExit(
-        f"LegacyLangMuxCleanup must be conditioned on the LangMux 1.0.0 MSI; got {cleanup_component}"
+        "LegacyLangMuxCleanup must be conditioned on the LangMux 1.0.0 MSI; "
+        f"got {cleanup_component}"
     )
 
 upgrade_rows = exported_rows("Upgrade")
@@ -122,7 +133,8 @@ if any(
     for row in upgrade_rows[:2]
 ):
     raise SystemExit(
-        f"Upgrade rows 1 and 2 must use the v1.0.0 UpgradeCode; got {upgrade_rows[:2]}"
+        "Upgrade rows 1 and 2 must use the v1.0.0 UpgradeCode; "
+        f"got {upgrade_rows[:2]}"
     )
 version_two = upgrade_rows[2]
 if (
@@ -140,14 +152,19 @@ version_one_rows = [
 ]
 if {int(row[4]) for row in version_one_rows} != {1, 2}:
     raise SystemExit(
-        f"v1.0.0 Upgrade rows should have attributes 1 and 2; got {version_one_rows}"
+        "v1.0.0 Upgrade rows should have attributes 1 and 2; "
+        f"got {version_one_rows}"
     )
 if int(version_two[4]) != 256:
     raise SystemExit(
-        f"v2.0.0 Upgrade row should use attributes 256 and LEGACY_V2_FOUND; got {version_two}"
+        "v2.0.0 Upgrade row should use attributes 256 and LEGACY_V2_FOUND; "
+        f"got {version_two}"
     )
 
-print("PASS: MSI contains 10 standard files, libfixture.dll, and LIBUPPER.DLL (12 files total).")
+print(
+    "PASS: MSI contains 10 standard files, libfixture.dll, and LIBUPPER.DLL "
+    "(12 files total)."
+)
 print("PASS: Kestrel Start Menu shortcut is present.")
 print("PASS: Upgrade table contains v1.0.0 and v2.0.0 upgrade rows.")
 PY
