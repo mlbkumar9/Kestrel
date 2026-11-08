@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.0.2] - 2026-11-03
+
+### Fixed
+- The Windows installer (.msi) no longer fails with error 2229; the 3.0.0 and 3.0.1 installers could not be installed
+- Upgrading from the LangMux 1.0.0 installer (.msi) no longer leaves its Start Menu, desktop and uninstall shortcuts behind
+- The banner offering to remove a LangMux 1.0.0 setup.exe installation now disappears once the removal has finished, and the removal also clears the registry key that installer left behind
+
 ## [3.0.1] - 2026-11-02
 
 ### Fixed

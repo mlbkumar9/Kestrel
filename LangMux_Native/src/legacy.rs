@@ -127,6 +127,18 @@ pub fn remove_legacy_install(_install: &LegacyInstall) -> Result<(), String> {
     Err("Older installer cleanup is available on Windows only.".to_owned())
 }
 
+/// The LangMux 1.0.0 setup.exe uninstaller leaves its install-folder key behind, and the
+/// 1.0.0 MSI reads that key to pick its install folder, so remove it once the uninstall is done.
+#[cfg(windows)]
+pub fn remove_legacy_registry_leftovers() {
+    let _ = crate::tools::command(std::path::Path::new("reg"))
+        .args(["delete", r"HKCU\Software\langmux", "/f"])
+        .output();
+}
+
+#[cfg(not(windows))]
+pub fn remove_legacy_registry_leftovers() {}
+
 #[cfg(debug_assertions)]
 pub fn debug_sample() -> LegacyInstall {
     LegacyInstall {
