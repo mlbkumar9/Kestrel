@@ -348,6 +348,9 @@ impl KestrelApp {
                 std::thread::sleep(std::time::Duration::from_millis(500));
                 found = crate::legacy::find_legacy_install();
             }
+            if result.is_ok() && found.is_none() {
+                crate::legacy::remove_legacy_registry_leftovers();
+            }
             let _ = sender.send(UiEvent::LegacyActionFinished { result, found });
         });
     }
