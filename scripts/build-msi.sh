@@ -122,3 +122,17 @@ wixl -a x64 \
   -D "Version=$version" \
   -o "$output_msi" \
   "$temp_wxs"
+
+# wixl does not understand <RemoveFile>, so add the rows that delete the shortcuts
+# the LangMux 1.0.0 MSI leaves behind when a major upgrade removes it.
+remove_file_idt="$(mktemp --suffix=.idt)"
+trap 'rm -f "$temp_wxs" "$remove_file_idt"' EXIT
+msiinfo export "$output_msi" RemoveFile > "$remove_file_idt"
+printf '%s\t%s\t%s\t%s\t%s\n' \
+  RemoveLegacyUninstallShortcut LegacyLangMuxCleanup 'UNINST~1.LNK|Uninstall LangMux.lnk' LegacyLangMuxFolder 1 \
+  RemoveLegacyLangMuxFolder LegacyLangMuxCleanup '' LegacyLangMuxFolder 1 \
+  RemoveLegacyMenuShortcut LegacyLangMuxCleanup 'LangMux.lnk' LegacyLangMuxMenuFolder 1 \
+  RemoveLegacyLangMuxMenuFolder LegacyLangMuxCleanup '' LegacyLangMuxMenuFolder 1 \
+  RemoveLegacyDesktopShortcut LegacyLangMuxCleanup 'LangMux.lnk' DesktopFolder 1 \
+  >> "$remove_file_idt"
+msibuild "$output_msi" -i "$remove_file_idt"

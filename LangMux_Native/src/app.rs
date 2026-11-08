@@ -341,7 +341,13 @@ impl KestrelApp {
         let sender = self.ui_sender.clone();
         std::thread::spawn(move || {
             let result = crate::legacy::remove_legacy_install(&install);
-            let found = crate::legacy::find_legacy_install();
+            // NSIS uninstallers return before their detached copy finishes, so wait for the entry to vanish.
+            let mut found = crate::legacy::find_legacy_install();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            while result.is_ok() && found.is_some() && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                found = crate::legacy::find_legacy_install();
+            }
             let _ = sender.send(UiEvent::LegacyActionFinished { result, found });
         });
     }

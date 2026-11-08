@@ -90,6 +90,19 @@ shortcuts = exported_rows("Shortcut")
 if not any(row[0] == "KestrelStartMenuShortcut" for row in shortcuts):
     raise SystemExit("Kestrel Start Menu shortcut is missing.")
 
+remove_files = {
+    (row[3], row[2].split("|")[-1]) for row in exported_rows("RemoveFile")
+}
+expected_cleanup = {
+    ("LegacyLangMuxFolder", "Uninstall LangMux.lnk"),
+    ("LegacyLangMuxMenuFolder", "LangMux.lnk"),
+    ("DesktopFolder", "LangMux.lnk"),
+}
+if not expected_cleanup <= remove_files:
+    raise SystemExit(
+        f"LangMux 1.0.0 shortcut cleanup rows are missing; got {sorted(remove_files)}"
+    )
+
 upgrade_rows = exported_rows("Upgrade")
 version_one_code = "e110f64d-5c3d-5e2d-9b02-53217f2caea5"
 version_two_code = "bba02aaf-78ca-41e3-8586-b84b471755ed"

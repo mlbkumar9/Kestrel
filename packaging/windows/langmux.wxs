@@ -20,10 +20,12 @@
       <ComponentRef Id="MkvToolnixFiles" />
       <!-- MKVTOOLNIX_DLL_REFS -->
       <ComponentRef Id="StartMenuShortcut" />
+      <ComponentRef Id="LegacyLangMuxCleanup" />
     </Feature>
 
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="ProgramFiles64Folder">
+        <Directory Id="LegacyLangMuxFolder" Name="LangMux" />
         <Directory Id="INSTALLFOLDER" Name="Kestrel">
           <Component Id="ApplicationFiles" Guid="{5a0a83fb-0598-4b63-abef-7b399d4442f8}">
             <File Id="KestrelExe" Name="kestrel.exe" Source="$(var.StageDir)/kestrel.exe" KeyPath="yes" />
@@ -31,6 +33,12 @@
             <File Id="Readme" Name="README.md" Source="$(var.StageDir)/README.md" />
             <File Id="ThirdPartyNotices" Name="THIRD_PARTY_NOTICES.md" Source="$(var.StageDir)/THIRD_PARTY_NOTICES.md" />
             <File Id="KestrelIconFile" Name="kestrel.ico" Source="$(var.StageDir)/kestrel.ico" />
+          </Component>
+          <!-- The LangMux 1.0.0 MSI skips RemoveShortcuts when an upgrade removes it; scripts/build-msi.sh adds RemoveFile rows
+               for this component (wixl has no RemoveFile support) that delete those shortcuts during install. -->
+          <Component Id="LegacyLangMuxCleanup" Guid="{9c4d6a1e-2b7f-4e0a-8c35-d1f0a7b2c6e4}">
+            <RegistryValue Root="HKLM" Key="Software\mlbkumar9\Kestrel"
+                           Name="LegacyLangMuxCleanup" Type="integer" Value="1" KeyPath="yes" />
           </Component>
           <Directory Id="ToolsFolder" Name="tools">
             <Directory Id="FfmpegFolder" Name="ffmpeg">
@@ -54,7 +62,9 @@
           </Directory>
         </Directory>
       </Directory>
+      <Directory Id="DesktopFolder" />
       <Directory Id="ProgramMenuFolder">
+        <Directory Id="LegacyLangMuxMenuFolder" Name="LangMux" />
         <Directory Id="ProgramMenuKestrelFolder" Name="Kestrel">
           <Component Id="StartMenuShortcut" Guid="{f6a5b3f5-e2ff-4bc4-ba84-e24ca4d8b7a0}">
             <Shortcut Id="KestrelStartMenuShortcut" Name="Kestrel"
