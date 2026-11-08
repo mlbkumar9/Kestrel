@@ -103,6 +103,15 @@ if not expected_cleanup <= remove_files:
         f"LangMux 1.0.0 shortcut cleanup rows are missing; got {sorted(remove_files)}"
     )
 
+cleanup_component = next(
+    (row for row in exported_rows("Component") if row[0] == "LegacyLangMuxCleanup"),
+    None,
+)
+if cleanup_component is None or "B8A9B972-0392-476D-91E5-99DE012FDFCB" not in cleanup_component[4]:
+    raise SystemExit(
+        f"LegacyLangMuxCleanup must be conditioned on the LangMux 1.0.0 MSI; got {cleanup_component}"
+    )
+
 upgrade_rows = exported_rows("Upgrade")
 version_one_code = "e110f64d-5c3d-5e2d-9b02-53217f2caea5"
 version_two_code = "bba02aaf-78ca-41e3-8586-b84b471755ed"

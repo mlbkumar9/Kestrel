@@ -35,7 +35,8 @@
             <File Id="KestrelIconFile" Name="kestrel.ico" Source="$(var.StageDir)/kestrel.ico" />
           </Component>
           <!-- The LangMux 1.0.0 MSI skips RemoveShortcuts when an upgrade removes it; scripts/build-msi.sh adds RemoveFile rows
-               for this component (wixl has no RemoveFile support) that delete those shortcuts during install. -->
+               for this component (wixl has no RemoveFile support) that delete those shortcuts, and conditions the
+               component on the LangMux 1.0.0 MSI being replaced so a stand-alone LangMux keeps its shortcuts. -->
           <Component Id="LegacyLangMuxCleanup" Guid="{9c4d6a1e-2b7f-4e0a-8c35-d1f0a7b2c6e4}">
             <RegistryValue Root="HKLM" Key="Software\mlbkumar9\Kestrel"
                            Name="LegacyLangMuxCleanup" Type="integer" Value="1" KeyPath="yes" />

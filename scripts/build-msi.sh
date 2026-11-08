@@ -136,3 +136,28 @@ printf '%s\t%s\t%s\t%s\t%s\n' \
   RemoveLegacyDesktopShortcut LegacyLangMuxCleanup 'LangMux.lnk' DesktopFolder 1 \
   >> "$remove_file_idt"
 msibuild "$output_msi" -i "$remove_file_idt"
+
+# wixl also ignores <Condition> on components, so limit the cleanup to installs that
+# replace the LangMux 1.0.0 MSI (ProductCode {B8A9B972-...}); a stand-alone LangMux keeps its shortcuts.
+component_idt="$(mktemp --suffix=.idt)"
+trap 'rm -f "$temp_wxs" "$remove_file_idt" "$component_idt"' EXIT
+msiinfo export "$output_msi" Component > "$component_idt"
+python3 - "$component_idt" <<'PYTHON'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+condition = 'WIX_UPGRADE_DETECTED >< "{B8A9B972-0392-476D-91E5-99DE012FDFCB}"'
+lines = path.read_text(encoding="utf-8").splitlines()
+found = False
+for index, line in enumerate(lines):
+    fields = line.split("\t")
+    if fields[0] == "LegacyLangMuxCleanup":
+        fields[4] = condition
+        lines[index] = "\t".join(fields)
+        found = True
+if not found:
+    raise SystemExit("LegacyLangMuxCleanup component is missing from the MSI.")
+path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+PYTHON
+msibuild "$output_msi" -i "$component_idt"
