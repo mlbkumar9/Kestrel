@@ -6,8 +6,8 @@ mod widgets;
 use std::borrow::Cow;
 
 use gpui::{
-    App, Application, AssetSource, Bounds, Context, SharedString, TitlebarOptions, Window,
-    WindowBounds, WindowOptions, div, img, prelude::*, px, size,
+    App, Application, AssetSource, Bounds, Context, ImageSource, Resource, SharedString,
+    TitlebarOptions, Window, WindowBounds, WindowOptions, div, img, prelude::*, px, size,
 };
 use theme::Theme;
 
@@ -180,7 +180,13 @@ impl Render for Kestrel {
                             .gap_3()
                             .h_16()
                             .px_4()
-                            .child(img("kestrel.png").size_8().flex_shrink_0())
+                            .child(
+                                img(ImageSource::Resource(Resource::Embedded(
+                                    "kestrel.png".into(),
+                                )))
+                                .size_8()
+                                .flex_shrink_0(),
+                            )
                             .when(!collapsed, |this| {
                                 this.child(widgets::label("Kestrel", theme).text_lg())
                             }),
