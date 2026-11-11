@@ -3,6 +3,8 @@
 ## Project layout
 
 - `crates/kestrel-app/` is the Kestrel desktop application: an eframe/egui Rust app with the remux worker and unit tests.
+- `crates/kestrel-core/` is the placeholder for the UI-independent engine.
+- `crates/kestrel-gpui/` is the GPUI desktop shell with local widgets and themes.
 - `REMUX_Tauri/` is the existing Tauri + React desktop app.
 - `REMUX Python Scripts/` contains the Tkinter, CustomTkinter, CLI, and Flask entrypoints.
 - Keep changes to the native app isolated from the existing Tauri and Python applications unless a task explicitly asks otherwise.
@@ -17,7 +19,18 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo build -p kestrel-media --release
 cargo run -p kestrel-media --release
+cargo run -p kestrel-gpui
 ```
+
+The GPUI Linux shell needs `libxkbcommon-dev`, `libwayland-dev`,
+`libxkbcommon-x11-dev`, `libfontconfig1-dev`, and `mesa-vulkan-drivers`.
+Run with a valid, user-owned `XDG_RUNTIME_DIR` (mode 0700) and `DISPLAY=:0`.
+Without a GPU, set
+`VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json`.
+
+`vendor/xattr` patches xattr 0.2.3 for GPUI's zed-async-tar dependency:
+use libc's ENODATA instead of the removed ENOATTR constant. Keep its licenses
+and exclude it from workspace formatting and linting.
 
 ## Conventions and gotchas
 
