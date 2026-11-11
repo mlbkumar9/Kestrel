@@ -29,7 +29,7 @@ for relative_path in "${standard_files[@]}"; do
   file_path="$stage_directory/$relative_path"
   mkdir -p "$(dirname "$file_path")"
   if [[ "$relative_path" == "kestrel.ico" ]]; then
-    cp "$repo_root/LangMux_Native/assets/kestrel.ico" "$file_path"
+    cp "$repo_root/crates/kestrel-app/assets/kestrel.ico" "$file_path"
   else
     printf 'fixture: %s\n' "$relative_path" > "$file_path"
   fi

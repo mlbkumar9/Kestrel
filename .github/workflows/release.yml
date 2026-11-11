@@ -27,17 +27,16 @@ jobs:
           targets: x86_64-pc-windows-msvc
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: LangMux_Native -> target
+          workspaces: . -> target
       - name: Build
-        working-directory: LangMux_Native
-        run: cargo build --release --target x86_64-pc-windows-msvc
+        run: cargo build -p kestrel-media --release --target x86_64-pc-windows-msvc
       - name: Package bundled tools
         shell: pwsh
         env:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           ./scripts/package-windows.ps1 `
-            -BinaryPath "LangMux_Native/target/x86_64-pc-windows-msvc/release/kestrel.exe" `
+            -BinaryPath "target/x86_64-pc-windows-msvc/release/kestrel.exe" `
             -Tag "$env:RELEASE_TAG" `
             -OutputDirectory "dist"
       - uses: actions/upload-artifact@v4
@@ -97,17 +96,16 @@ jobs:
           targets: aarch64-apple-darwin
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: LangMux_Native -> target
+          workspaces: . -> target
       - name: Build
-        working-directory: LangMux_Native
-        run: cargo build --release --target aarch64-apple-darwin
+        run: cargo build -p kestrel-media --release --target aarch64-apple-darwin
       - name: Package
         env:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           mkdir -p dist
           ./scripts/package-unix.sh "$RELEASE_TAG" macos aarch64 \
-            "LangMux_Native/target/aarch64-apple-darwin/release/kestrel" dist
+            "target/aarch64-apple-darwin/release/kestrel" dist
       - uses: actions/upload-artifact@v4
         with:
           name: macos-arm64-release
@@ -126,17 +124,16 @@ jobs:
           targets: x86_64-apple-darwin
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: LangMux_Native -> target
+          workspaces: . -> target
       - name: Build
-        working-directory: LangMux_Native
-        run: cargo build --release --target x86_64-apple-darwin
+        run: cargo build -p kestrel-media --release --target x86_64-apple-darwin
       - name: Package
         env:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           mkdir -p dist
           ./scripts/package-unix.sh "$RELEASE_TAG" macos x86_64 \
-            "LangMux_Native/target/x86_64-apple-darwin/release/kestrel" dist
+            "target/x86_64-apple-darwin/release/kestrel" dist
       - uses: actions/upload-artifact@v4
         with:
           name: macos-x64-release
@@ -172,17 +169,16 @@ jobs:
           targets: x86_64-unknown-linux-gnu
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: LangMux_Native -> target
+          workspaces: . -> target
       - name: Build
-        working-directory: LangMux_Native
-        run: cargo build --release --target x86_64-unknown-linux-gnu
+        run: cargo build -p kestrel-media --release --target x86_64-unknown-linux-gnu
       - name: Package
         env:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           mkdir -p dist
           ./scripts/package-unix.sh "$RELEASE_TAG" linux x64 \
-            "LangMux_Native/target/x86_64-unknown-linux-gnu/release/kestrel" dist
+            "target/x86_64-unknown-linux-gnu/release/kestrel" dist
       - uses: actions/upload-artifact@v4
         with:
           name: linux-x64-release

@@ -71,11 +71,10 @@ See the [project roadmap](docs/ROADMAP.md) for planned work.
 Fast native Rust application with a dark egui interface, language chips, batch controls, and logs.
 
 ```bash
-cd LangMux_Native
-cargo run --release
+cargo run -p kestrel-media --release
 ```
 
-Build a platform-specific release binary with `cargo build --release`. Choose MKVToolNix or FFmpeg in the sidebar; Windows release builds include both engines' tools, while macOS and Linux use tools available on `PATH` or the platform defaults.
+Build a platform-specific release binary with `cargo build -p kestrel-media --release`. Choose MKVToolNix or FFmpeg in the sidebar; Windows release builds include both engines' tools, while macOS and Linux use tools available on `PATH` or the platform defaults.
 
 ### 2. Tauri desktop app
 
@@ -152,11 +151,15 @@ curl -s -X POST http://127.0.0.1:5000/api/scan -H "Content-Type: application/jso
 ## Project structure
 
 ```
-LangMux/
-├── LangMux_Native/            # Kestrel native Rust + egui desktop app
-│   ├── src/                   # UI, theme, remux logic, and worker
-│   ├── tests/fixtures/        # mkvmerge and ffprobe JSON fixtures
-│   └── assets/                # Embedded fonts and licenses
+Kestrel/
+├── Cargo.toml                # Cargo workspace manifest
+├── Cargo.lock                # Shared workspace lockfile
+├── crates/
+│   ├── kestrel-app/           # Kestrel native Rust + egui desktop app
+│   │   ├── src/              # UI, theme, remux logic, and worker
+│   │   ├── tests/fixtures/   # mkvmerge and ffprobe JSON fixtures
+│   │   └── assets/           # Embedded fonts and licenses
+│   └── kestrel-core/         # UI-independent engine (phase 1)
 ├── REMUX Python Scripts/
 │   ├── remux_gui.py          # Tkinter GUI (classic)
 │   ├── REMUX_ModernGUI.py    # CustomTkinter GUI
@@ -191,7 +194,7 @@ If a track has no language tag, it is treated as `und`. Language matching is cas
 | Native remux engine unavailable | Install MKVToolNix or FFmpeg/FFprobe; Windows release downloads bundle these tools |
 | `mkvmerge not found` in Tauri/Python | Install MKVToolNix; add to PATH or use default `C:\Program Files\MKVToolNix\` on Windows |
 | No matching audio | Verify language codes match tags shown after scanning |
-| Native app build fails | Run `cargo build --release` from `LangMux_Native/`; ensure Rust is installed |
+| Native app build fails | Run `cargo build -p kestrel-media --release` from the repository root; ensure Rust is installed |
 | Tauri dev fails | Run `npm install` in `REMUX_Tauri`; ensure Node.js and Rust are installed |
 | Tauri blank window | Confirm Vite is on port 1420 (`npm run tauri dev` starts both) |
 | Empty output file | Check disk space and write permissions on the output folder |

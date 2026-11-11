@@ -18,6 +18,23 @@ We follow [PEP 8](https://www.python.org/dev/peps/pep-0008/) for Python code. Pl
 4. Open a pull request and describe your changes.
 
 ## Development Setup Instructions
+For the native Rust application, install Rust 1.92 or later and run these commands
+from the repository root:
+
+```sh
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo build -p kestrel-media --release
+cargo run -p kestrel-media --release
+```
+
+The workspace contains `crates/kestrel-app` (the `kestrel-media` package and
+`kestrel` binary) and `crates/kestrel-core`. Build output goes in root `target/`.
+FFmpeg integration tests require a modern FFmpeg and FFprobe on `PATH`.
+
+For the legacy Python applications:
+
 1. Clone the repository.
 2. Install dependencies using `pip install -r requirements.txt`.
 3. Run tests using `pytest`.

@@ -17,7 +17,7 @@ fn built_in_software_presets_transcode_supported_fixture_containers() {
         println!("SKIP: integration fixtures require ffmpeg and ffprobe on PATH");
         return;
     };
-    let fixture_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/v3-integration");
+    let fixture_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/v3-integration");
     fs::create_dir_all(&fixture_dir).expect("fixture directory should be created");
     let subtitles = fixture_dir.join("english.srt");
     fs::write(&subtitles, "1\n00:00:00,250 --> 00:00:02,500\nHello\n")
@@ -263,7 +263,7 @@ fn real_ffmpeg_burn_in_handles_special_paths_and_image_subtitles() {
         println!("SKIP: integration fixtures require ffmpeg and ffprobe on PATH");
         return;
     };
-    let fixture_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/v3-integration");
+    let fixture_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/v3-integration");
     let special_dir = fixture_dir.join("Bob's, [test]");
     fs::create_dir_all(&special_dir).expect("special-path fixture directory should be created");
     let subtitles = fixture_dir.join("burn-in.srt");
@@ -364,7 +364,7 @@ fn real_ffmpeg_detects_letterbox_crop_from_multiple_frames() {
         println!("SKIP: crop detection integration test requires ffmpeg on PATH");
         return;
     };
-    let fixture_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/v3-integration");
+    let fixture_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/v3-integration");
     fs::create_dir_all(&fixture_dir).expect("fixture directory should be created");
     let input = fixture_dir.join("letterboxed-crop.mkv");
     let output = tools::command(&ffmpeg.path)
