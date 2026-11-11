@@ -76,6 +76,19 @@ cargo run -p kestrel-media --release
 
 Build a platform-specific release binary with `cargo build -p kestrel-media --release`. Choose MKVToolNix or FFmpeg in the sidebar; Windows release builds include both engines' tools, while macOS and Linux use tools available on `PATH` or the platform defaults.
 
+### GPUI shell builds
+
+The new GPUI shell runs with `cargo run -p kestrel-gpui`. Build its Windows binary
+on Windows with `cargo build --release -p kestrel-gpui`, using the MSVC Rust
+toolchain, Visual Studio C++ build tools, and Windows SDK. GPUI's build script
+requires the SDK's `fxc.exe` for release shaders and `rc.exe` for its default
+Windows manifest. Linux cross-builds fail with missing `shaders_bytes.rs`;
+we use upstream GPUI, not a fork.
+
+Linux builds, the existing egui app's Windows cross-build, and MSI packaging
+stay on Linux. The egui cross-build remains supported until phase 4 removes egui.
+CI and release workflows build the GPUI executable on `windows-latest`.
+
 ### 2. Tauri desktop app
 
 Modern React desktop app with drag-and-drop, pause/stop, logs, and batch stats.

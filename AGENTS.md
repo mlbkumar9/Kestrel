@@ -29,8 +29,17 @@ Without a GPU, set
 `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json`.
 
 `vendor/xattr` patches xattr 0.2.3 for GPUI's zed-async-tar dependency:
-use libc's ENODATA instead of the removed ENOATTR constant. Keep its licenses
+use libc's ENODATA instead of ENOATTR on Linux/Android only; keep libc's ENOATTR
+on macOS/BSD. Keep its licenses
 and exclude it from workspace formatting and linting.
+
+Build GPUI Windows binaries on Windows with `cargo build --release -p kestrel-gpui`
+using the MSVC Rust toolchain, Visual Studio C++ build tools, and Windows SDK.
+GPUI's build script needs the SDK's `fxc.exe` for release shaders and `rc.exe`
+for its default `windows-manifest` feature. A Linux cross-build fails with missing
+`shaders_bytes.rs`. No GPUI fork is used. Linux builds, the egui Windows
+cross-build, and MSI packaging stay on Linux; the egui cross-build remains
+supported until phase 4 removes egui.
 
 ## Conventions and gotchas
 
