@@ -40,16 +40,13 @@ jobs:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: LangMux_Native -> target
+          workspaces: . -> target
       - name: Check formatting
-        working-directory: LangMux_Native
-        run: cargo fmt --check
+        run: cargo fmt --all --check
       - name: Run Clippy
-        working-directory: LangMux_Native
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Run tests
-        working-directory: LangMux_Native
-        run: cargo test
+        run: cargo test --workspace
 
   msi:
     name: Windows MSI packaging
