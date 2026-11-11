@@ -1,6 +1,6 @@
 # Kestrel Roadmap
 
-Kestrel is a fast, native media toolbox built on MKVToolNix and FFmpeg. The native Rust app (`LangMux_Native/`) is the primary app from v2.0.0 on.
+Kestrel is a fast, native media toolbox built on MKVToolNix and FFmpeg. The native Rust app (`crates/kestrel-app/`) is the primary app from v2.0.0 on.
 
 ## v2.0 — Native app (current)
 

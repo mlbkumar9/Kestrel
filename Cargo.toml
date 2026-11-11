@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = ["crates/kestrel-app", "crates/kestrel-core", "crates/kestrel-gpui"]
+exclude = ["vendor/xattr"]
+
+[patch.crates-io]
+xattr = { path = "vendor/xattr" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true

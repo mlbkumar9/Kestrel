@@ -33,7 +33,7 @@ for file in \
 done
 
 if [[ ! -f "$stage_dir/kestrel.ico" ]]; then
-  cp "$repo_root/LangMux_Native/assets/kestrel.ico" "$stage_dir/kestrel.ico"
+  cp "$repo_root/crates/kestrel-app/assets/kestrel.ico" "$stage_dir/kestrel.ico"
 fi
 
 output_directory="$(dirname "$output_msi")"
@@ -49,7 +49,7 @@ fi
 
 temp_wxs="$(mktemp "$wxs_directory/langmux.XXXXXX")"
 trap 'rm -f "$temp_wxs"' EXIT
-python3 - "$wxs_directory/langmux.wxs" "$temp_wxs" "$stage_dir" <<'PY'
+python3 - "$wxs_directory/kestrel.wxs" "$temp_wxs" "$stage_dir" <<'PY'
 from hashlib import sha256
 from pathlib import Path
 import re
