@@ -15,6 +15,7 @@ permissions:
   contents: write
 
 jobs:
+  # The egui Linux-to-Windows cross-build remains supported until phase 4 removes egui.
   windows:
     name: Windows x64
     runs-on: windows-latest
@@ -43,6 +44,28 @@ jobs:
         with:
           name: windows-release
           path: dist/*
+          if-no-files-found: error
+
+  gpui-windows:
+    name: GPUI Windows x64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+      # GPUI release shaders require fxc.exe on a Windows host.
+      - name: Build GPUI
+        run: cargo build --release -p kestrel-gpui
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gpui-windows-release
+          path: target/release/kestrel-gpui.exe
           if-no-files-found: error
 
   windows-msi:
@@ -191,6 +214,7 @@ jobs:
     needs:
       - windows
       - windows-msi
+      - gpui-windows
       - macos-arm64
       - macos-x64
       - linux
@@ -205,7 +229,7 @@ jobs:
       - name: Create checksums
         run: |
           cd dist
-          sha256sum Kestrel-* > SHA256SUMS.txt
+          sha256sum Kestrel-* kestrel-gpui.exe > SHA256SUMS.txt
       - name: Extract release notes for tag
         env:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
