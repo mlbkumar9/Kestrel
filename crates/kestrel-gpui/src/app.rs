@@ -49,6 +49,7 @@ pub enum Pick {
     RemuxDestination,
     TranscodeFolder,
     Chapters,
+    ImportPresets,
 }
 
 pub enum UiEvent {
@@ -62,9 +63,18 @@ pub enum UiEvent {
         paths: Vec<PathBuf>,
     },
     ChapterText(String),
+    /// Contents of the preset file the user picked, or why it could not be read.
+    PresetText(Result<String, String>),
     LegacyRemoved(Result<(), String>),
     Encoders(Result<EncoderSet, String>),
     Estimate(Result<u64, String>),
+    /// Progress or the end of a Transcode preview encode.
+    Preview(Box<crate::preview_ui::PreviewEvent>),
+    /// An added subtitle or audio file was probed for its real codec.
+    AddedProbed {
+        path: PathBuf,
+        result: Result<String, String>,
+    },
     Notice {
         text: String,
         error: bool,
@@ -150,11 +160,14 @@ pub struct Kestrel {
     pub tab: Tab,
     pub show_command: bool,
     pub measured: Option<u64>,
+    pub preview: crate::state::preview::PreviewState,
     pub queue: QueueState,
     pub activity: ActivityLog,
     pub settings: AppSettings,
     pub palette: Option<PaletteState>,
     pub save_dialog: Option<SaveDialog>,
+    pub preset_menu: Option<crate::preset_ui::PresetMenu>,
+    pub preset_dialog: Option<crate::preset_ui::PresetDialog>,
     pub open_menu: Option<SharedString>,
     pub inputs: HashMap<SharedString, Entity<TextInput>>,
     pub toasts: Vec<Toast>,
@@ -169,10 +182,10 @@ pub struct Kestrel {
     ui_tx: mpsc::Sender<UiEvent>,
     ui_rx: mpsc::Receiver<UiEvent>,
     worker_rx: Option<mpsc::Receiver<WorkerEvent>>,
-    inflight: usize,
+    pub inflight: usize,
     polling: bool,
     next_toast: u64,
-    next_preset: u32,
+    pub next_preset: u32,
     persist: Persistence,
     /// A debounced settings write is already scheduled.
     persist_scheduled: bool,
@@ -220,11 +233,14 @@ impl Kestrel {
             tab: debug.tab.unwrap_or(Tab::Video),
             show_command: false,
             measured: None,
+            preview: crate::state::preview::PreviewState::default(),
             queue: QueueState::default(),
             activity: ActivityLog::default(),
             settings: AppSettings::default(),
             palette: None,
             save_dialog: None,
+            preset_menu: None,
+            preset_dialog: None,
             open_menu: None,
             inputs: HashMap::new(),
             toasts: Vec::new(),
@@ -248,6 +264,8 @@ impl Kestrel {
             _quit_subscription: None,
         };
         app._quit_subscription = Some(cx.on_app_quit(|this, cx| {
+            this.preview.clear();
+            kestrel_core::preview::remove_preview_directory();
             this.flush_settings(cx);
             async {}
         }));
@@ -290,6 +308,7 @@ impl Kestrel {
         }
         if let Some(app) = restored.app {
             self.settings = app;
+            self.settings.apply_priority();
         }
         if let Some(remux) = restored.remux {
             remux.apply(&mut self.remux);
@@ -476,9 +495,20 @@ impl Kestrel {
             self.worker_rx = None;
             self.queue.running = false;
         }
+        if changed {
+            self.sync_preview_source();
+        }
         if changed || self.queue.running {
             cx.notify();
         }
+    }
+
+    /// Counts one more background job and returns the channel it reports on. The job must end
+    /// with an event whose handler takes the count back down again.
+    pub fn begin_background(&mut self, cx: &mut Context<Self>) -> mpsc::Sender<UiEvent> {
+        self.inflight += 1;
+        self.ensure_poller(cx);
+        self.ui_tx.clone()
     }
 
     fn on_ui_event(&mut self, event: UiEvent, cx: &mut Context<Self>) {
@@ -506,6 +536,26 @@ impl Kestrel {
                     self.seed_form();
                 }
                 self.run_debug_queue(cx);
+            }
+            UiEvent::AddedProbed { path, result } => {
+                self.inflight = self.inflight.saturating_sub(1);
+                match result {
+                    Ok(codec) => {
+                        for edits in self.remux.edits.values_mut() {
+                            for file in edits.added.iter_mut().filter(|file| file.path == path) {
+                                file.codec = Some(codec.clone());
+                            }
+                        }
+                    }
+                    Err(error) => self.activity.push(
+                        Level::Warn,
+                        format!(
+                            "Could not probe {}: {error}; its codec is guessed from the extension",
+                            path.display()
+                        ),
+                        None,
+                    ),
+                }
             }
             UiEvent::Picked { purpose, paths } => {
                 self.inflight = self.inflight.saturating_sub(1);
@@ -553,6 +603,10 @@ impl Kestrel {
                     self.start_queue(cx);
                 }
             }
+            UiEvent::PresetText(text) => {
+                self.inflight = self.inflight.saturating_sub(1);
+                self.import_presets_text(text, cx);
+            }
             UiEvent::LegacyRemoved(result) => {
                 self.inflight = self.inflight.saturating_sub(1);
                 self.legacy_removing = false;
@@ -570,6 +624,12 @@ impl Kestrel {
                     Ok(bytes) => self.measured = Some(bytes),
                     Err(error) => self.toast(error, TagKind::Warn, cx),
                 }
+            }
+            UiEvent::Preview(event) => {
+                if matches!(event.update, crate::preview_ui::PreviewUpdate::Done(_)) {
+                    self.inflight = self.inflight.saturating_sub(1);
+                }
+                self.on_preview_event(*event, cx);
             }
             UiEvent::Notice { text, error } => {
                 self.inflight = self.inflight.saturating_sub(1);
@@ -688,6 +748,7 @@ impl Kestrel {
         if index < self.library.sources.len() {
             self.library.current = index;
             self.measured = None;
+            self.sync_preview_source();
             self.seed_form();
             cx.notify();
         }
@@ -827,7 +888,7 @@ impl Kestrel {
                     .collect(),
                 Pick::Subtitle => dialog
                     .set_title("Add subtitle file")
-                    .add_filter("Subtitles", &["srt", "ass", "ssa", "vtt", "sup"])
+                    .add_filter("Subtitles", &["srt", "ass", "ssa", "vtt", "sup", "mks"])
                     .pick_files()
                     .unwrap_or_default(),
                 Pick::ImportSubtitle => dialog
@@ -852,7 +913,25 @@ impl Kestrel {
                     .pick_file()
                     .into_iter()
                     .collect(),
+                Pick::ImportPresets => dialog
+                    .set_title("Import presets")
+                    .add_filter("Kestrel presets", &["json"])
+                    .pick_file()
+                    .into_iter()
+                    .collect(),
             };
+            if purpose == Pick::ImportPresets
+                && let Some(path) = paths.first()
+            {
+                let text = std::fs::read_to_string(path)
+                    .map_err(|error| format!("Could not read {}: {error}", path.display()));
+                let _ = sender.send(UiEvent::Picked {
+                    purpose,
+                    paths: Vec::new(),
+                });
+                let _ = sender.send(UiEvent::PresetText(text));
+                return;
+            }
             if purpose == Pick::Chapters
                 && let Some(path) = paths.first()
             {
@@ -866,8 +945,8 @@ impl Kestrel {
             }
             let _ = sender.send(UiEvent::Picked { purpose, paths });
         });
-        // The chapter branch sends two events; account for the second.
-        if purpose == Pick::Chapters {
+        // The chapter and preset branches send two events; account for the second.
+        if matches!(purpose, Pick::Chapters | Pick::ImportPresets) {
             self.inflight += 1;
         }
         self.ensure_poller(cx);
@@ -898,8 +977,11 @@ impl Kestrel {
                     return;
                 };
                 let edits = self.remux.edits_for(&path, &meta);
+                for file in &paths {
+                    edits.added.push(AddedFile::new(file.clone(), kind));
+                }
                 for file in paths {
-                    edits.added.push(AddedFile::new(file, kind));
+                    self.probe_added_file(file, kind, cx);
                 }
             }
             Pick::ImportSubtitle => {
@@ -917,9 +999,28 @@ impl Kestrel {
                     });
                 }
             }
-            Pick::Chapters => {}
+            Pick::Chapters | Pick::ImportPresets => {}
         }
         cx.notify();
+    }
+
+    /// Probes an added file on a worker thread; the result lands in [`UiEvent::AddedProbed`].
+    /// Without ffprobe the file keeps the codec its extension implies.
+    fn probe_added_file(&mut self, path: PathBuf, kind: AddedKind, cx: &mut Context<Self>) {
+        let Some(ffprobe) = self.tools.ffprobe.as_ref().map(|tool| tool.path.clone()) else {
+            return;
+        };
+        let sender = self.ui_tx.clone();
+        let kind = match kind {
+            AddedKind::Subtitle => kestrel_core::external::ExternalKind::Subtitle,
+            AddedKind::Audio => kestrel_core::external::ExternalKind::Audio,
+        };
+        self.inflight += 1;
+        std::thread::spawn(move || {
+            let result = mkv::probe_external_codec(&ffprobe, &path, kind);
+            let _ = sender.send(UiEvent::AddedProbed { path, result });
+        });
+        self.ensure_poller(cx);
     }
 
     // ----- presets -----
@@ -1163,6 +1264,8 @@ impl Kestrel {
             remux_engine: self.remux.engine,
             existing: self.remux.collision,
             dry_run: self.remux.dry_run,
+            parallel_jobs: self.settings.parallel_job_count(),
+            keep_source_dates: self.settings.keep_source_dates,
         };
         let (sender, receiver) = mpsc::channel();
         self.worker_rx = Some(receiver);
@@ -1317,9 +1420,15 @@ impl Kestrel {
     }
 
     pub fn close_overlays(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let had = self.palette.is_some() || self.save_dialog.is_some() || self.open_menu.is_some();
+        let had = self.palette.is_some()
+            || self.save_dialog.is_some()
+            || self.open_menu.is_some()
+            || self.preset_menu.is_some()
+            || self.preset_dialog.is_some();
         self.palette = None;
         self.save_dialog = None;
+        self.preset_menu = None;
+        self.preset_dialog = None;
         self.open_menu = None;
         window.focus(&self.focus);
         cx.notify();
@@ -1483,6 +1592,8 @@ impl Render for Kestrel {
         let footer = self.render_footer();
         let palette = self.render_palette(window, cx);
         let save_dialog = self.render_save_dialog(window, cx);
+        let preset_menu = self.render_preset_menu(window, cx);
+        let preset_dialog = self.render_preset_dialog(cx);
         let toasts = self.render_toasts();
         div()
             .relative()
@@ -1538,6 +1649,8 @@ impl Render for Kestrel {
             )
             .children(palette)
             .children(save_dialog)
+            .children(preset_menu)
+            .children(preset_dialog)
             .child(toasts)
     }
 }

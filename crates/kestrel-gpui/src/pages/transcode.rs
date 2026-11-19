@@ -464,6 +464,21 @@ impl Kestrel {
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.open_save_dialog(window, cx);
                                     })),
+                            )
+                            .child(
+                                button("preset-more", &t, BtnKind::Default, true)
+                                    .tooltip(crate::widgets::overlay::tooltip(
+                                        "Rename, duplicate, delete, import and export presets",
+                                    ))
+                                    .child(icon("more", 14.0, t.muted))
+                                    .on_mouse_down(
+                                        gpui::MouseButton::Left,
+                                        cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
+                                            let index = this.selected_preset_index();
+                                            this.open_preset_menu(index, event.position, cx);
+                                            cx.stop_propagation();
+                                        }),
+                                    ),
                             ),
                     ),
             )
@@ -531,7 +546,6 @@ impl Kestrel {
         let video = form.video_summary();
         let audio = form.audio_summary();
         let subs = form.subtitle_summary();
-        let preview_length = form.preview_length;
         let format = div()
             .child(section_title("Format", &t))
             .child(div().mt(px(10.0)).child(containers))
@@ -567,69 +581,7 @@ impl Kestrel {
                         |this, on| this.form.keep_attachments = on,
                     )),
             );
-        let (from, to) = if t.light {
-            (0xD9DCE3, 0xF1F2F5)
-        } else {
-            (0x1D2230, 0x0D0F14)
-        };
-        let preview = card(&t)
-            .mt(px(14.0))
-            .p(px(14.0))
-            .flex()
-            .flex_row()
-            .flex_wrap()
-            .items_center()
-            .gap(px(14.0))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w(px(220.0))
-                    .child(crate::widgets::label("Preview", &t))
-                    .child(
-                        div()
-                            .mt(px(8.0))
-                            .h(px(120.0))
-                            .rounded(px(8.0))
-                            .flex()
-                            .items_end()
-                            .p(px(8.0))
-                            .text_size(px(11.0))
-                            .text_color(t.muted)
-                            .bg(gpui::linear_gradient(
-                                120.0,
-                                gpui::linear_color_stop(gpui::rgb(from), 0.0),
-                                gpui::linear_color_stop(gpui::rgb(to), 1.0),
-                            ))
-                            .font_family(crate::widgets::MONO)
-                            .child("Source / encoded split preview"),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(8.0))
-                    .w(px(160.0))
-                    .child(self.fsel(
-                        cx,
-                        "tr-preview-len",
-                        "Preview length",
-                        &PREVIEW_LENGTHS,
-                        preview_length,
-                        |this, index| this.form.preview_length = index,
-                    ))
-                    .child(
-                        button("tr-preview-go", &t, BtnKind::Default, true)
-                            .child("Encode preview")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.toast(
-                                    "Preview encoding arrives with the 4.1 engine",
-                                    TagKind::Info,
-                                    cx,
-                                );
-                            })),
-                    ),
-            );
+        let preview = self.render_preview_card(cx);
         let output = div()
             .child(section_title("Output", &t))
             .child(

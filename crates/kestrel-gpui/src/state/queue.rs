@@ -79,7 +79,10 @@ pub struct QueueState {
     next_id: u64,
     pub running: bool,
     pub paused: bool,
+    /// Combined stats of the running jobs: total fps and speed, the latest finish time.
     pub live: LiveStats,
+    /// Latest stats of each running job, which `live` adds up while jobs run in parallel.
+    live_jobs: std::collections::BTreeMap<u64, LiveStats>,
     pub started: Option<Instant>,
     pub when_done: usize,
 }
@@ -198,6 +201,27 @@ impl QueueState {
         self.paused = false;
         self.started = Some(Instant::now());
         self.live = LiveStats::default();
+        self.live_jobs.clear();
+    }
+
+    /// Adds up the running jobs' stats: throughput sums, the ETA is the slowest job's.
+    fn recompute_live(&mut self) {
+        let sum = |pick: fn(&LiveStats) -> Option<f64>| {
+            let values: Vec<f64> = self.live_jobs.values().filter_map(pick).collect();
+            (!values.is_empty()).then(|| values.iter().sum())
+        };
+        let eta = self
+            .live_jobs
+            .values()
+            .filter_map(|stats| stats.eta_seconds)
+            .fold(None, |latest: Option<f64>, eta| {
+                Some(latest.map_or(eta, |latest| latest.max(eta)))
+            });
+        self.live = LiveStats {
+            fps: sum(|stats| stats.fps),
+            speed: sum(|stats| stats.speed),
+            eta_seconds: eta,
+        };
     }
 
     pub fn elapsed_seconds(&self) -> f64 {
@@ -215,6 +239,9 @@ impl QueueState {
                 detail,
             } => {
                 let detail = detail.clone();
+                if *status != FileStatus::Processing && self.live_jobs.remove(job_id).is_some() {
+                    self.recompute_live();
+                }
                 if let Some(job) = self.find_mut(*job_id) {
                     job.percent = (*percent).min(100);
                     job.status = match status {
@@ -248,11 +275,15 @@ impl QueueState {
                     job.percent = (*percent).min(100);
                     job.status = JobStatus::Encoding;
                 }
-                self.live = LiveStats {
-                    fps: *fps,
-                    speed: *speed,
-                    eta_seconds: *eta_seconds,
-                };
+                self.live_jobs.insert(
+                    *job_id,
+                    LiveStats {
+                        fps: *fps,
+                        speed: *speed,
+                        eta_seconds: *eta_seconds,
+                    },
+                );
+                self.recompute_live();
                 None
             }
             WorkerEvent::Log(text) => Some(text.clone()),
@@ -260,6 +291,7 @@ impl QueueState {
                 self.running = false;
                 self.paused = false;
                 self.live = LiveStats::default();
+                self.live_jobs.clear();
                 if *cancelled {
                     for job in &mut self.jobs {
                         if job.status.is_active() {
@@ -340,6 +372,34 @@ mod tests {
         assert_eq!(queue.jobs[1].percent, 58);
         assert_eq!(queue.live.fps, Some(71.4));
         assert_eq!(queue.position(), Some((2, 2)));
+    }
+
+    #[test]
+    fn parallel_jobs_add_up_their_live_stats() {
+        let mut queue = queue_with_jobs(3);
+        let progress = |job_id, fps, eta| WorkerEvent::Progress {
+            job_id,
+            percent: 10,
+            fps: Some(fps),
+            speed: Some(1.0),
+            eta_seconds: Some(eta),
+        };
+        queue.apply(&progress(1, 30.0, 100.0));
+        queue.apply(&progress(2, 20.0, 400.0));
+        assert_eq!(queue.live.fps, Some(50.0));
+        assert_eq!(queue.live.speed, Some(2.0));
+        assert_eq!(queue.live.eta_seconds, Some(400.0));
+        // A finished job leaves the totals.
+        queue.apply(&WorkerEvent::JobUpdated {
+            job_id: 2,
+            status: FileStatus::Success,
+            percent: 100,
+            detail: None,
+        });
+        assert_eq!(queue.live.fps, Some(30.0));
+        assert_eq!(queue.live.eta_seconds, Some(100.0));
+        assert_eq!(queue.jobs[0].percent, 10);
+        assert_eq!(queue.jobs[1].status, JobStatus::Done);
     }
 
     #[test]

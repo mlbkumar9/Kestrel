@@ -609,6 +609,8 @@ impl KestrelApp {
                 remux_engine: self.preferences.remux_engine,
                 existing: self.preferences.existing,
                 dry_run: self.preferences.dry_run,
+                parallel_jobs: 1,
+                keep_source_dates: false,
             },
             self.control.clone(),
             self.sender.clone(),

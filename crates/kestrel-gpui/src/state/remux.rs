@@ -80,7 +80,27 @@ pub struct AddedFile {
     pub forced: bool,
     pub offset_ms: i32,
     pub charset: String,
+    /// FFmpeg codec name found by probing the file; `None` while the probe is pending or failed.
+    pub codec: Option<String>,
 }
+
+/// Text encodings offered for added text subtitle files (the first is the default).
+pub const CHARSETS: [&str; 11] = [
+    "UTF-8",
+    "Windows-1252",
+    "ISO-8859-1",
+    "ISO-8859-15",
+    "Shift_JIS",
+    "GB18030",
+    "Big5",
+    "EUC-KR",
+    "KOI8-R",
+    "Windows-1251",
+    "Windows-1256",
+];
+
+/// Subtitle file extensions that hold text, used until the probe names the real codec.
+const TEXT_SUBTITLE_EXTENSIONS: [&str; 4] = ["srt", "ass", "ssa", "vtt"];
 
 impl AddedFile {
     pub fn new(path: PathBuf, kind: AddedKind) -> Self {
@@ -94,7 +114,30 @@ impl AddedFile {
             forced: false,
             offset_ms: 0,
             charset: "UTF-8".to_owned(),
+            codec: None,
         }
+    }
+
+    /// Whether the file is a text subtitle, the only kind a charset applies to.
+    pub fn is_text_subtitle(&self) -> bool {
+        if self.kind != AddedKind::Subtitle {
+            return false;
+        }
+        match &self.codec {
+            Some(codec) => kestrel_core::transcode::is_text_subtitle(codec),
+            None => self.path.extension().is_some_and(|ext| {
+                let ext = ext.to_string_lossy().to_ascii_lowercase();
+                TEXT_SUBTITLE_EXTENSIONS.contains(&ext.as_str())
+            }),
+        }
+    }
+
+    /// Position of the charset in [`CHARSETS`]; an unknown stored value shows as the first.
+    pub fn charset_index(&self) -> usize {
+        CHARSETS
+            .iter()
+            .position(|charset| charset.eq_ignore_ascii_case(&self.charset))
+            .unwrap_or(0)
     }
 
     pub fn file_name(&self) -> String {
@@ -105,6 +148,9 @@ impl AddedFile {
     }
 
     pub fn codec_label(&self) -> String {
+        if let Some(codec) = &self.codec {
+            return format!("{} (external)", codec_label(codec));
+        }
         let ext = self
             .path
             .extension()
@@ -134,6 +180,25 @@ pub fn guess_language(path: &std::path::Path) -> String {
 pub struct FileEdits {
     pub tracks: Vec<RemuxTrackEdit>,
     pub added: Vec<AddedFile>,
+    /// Output order of the source audio and subtitle tracks, as indices into the source rows
+    /// (the Tracks table rows after the video row). Empty keeps the source's own order.
+    pub order: Vec<usize>,
+}
+
+/// Source row indices in the order the source stores them (by track id).
+pub fn natural_order(ids: &[u64]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..ids.len()).collect();
+    order.sort_by_key(|index| ids[*index]);
+    order
+}
+
+/// Ids of the audio and subtitle tracks in table row order (video excluded).
+pub fn source_ids(meta: &MediaMetadata) -> Vec<u64> {
+    meta.audio_tracks
+        .iter()
+        .chain(&meta.subtitle_tracks)
+        .map(|track| track.id)
+        .collect()
 }
 
 pub fn track_rows(meta: &MediaMetadata) -> Vec<TrackRow> {
@@ -194,6 +259,56 @@ impl FileEdits {
         Self {
             tracks,
             added: Vec::new(),
+            order: Vec::new(),
+        }
+    }
+
+    /// Source rows (after the video row) in output order.
+    pub fn source_order(&self, ids: &[u64]) -> Vec<usize> {
+        if self.order.len() == ids.len() {
+            self.order.clone()
+        } else {
+            natural_order(ids)
+        }
+    }
+
+    /// Moves a source track one place earlier or later in the output. False at the ends.
+    pub fn move_source(&mut self, ids: &[u64], source_index: usize, earlier: bool) -> bool {
+        let mut order = self.source_order(ids);
+        let Some(position) = order.iter().position(|index| *index == source_index) else {
+            return false;
+        };
+        let target = if earlier {
+            position.checked_sub(1)
+        } else {
+            Some(position + 1).filter(|target| *target < order.len())
+        };
+        let Some(target) = target else {
+            return false;
+        };
+        order.swap(position, target);
+        self.order = if order == natural_order(ids) {
+            Vec::new()
+        } else {
+            order
+        };
+        true
+    }
+
+    /// Moves an added file one place earlier or later; added files follow the source tracks in
+    /// list order. False at the ends.
+    pub fn move_added(&mut self, index: usize, earlier: bool) -> bool {
+        let target = if earlier {
+            index.checked_sub(1)
+        } else {
+            Some(index + 1)
+        };
+        match target.filter(|target| *target < self.added.len() && index < self.added.len()) {
+            Some(target) => {
+                self.added.swap(index, target);
+                true
+            }
+            None => false,
         }
     }
 
@@ -206,7 +321,7 @@ impl FileEdits {
             .zip(&original.tracks)
             .filter(|(edit, base)| edit != base)
             .count();
-        changed + self.added.len()
+        changed + self.added.len() + usize::from(!self.order.is_empty())
     }
 }
 
@@ -359,6 +474,12 @@ pub fn core_track_edits(meta: &MediaMetadata, edits: &FileEdits) -> Result<Track
     let original = FileEdits::from_metadata(meta);
     let skip = usize::from(meta.video.is_some() || meta.video_codec.is_some());
     let mut out = TrackEdits::default();
+    if !edits.order.is_empty() {
+        let ids = source_ids(meta);
+        if edits.order.len() == ids.len() && edits.order != natural_order(&ids) {
+            out.order = edits.order.iter().map(|index| ids[*index]).collect();
+        }
+    }
     let sources = meta.audio_tracks.iter().chain(&meta.subtitle_tracks);
     for ((track, edit), base) in sources
         .zip(edits.tracks.iter().skip(skip))
@@ -407,9 +528,11 @@ pub fn core_track_edits(meta: &MediaMetadata, edits: &FileEdits) -> Result<Track
             forced: file.forced,
             offset_ms: i64::from(file.offset_ms),
             charset: (kind == ExternalKind::Subtitle
+                && file.is_text_subtitle()
                 && !charset.is_empty()
                 && !charset.eq_ignore_ascii_case("utf-8"))
             .then(|| charset.to_owned()),
+            codec: file.codec.clone(),
             burn_in: false,
         });
     }
@@ -566,6 +689,7 @@ mod tests {
                     forced: false,
                     offset_ms: -250,
                     charset: Some("Windows-1252".to_owned()),
+                    codec: None,
                     burn_in: false,
                 },
                 ExternalTrack {
@@ -577,11 +701,163 @@ mod tests {
                     forced: false,
                     offset_ms: 0,
                     charset: None,
+                    codec: None,
                     burn_in: false,
                 },
             ]
         );
     }
+    /// Audio ids 1 and 2, subtitle ids 3 and 4 (source row indices 0 to 3).
+    fn meta_four() -> MediaMetadata {
+        let mut meta = meta_with_ids();
+        let mut audio = meta.audio_tracks[0].clone();
+        audio.id = 2;
+        let mut subtitle = meta.subtitle_tracks[0].clone();
+        subtitle.id = 4;
+        meta.audio_tracks[0].id = 1;
+        meta.subtitle_tracks[0].id = 3;
+        meta.audio_tracks.push(audio);
+        meta.subtitle_tracks.push(subtitle);
+        meta
+    }
+
+    #[test]
+    fn moving_source_rows_maps_to_the_core_track_order() {
+        let meta = meta_four();
+        let ids = source_ids(&meta);
+        assert_eq!(ids, [1, 2, 3, 4]);
+        let mut edits = FileEdits::from_metadata(&meta);
+        assert_eq!(edits.source_order(&ids), [0, 1, 2, 3]);
+        assert!(core_track_edits(&meta, &edits).unwrap().order.is_empty());
+        // The last subtitle moves up two places.
+        assert!(edits.move_source(&ids, 3, true));
+        assert!(edits.move_source(&ids, 3, true));
+        assert_eq!(edits.source_order(&ids), [0, 3, 1, 2]);
+        assert_eq!(edits.change_count(&meta), 1);
+        let core = core_track_edits(&meta, &edits).unwrap();
+        assert_eq!(core.order, [1, 4, 2, 3]);
+        assert!(!core.is_empty());
+        // The ends do not move, and moving back to the source order clears the edit.
+        assert!(!edits.move_source(&ids, 0, true));
+        assert!(!edits.move_source(&ids, 2, false));
+        assert!(edits.move_source(&ids, 3, false));
+        assert!(edits.move_source(&ids, 3, false));
+        assert!(edits.order.is_empty());
+        assert!(core_track_edits(&meta, &edits).unwrap().order.is_empty());
+        assert_eq!(edits.change_count(&meta), 0);
+    }
+
+    #[test]
+    fn rows_follow_track_id_order_when_the_source_interleaves_audio_and_subtitles() {
+        let mut meta = meta_with_ids();
+        meta.audio_tracks[0].id = 5;
+        meta.subtitle_tracks[0].id = 2;
+        let ids = source_ids(&meta);
+        let edits = FileEdits::from_metadata(&meta);
+        // Row order is audio then subtitle, but the source stores the subtitle first.
+        assert_eq!(edits.source_order(&ids), [1, 0]);
+        assert!(core_track_edits(&meta, &edits).unwrap().is_empty());
+        let mut moved = edits.clone();
+        assert!(moved.move_source(&ids, 1, false));
+        assert_eq!(core_track_edits(&meta, &moved).unwrap().order, [5, 2]);
+    }
+
+    #[test]
+    fn a_stale_order_is_ignored_when_the_track_count_changes() {
+        let meta = meta_four();
+        let mut edits = FileEdits::from_metadata(&meta);
+        edits.order = vec![1, 0];
+        assert!(core_track_edits(&meta, &edits).unwrap().order.is_empty());
+    }
+
+    #[test]
+    fn added_files_reorder_in_list_order() {
+        let meta = meta_with_ids();
+        let mut edits = FileEdits::from_metadata(&meta);
+        for name in ["a.srt", "b.srt", "c.ac3"] {
+            let kind = if name.ends_with("ac3") {
+                AddedKind::Audio
+            } else {
+                AddedKind::Subtitle
+            };
+            edits.added.push(AddedFile::new(PathBuf::from(name), kind));
+        }
+        assert!(!edits.move_added(0, true));
+        assert!(!edits.move_added(2, false));
+        assert!(edits.move_added(2, true));
+        assert!(edits.move_added(0, false));
+        let names: Vec<String> = edits.added.iter().map(AddedFile::file_name).collect();
+        assert_eq!(names, ["c.ac3", "a.srt", "b.srt"]);
+        let core = core_track_edits(&meta, &edits).unwrap();
+        let paths: Vec<_> = core.external.iter().map(|file| file.path.clone()).collect();
+        assert_eq!(
+            paths,
+            [
+                PathBuf::from("c.ac3"),
+                PathBuf::from("a.srt"),
+                PathBuf::from("b.srt")
+            ]
+        );
+    }
+
+    #[test]
+    fn offset_and_charset_apply_to_text_subtitles_only() {
+        let meta = meta_with_ids();
+        let mut edits = FileEdits::from_metadata(&meta);
+        let mut text = AddedFile::new(PathBuf::from("a.srt"), AddedKind::Subtitle);
+        text.offset_ms = -1500;
+        text.charset = "Shift_JIS".to_owned();
+        let mut picture = AddedFile::new(PathBuf::from("b.sup"), AddedKind::Subtitle);
+        picture.offset_ms = 40;
+        picture.charset = "Big5".to_owned();
+        let mut audio = AddedFile::new(PathBuf::from("c.mka"), AddedKind::Audio);
+        audio.offset_ms = 250;
+        audio.charset = "KOI8-R".to_owned();
+        // A probe that finds a picture subtitle inside a ".srt" name wins over the extension.
+        let mut mislabelled = AddedFile::new(PathBuf::from("d.srt"), AddedKind::Subtitle);
+        mislabelled.codec = Some("hdmv_pgs_subtitle".to_owned());
+        mislabelled.charset = "EUC-KR".to_owned();
+        let mut sniffed = AddedFile::new(PathBuf::from("e.txt"), AddedKind::Subtitle);
+        sniffed.codec = Some("subrip".to_owned());
+        sniffed.charset = "GB18030".to_owned();
+        edits.added = vec![text, picture, audio, mislabelled, sniffed];
+        let core = core_track_edits(&meta, &edits).unwrap();
+        let summary: Vec<(i64, Option<&str>, Option<&str>)> = core
+            .external
+            .iter()
+            .map(|file| {
+                (
+                    file.offset_ms,
+                    file.charset.as_deref(),
+                    file.codec.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            summary,
+            [
+                (-1500, Some("Shift_JIS"), None),
+                (40, None, None),
+                (250, None, None),
+                (0, None, Some("hdmv_pgs_subtitle")),
+                (0, Some("GB18030"), Some("subrip")),
+            ]
+        );
+    }
+
+    #[test]
+    fn every_offered_charset_is_listed_once_and_found_by_index() {
+        assert_eq!(CHARSETS.len(), 11);
+        let mut file = AddedFile::new(PathBuf::from("a.srt"), AddedKind::Subtitle);
+        assert_eq!(file.charset_index(), 0);
+        for (index, charset) in CHARSETS.iter().enumerate() {
+            file.charset = (*charset).to_owned();
+            assert_eq!(file.charset_index(), index);
+        }
+        file.charset = "windows-1251".to_owned();
+        assert_eq!(CHARSETS[file.charset_index()], "Windows-1251");
+    }
+
     #[test]
     fn inspector_warnings_cover_audio_the_container_cannot_hold() {
         use kestrel_core::compat;

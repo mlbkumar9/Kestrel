@@ -95,6 +95,8 @@ fn remux_with(
         remux_engine: engine,
         existing: ExistingPolicy::Overwrite,
         dry_run: false,
+        parallel_jobs: 1,
+        keep_source_dates: false,
     });
     let messages = events
         .iter()

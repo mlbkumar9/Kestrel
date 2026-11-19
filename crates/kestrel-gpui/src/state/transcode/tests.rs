@@ -71,6 +71,7 @@ fn rich_settings() -> JobSettings {
             forced: false,
             offset_ms: 500,
             charset: Some("Windows-1252".to_owned()),
+            codec: None,
             burn_in: false,
         }],
         ..SubtitleSettings::default()
@@ -493,6 +494,7 @@ fn imported_subtitles_map_to_external_tracks() {
             forced: true,
             offset_ms: -250,
             charset: Some("Windows-1252".to_owned()),
+            codec: None,
             burn_in: true,
         }]
     );

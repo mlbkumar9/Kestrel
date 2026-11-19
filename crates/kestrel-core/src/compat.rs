@@ -205,9 +205,9 @@ pub fn job_warnings(metadata: &MediaMetadata, settings: &JobSettings) -> Vec<Str
             .iter()
             .filter(|track| !track.burn_in)
         {
-            match crate::transcode::subs::external_codec_id(&track.path) {
+            match crate::transcode::subs::track_codec_id(track) {
                 Ok(codec) => {
-                    if let StreamPlan::Drop(reason) = subtitle_plan(codec, settings.container) {
+                    if let StreamPlan::Drop(reason) = subtitle_plan(&codec, settings.container) {
                         warnings.push(format!("{}: {reason}", track.path.display()));
                     }
                 }
