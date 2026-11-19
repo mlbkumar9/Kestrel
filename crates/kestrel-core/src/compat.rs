@@ -107,30 +107,91 @@ pub fn job_warnings(metadata: &MediaMetadata, settings: &JobSettings) -> Vec<Str
         ));
     }
 
-    let selected_audio = mkv::matching_tracks(&metadata.audio_tracks, &settings.audio.languages);
-    let audio_tracks = if selected_audio.is_empty() && !metadata.audio_tracks.is_empty() {
-        metadata.audio_tracks.iter().collect::<Vec<_>>()
-    } else {
-        selected_audio
-    };
-    if !mkv::normalize_languages(&settings.audio.languages).is_empty()
-        && !metadata.audio_tracks.is_empty()
-        && mkv::matching_tracks(&metadata.audio_tracks, &settings.audio.languages).is_empty()
-    {
-        warnings.push("No matching audio languages found; keeping all audio tracks".to_owned());
-    }
-    for track in audio_tracks {
-        if let StreamPlan::Drop(reason) = audio_copy_plan(&track.codec_id, settings.container) {
-            warnings.push(reason);
+    if settings.audio.tracks.is_empty() {
+        if !mkv::normalize_languages(&settings.audio.languages).is_empty()
+            && !metadata.audio_tracks.is_empty()
+            && settings.audio.selection == crate::transcode::TrackSelection::AllMatching
+            && mkv::matching_tracks(&metadata.audio_tracks, &settings.audio.languages).is_empty()
+        {
+            warnings.push("No matching audio languages found; keeping all audio tracks".to_owned());
         }
+        match crate::transcode::audio::selected_audio_tracks(metadata, settings) {
+            Ok(tracks) => {
+                for track in tracks {
+                    if let StreamPlan::Drop(reason) =
+                        audio_copy_plan(&track.codec_id, settings.container)
+                    {
+                        warnings.push(reason);
+                    }
+                }
+            }
+            Err(error) => warnings.push(error),
+        }
+    } else if let Err(error) = crate::transcode::audio::plan_audio(metadata, settings) {
+        warnings.push(error);
     }
 
     if settings.subtitles.include {
-        for track in mkv::matching_tracks(&metadata.subtitle_tracks, &settings.subtitles.languages)
-        {
+        for track in crate::transcode::soft_subtitle_tracks(metadata, settings) {
             if let StreamPlan::Drop(reason) = subtitle_plan(&track.codec_id, settings.container) {
                 warnings.push(reason);
             }
+        }
+        for track in settings
+            .subtitles
+            .external
+            .iter()
+            .filter(|track| !track.burn_in)
+        {
+            match crate::transcode::subs::external_codec_id(&track.path) {
+                Ok(codec) => {
+                    if let StreamPlan::Drop(reason) = subtitle_plan(codec, settings.container) {
+                        warnings.push(format!("{}: {reason}", track.path.display()));
+                    }
+                }
+                Err(error) => warnings.push(error),
+            }
+        }
+        if let Err(error) = crate::transcode::subs::validate_external(&settings.subtitles.external)
+        {
+            warnings.push(error);
+        }
+    }
+
+    if let VideoSettings::Encode(encode) = &settings.video {
+        let name = crate::transcode::video_encoder_name_for_detection(&encode.encoder);
+        if encode.fast_decode && !encode.encoder.supports_fast_decode() {
+            warnings.push(format!("Fast decode is not available for {name}"));
+        }
+        if !encode.advanced_options.trim().is_empty() && !encode.encoder.supports_advanced_options()
+        {
+            warnings.push(format!("Advanced options are not available for {name}"));
+        }
+        if encode.passes >= 2 {
+            if !matches!(encode.rate, crate::transcode::RateControl::Bitrate(_)) {
+                warnings.push("Two-pass encoding only applies to average bitrate".to_owned());
+            } else if !encode.encoder.supports_multi_pass() {
+                warnings.push(format!("Two-pass encoding is not available for {name}"));
+            }
+        }
+        if encode.ten_bit == crate::transcode::TenBit::Twelve
+            && encode.encoder != crate::transcode::VideoEncoder::X265
+        {
+            warnings.push("12-bit output is only available with x265".to_owned());
+        }
+        if encode.tone_map_to_sdr
+            && encode.tone_map_operator == crate::transcode::ToneMapOperator::Bt2390
+        {
+            warnings.push(
+                "The BT.2390 tone-map operator needs FFmpeg's libplacebo filter and a Vulkan device"
+                    .to_owned(),
+            );
+        }
+        if !encode.tone_map_to_sdr
+            && encode.ten_bit == crate::transcode::TenBit::Off
+            && metadata.video.as_ref().is_some_and(|video| video.hdr)
+        {
+            warnings.push("8-bit output of HDR video will show banding".to_owned());
         }
     }
     warnings
