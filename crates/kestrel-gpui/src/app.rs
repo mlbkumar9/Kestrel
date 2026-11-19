@@ -926,12 +926,23 @@ impl Kestrel {
         );
         let folder = PathBuf::from(self.form.folder.trim());
         let single = !self.form.apply_to_all;
+        // The title field is seeded from the current source's file name. When applying to
+        // several sources an untouched title follows each file instead of copying that name.
+        let seeded_title = self
+            .library
+            .current_source()
+            .and_then(|source| source.path.file_stem())
+            .map(|stem| stem.to_string_lossy().into_owned());
         let mut count = 0;
         for (path, meta) in targets {
             let stem = path
                 .file_stem()
                 .map(|stem| stem.to_string_lossy().into_owned())
                 .unwrap_or_default();
+            let mut settings = settings.clone();
+            if !single && settings.title == seeded_title {
+                settings.title = Some(stem.clone());
+            }
             let name = if single && !self.form.save_as.trim().is_empty() {
                 self.form.save_as.trim().to_owned()
             } else {
@@ -949,7 +960,7 @@ impl Kestrel {
                 path,
                 output,
                 JobKind::Transcode,
-                settings.clone(),
+                settings,
                 meta,
                 summary.clone(),
             );
