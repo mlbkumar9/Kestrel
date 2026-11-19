@@ -178,14 +178,13 @@ pub fn job_warnings(metadata: &MediaMetadata, settings: &JobSettings) -> Vec<Str
         warnings.push("Subtitle burn-in needs the video to be re-encoded".to_owned());
     }
 
-    if settings.audio.tracks.is_empty() {
-        if !mkv::normalize_languages(&settings.audio.languages).is_empty()
-            && !metadata.audio_tracks.is_empty()
-            && settings.audio.selection == crate::transcode::TrackSelection::AllMatching
-            && mkv::matching_tracks(&metadata.audio_tracks, &settings.audio.languages).is_empty()
-        {
-            warnings.push("No matching audio languages found; keeping all audio tracks".to_owned());
-        }
+    if settings.audio.tracks.is_empty()
+        && !mkv::normalize_languages(&settings.audio.languages).is_empty()
+        && !metadata.audio_tracks.is_empty()
+        && settings.audio.selection == crate::transcode::TrackSelection::AllMatching
+        && mkv::matching_tracks(&metadata.audio_tracks, &settings.audio.languages).is_empty()
+    {
+        warnings.push("No matching audio languages found; keeping all audio tracks".to_owned());
     }
     if let Err(error) = crate::transcode::audio::plan_audio(metadata, settings) {
         warnings.push(error);
