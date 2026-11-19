@@ -87,6 +87,7 @@ pub enum VideoEncoder {
     X264,
     X265,
     SvtAv1,
+    AomAv1,
     Vp9,
     Hardware {
         vendor: HwVendor,
@@ -345,6 +346,43 @@ pub fn video_filter_chain(
     Ok(filters)
 }
 
+/// Resolves unavailable video encoders without changing the requested codec family.
+pub fn resolve_job_settings(
+    settings: &JobSettings,
+    encoders: &EncoderSet,
+) -> Result<JobSettings, String> {
+    let mut settings = settings.clone();
+    if let VideoSettings::Encode(encode) = &mut settings.video {
+        encode.encoder = encoders.resolve(&encode.encoder)?;
+    }
+    Ok(settings)
+}
+
+impl VideoEncoder {
+    /// Codec family shared by interchangeable software and hardware encoders.
+    pub fn codec_family(&self) -> &'static str {
+        match self {
+            Self::X264
+            | Self::Hardware {
+                codec: HwCodec::H264,
+                ..
+            } => "H.264",
+            Self::X265
+            | Self::Hardware {
+                codec: HwCodec::Hevc,
+                ..
+            } => "HEVC",
+            Self::SvtAv1
+            | Self::AomAv1
+            | Self::Hardware {
+                codec: HwCodec::Av1,
+                ..
+            } => "AV1",
+            Self::Vp9 => "VP9",
+        }
+    }
+}
+
 pub fn build_ffmpeg_job_arguments(
     input: &Path,
     output_tmp: &Path,
@@ -353,6 +391,8 @@ pub fn build_ffmpeg_job_arguments(
     encoders: &EncoderSet,
     text_burn_in_file: Option<&str>,
 ) -> Result<Vec<OsString>, String> {
+    let resolved_settings = resolve_job_settings(settings, encoders)?;
+    let settings = &resolved_settings;
     let audio_tracks = selected_audio_tracks(metadata, settings);
     let subtitles = if settings.subtitles.include {
         selected_subtitle_tracks(metadata, settings)
@@ -628,6 +668,7 @@ pub fn video_encoder_name_for_detection(encoder: &VideoEncoder) -> &'static str 
         VideoEncoder::X264 => "libx264",
         VideoEncoder::X265 => "libx265",
         VideoEncoder::SvtAv1 => "libsvtav1",
+        VideoEncoder::AomAv1 => "libaom-av1",
         VideoEncoder::Vp9 => "libvpx-vp9",
         VideoEncoder::Hardware { vendor, codec } => match (codec, vendor) {
             (HwCodec::H264, HwVendor::Nvenc) => "h264_nvenc",
@@ -663,6 +704,10 @@ fn append_video_rate_arguments(
                 }
                 VideoEncoder::SvtAv1 => {
                     push_pair(arguments, "-crf", quality_value(*quality, 50, 18));
+                }
+                VideoEncoder::AomAv1 => {
+                    push_pair(arguments, "-crf", quality_value(*quality, 50, 18));
+                    push_pair(arguments, "-b:v", "0");
                 }
                 VideoEncoder::Vp9 => {
                     push_pair(arguments, "-crf", quality_value(*quality, 50, 15));
@@ -700,7 +745,10 @@ fn append_video_rate_arguments(
         }
         RateControl::Bitrate(bitrate) => {
             push_pair(arguments, "-b:v", format!("{bitrate}k"));
-            if !matches!(encoder, VideoEncoder::Vp9 | VideoEncoder::SvtAv1) {
+            if !matches!(
+                encoder,
+                VideoEncoder::Vp9 | VideoEncoder::SvtAv1 | VideoEncoder::AomAv1
+            ) {
                 push_pair(
                     arguments,
                     "-maxrate",
@@ -728,6 +776,10 @@ fn append_video_speed_arguments(arguments: &mut Vec<OsString>, encoder: &VideoEn
         }
         VideoEncoder::SvtAv1 => {
             push_pair(arguments, "-preset", [4, 6, 8, 10, 12][speed].to_string());
+        }
+        VideoEncoder::AomAv1 => {
+            push_pair(arguments, "-cpu-used", [4, 5, 6, 7, 8][speed].to_string());
+            push_pair(arguments, "-row-mt", "1");
         }
         VideoEncoder::Vp9 => {
             push_pair(arguments, "-deadline", "good");
@@ -762,7 +814,7 @@ fn quality_value(quality: u8, worst: u32, best: u32) -> String {
 pub fn quality_control_label(encoder: &VideoEncoder, quality: u8) -> String {
     let (name, value) = match encoder {
         VideoEncoder::X264 | VideoEncoder::X265 => ("CRF", quality_value(quality, 30, 14)),
-        VideoEncoder::SvtAv1 => ("CRF", quality_value(quality, 50, 18)),
+        VideoEncoder::SvtAv1 | VideoEncoder::AomAv1 => ("CRF", quality_value(quality, 50, 18)),
         VideoEncoder::Vp9 => ("CRF", quality_value(quality, 50, 15)),
         VideoEncoder::Hardware { vendor, .. } => match vendor {
             HwVendor::Nvenc => ("CQ", quality_value(quality, 35, 16)),
@@ -1171,5 +1223,20 @@ mod tests {
         );
         assert!(args.windows(2).any(|pair| pair == ["-map", "0:3"]));
         assert!(!args.windows(2).any(|pair| pair == ["-map", "0:4"]));
+    }
+}
+
+#[cfg(test)]
+mod aom_tests {
+    use super::*;
+    #[test]
+    fn aom_quality_and_speed_use_supported_ffmpeg_options() {
+        let mut args = Vec::new();
+        append_video_rate_arguments(&mut args, &VideoEncoder::AomAv1, &RateControl::Quality(65));
+        append_video_speed_arguments(&mut args, &VideoEncoder::AomAv1, 1);
+        assert_eq!(
+            args,
+            ["-crf", "29", "-b:v", "0", "-cpu-used", "5", "-row-mt", "1"].map(OsString::from)
+        );
     }
 }
