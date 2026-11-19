@@ -1,3 +1,6 @@
+/// Callback invoked after an event is sent to wake the host event loop.
+pub type EventNotifier = std::sync::Arc<dyn Fn() + Send + Sync>;
+
 use crate::encoders::EncoderSet;
 use crate::formats::Container;
 use crate::inputs::ExistingPolicy;
@@ -5,7 +8,6 @@ use crate::mkv::{self, AvailableLanguages, BatchStats, FileInfo, MediaMetadata};
 use crate::subtitles::{absolute_path, prepare_text_subtitle};
 use crate::tools::{self, Toolchain};
 use crate::transcode::{JobSettings, build_ffmpeg_job_arguments};
-use eframe::egui;
 use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
 use std::fs::OpenOptions;
@@ -43,6 +45,7 @@ pub enum FileStatus {
     Cancelled,
 }
 
+/// Scan and queue updates delivered to the caller over its event channel.
 pub enum WorkerEvent {
     ScanFiles {
         directory: PathBuf,
@@ -138,6 +141,7 @@ pub struct BatchSpec {
 }
 
 #[derive(Clone)]
+/// One queue job, including source metadata and an independent settings snapshot.
 pub struct JobSpec {
     pub id: u64,
     pub input: PathBuf,
@@ -147,6 +151,7 @@ pub struct JobSpec {
 }
 
 #[derive(Clone)]
+/// Ordered jobs and execution policies shared by one queue run.
 pub struct QueueSpec {
     pub jobs: Vec<JobSpec>,
     pub tools: Toolchain,
@@ -161,9 +166,9 @@ enum ProcessOutcome {
     Warnings(WarningSummary),
 }
 
-fn send(sender: &mpsc::Sender<WorkerEvent>, ctx: &egui::Context, event: WorkerEvent) {
+fn send(sender: &mpsc::Sender<WorkerEvent>, ctx: &EventNotifier, event: WorkerEvent) {
     if sender.send(event).is_ok() {
-        ctx.request_repaint();
+        ctx();
     }
 }
 
@@ -171,7 +176,7 @@ pub fn scan_directory(
     directory: PathBuf,
     tools: Toolchain,
     sender: mpsc::Sender<WorkerEvent>,
-    ctx: egui::Context,
+    ctx: EventNotifier,
 ) {
     std::thread::spawn(move || {
         let mut files = match mkv::scan_directory(&directory) {
@@ -230,7 +235,7 @@ pub fn start_batch(
     spec: BatchSpec,
     control: WorkerControl,
     sender: mpsc::Sender<WorkerEvent>,
-    ctx: egui::Context,
+    ctx: EventNotifier,
 ) {
     control.reset();
     std::thread::spawn(move || {
@@ -443,7 +448,7 @@ fn mark_cancelled(
     start: usize,
     file_count: usize,
     sender: &mpsc::Sender<WorkerEvent>,
-    ctx: &egui::Context,
+    ctx: &EventNotifier,
 ) {
     for index in start..file_count {
         send(
@@ -459,19 +464,21 @@ fn mark_cancelled(
     }
 }
 
+/// Starts a queue on a worker thread and notifies the host after each progress event.
 pub fn start_queue(
     spec: QueueSpec,
     control: WorkerControl,
     sender: mpsc::Sender<WorkerEvent>,
-    ctx: egui::Context,
+    ctx: EventNotifier,
 ) {
     control.reset();
     std::thread::spawn(move || run_queue(spec, control, sender, ctx));
 }
 
+/// Runs a queue on the calling thread and collects all emitted events.
 pub fn run_queue_blocking(spec: QueueSpec) -> Vec<WorkerEvent> {
     let (sender, receiver) = mpsc::channel();
-    let context = egui::Context::default();
+    let context: EventNotifier = std::sync::Arc::new(|| {});
     run_queue(spec, WorkerControl::default(), sender, context);
     receiver.into_iter().collect()
 }
@@ -480,7 +487,7 @@ fn run_queue(
     spec: QueueSpec,
     control: WorkerControl,
     sender: mpsc::Sender<WorkerEvent>,
-    ctx: egui::Context,
+    ctx: EventNotifier,
 ) {
     let started = Instant::now();
     send(
@@ -651,7 +658,7 @@ fn run_queue(
 
 fn queue_update(
     sender: &mpsc::Sender<WorkerEvent>,
-    ctx: &egui::Context,
+    ctx: &EventNotifier,
     job_id: u64,
     status: FileStatus,
     percent: u32,
@@ -697,7 +704,7 @@ fn process_queue_job(
     spec: &QueueSpec,
     control: &WorkerControl,
     sender: &mpsc::Sender<WorkerEvent>,
-    ctx: &egui::Context,
+    ctx: &EventNotifier,
 ) -> Result<ProcessOutcome, String> {
     let prepared_text_subtitle =
         crate::transcode::selected_burn_in_subtitle(&job.metadata, &job.settings)
@@ -1033,7 +1040,7 @@ fn process_file(
     spec: &BatchSpec,
     control: &WorkerControl,
     sender: &mpsc::Sender<WorkerEvent>,
-    ctx: &egui::Context,
+    ctx: &EventNotifier,
 ) -> Result<ProcessOutcome, String> {
     if control.is_cancelled() {
         return Err("Stopped by user".to_owned());
@@ -1295,7 +1302,7 @@ fn drain_progress<R: std::io::Read>(
     reader: R,
     index: usize,
     sender: &mpsc::Sender<WorkerEvent>,
-    ctx: &egui::Context,
+    ctx: &EventNotifier,
     collect_errors: bool,
     progress_mode: ProgressMode,
     warnings: Arc<Mutex<WarningSummary>>,

@@ -1,12 +1,12 @@
 use super::widgets;
 use crate::app::{KestrelApp, SettingsTab};
-use crate::presets::{self, Preset};
 use crate::theme;
-use crate::transcode::{
+use eframe::egui::{self, Align, ComboBox, Frame, Layout, RichText, ScrollArea, Slider, Stroke};
+use kestrel_core::presets::{self, Preset};
+use kestrel_core::transcode::{
     AudioChoice, BurnIn, Crop, Deinterlace, Denoise, FrameRate, HwCodec, HwVendor, Mixdown,
     RateControl, TenBit, VideoEncode, VideoEncoder, VideoSettings,
 };
-use eframe::egui::{self, Align, ComboBox, Frame, Layout, RichText, ScrollArea, Slider, Stroke};
 
 pub fn show(app: &mut KestrelApp, ui: &mut egui::Ui) {
     if app.preview_source.is_none()
@@ -292,7 +292,8 @@ fn summary(app: &mut KestrelApp, ui: &mut egui::Ui) {
     );
     let target = app.output_target_for(&selected);
     let target_path = match target {
-        crate::inputs::OutputTarget::File(path) | crate::inputs::OutputTarget::Folder(path) => path,
+        kestrel_core::inputs::OutputTarget::File(path)
+        | kestrel_core::inputs::OutputTarget::Folder(path) => path,
     };
     let target_name = target_path
         .file_name()
@@ -314,7 +315,7 @@ fn summary(app: &mut KestrelApp, ui: &mut egui::Ui) {
             .get(index)
             .and_then(|source| source.info.metadata.as_ref())
         {
-            for warning in crate::compat::job_warnings(metadata, &settings) {
+            for warning in kestrel_core::compat::job_warnings(metadata, &settings) {
                 warning_sources
                     .entry(warning)
                     .or_default()
@@ -516,7 +517,7 @@ fn video_settings(app: &mut KestrelApp, ui: &mut egui::Ui) {
                     });
                     ui.label("Better quality");
                     ui.label(
-                        RichText::new(crate::transcode::quality_control_label(
+                        RichText::new(kestrel_core::transcode::quality_control_label(
                             &encode.encoder,
                             *quality,
                         ))
@@ -955,12 +956,12 @@ fn metadata_settings(app: &mut KestrelApp, ui: &mut egui::Ui) {
                     .show_ui(ui, |ui| {
                         ui.selectable_value(
                             &mut app.preferences.remux_engine,
-                            crate::worker::RemuxEngine::MkvToolNix,
+                            kestrel_core::worker::RemuxEngine::MkvToolNix,
                             "MKVToolNix",
                         );
                         ui.selectable_value(
                             &mut app.preferences.remux_engine,
-                            crate::worker::RemuxEngine::Ffmpeg,
+                            kestrel_core::worker::RemuxEngine::Ffmpeg,
                             "FFmpeg",
                         );
                     });

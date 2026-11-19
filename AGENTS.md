@@ -2,8 +2,8 @@
 
 ## Project layout
 
-- `crates/kestrel-app/` is the Kestrel desktop application: an eframe/egui Rust app with the remux worker and unit tests.
-- `crates/kestrel-core/` is the placeholder for the UI-independent engine.
+- `crates/kestrel-app/` is the Kestrel desktop application: the eframe/egui UI and eframe storage adapter.
+- `crates/kestrel-core/` is the UI-independent engine, persisted settings, workers, unit tests and integration fixtures.
 - `crates/kestrel-gpui/` is the GPUI desktop shell with local widgets and themes.
 - `REMUX_Tauri/` is the existing Tauri + React desktop app.
 - `REMUX Python Scripts/` contains the Tkinter, CustomTkinter, CLI, and Flask entrypoints.
@@ -44,9 +44,9 @@ supported until phase 4 removes egui.
 ## Conventions and gotchas
 
 - Keep UI work on the eframe thread. Run scans and remux batches on `std::thread` workers and send events over `std::sync::mpsc`; do not add an async runtime or continuous idle repainting.
-- Discover `mkvmerge`, `ffmpeg`, and `ffprobe` through `crates/kestrel-app/src/tools.rs`: executable-adjacent bundles, PATH, then platform defaults. Keep tool version probing and Windows process creation there.
-- Keep MKVToolNix and FFmpeg stream-copy behavior in `crates/kestrel-app/src/mkv.rs`; use FFprobe metadata when `mkvmerge -J` fails, preserving both MKVToolNix IDs and FFmpeg stream indices.
+- Discover `mkvmerge`, `ffmpeg`, and `ffprobe` through `crates/kestrel-core/src/tools.rs`: executable-adjacent bundles, PATH, then platform defaults. Keep tool version probing and Windows process creation there.
+- Keep MKVToolNix and FFmpeg stream-copy behavior in `crates/kestrel-core/src/mkv.rs`; use FFprobe metadata when `mkvmerge -J` fails, preserving both MKVToolNix IDs and FFmpeg stream indices.
 - Windows child processes must use `CREATE_NO_WINDOW` (`0x08000000`) through `std::os::windows::process::CommandExt`.
-- Persist the selected remux engine and other user preferences through eframe storage. Keep scans/remux work on `std::thread` workers and report progress over the event channel.
+- Persist preferences through the core storage trait; the egui app adapts eframe storage. Keep core free of UI dependencies. Keep scans/remux work on `std::thread` workers and report progress over the event channel.
 - Release packaging is defined by `.github/workflows/release.yml` and `scripts/package-windows.ps1` / `scripts/package-unix.sh`; Windows packages bundle licensed FFmpeg and MKVToolNix tools, while macOS/Linux use system tools.
 - Keep track selection and path/argument rules covered by unit tests and JSON fixtures. Keep build output under ignored `target/` directories and screenshots outside the repository.
