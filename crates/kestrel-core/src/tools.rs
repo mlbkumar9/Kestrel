@@ -22,10 +22,11 @@ impl Priority {
         }
     }
 
-    /// Windows priority class creation flag; 0 keeps the normal class.
+    /// Windows priority class creation flag. Normal is named explicitly: with no class flag a
+    /// child inherits a below-normal or idle class from its parent.
     pub fn windows_class_flag(self) -> u32 {
         match self {
-            Self::Normal => 0,
+            Self::Normal => 0x0000_0020,
             Self::BelowNormal => 0x0000_4000,
             Self::Low => 0x0000_0040,
         }
@@ -310,7 +311,7 @@ mod priority_tests {
         assert_eq!(Priority::from_index(1), Priority::BelowNormal);
         assert_eq!(Priority::from_index(2), Priority::Low);
         assert_eq!(Priority::from_index(9), Priority::Normal);
-        assert_eq!(Priority::Normal.windows_class_flag(), 0);
+        assert_eq!(Priority::Normal.windows_class_flag(), 0x20);
         assert_eq!(Priority::BelowNormal.windows_class_flag(), 0x4000);
         assert_eq!(Priority::Low.windows_class_flag(), 0x40);
         assert_eq!(Priority::Normal.nice_increment(), None);
@@ -343,13 +344,15 @@ mod priority_tests {
         }
     }
 
-    /// `nice` with no command prints the niceness it runs at.
+    /// Asks the started shell for its own niceness (`ps` reads it the same way on Linux and
+    /// macOS; BSD `nice` with no command prints nothing).
     #[cfg(unix)]
     #[test]
     fn spawned_process_runs_at_the_requested_niceness() {
         for (priority, expected) in [(Priority::BelowNormal, "5"), (Priority::Low, "15")] {
-            let mut command = command_with_priority(Path::new("nice"), priority);
-            let output = command.output().expect("nice runs");
+            let mut command = command_with_priority(Path::new("sh"), priority);
+            command.args(["-c", "ps -o ni= -p $$"]);
+            let output = command.output().expect("sh runs");
             assert_eq!(
                 String::from_utf8_lossy(&output.stdout).trim(),
                 expected,
