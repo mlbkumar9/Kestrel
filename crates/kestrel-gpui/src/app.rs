@@ -21,14 +21,16 @@ use kestrel_core::transcode::{self, Crop, JobResources, VideoSettings};
 use kestrel_core::worker::{self, JobSpec, QueueSpec, WorkerControl, WorkerEvent};
 
 use crate::actions::{
-    AddFiles, AddToQueue, Dismiss, GoActivity, GoLibrary, GoMetrics, GoQueue, GoRemux, GoTranscode,
-    OpenPalette, PaletteDown, PaletteUp,
+    AddFiles, AddToQueue, Dismiss, GoActivity, GoBack, GoForward, GoLibrary, GoMetrics, GoQueue,
+    GoRemux, GoTranscode, OpenPalette, PaletteDown, PaletteUp, ToggleSidebar,
 };
 use crate::palette::{Command, PaletteState};
 use crate::state::activity::{ActivityLog, Level};
 use crate::state::library::{Library, Probe};
+use crate::state::nav::NavHistory;
 use crate::state::persist::{Persistence, RemuxPrefs, Restored, View};
 use crate::state::probe::{chapter_names_from_csv, read_chapters};
+use crate::state::queue::QueueSummary;
 use crate::state::queue::{JobKind, QueueState};
 use crate::state::remux::{AddedFile, AddedKind, RemuxState, core_track_edits};
 use crate::state::storage::SettingsPaths;
@@ -137,6 +139,9 @@ pub struct Kestrel {
     pub appearance: Appearance,
     pub system_light: bool,
     pub collapsed: bool,
+    pub nav: NavHistory,
+    /// Result of the last finished queue run and when it ended, for the top bar pill.
+    pub queue_done: Option<(std::time::Instant, QueueSummary)>,
     pub tools: Toolchain,
     pub encoders: Option<EncoderSet>,
     /// Why the last encoder detection failed, shown in Settings and on jobs that need an encoder.
@@ -209,6 +214,8 @@ impl Kestrel {
             appearance,
             system_light,
             collapsed: false,
+            nav: NavHistory::new(debug.page.unwrap_or_default()),
+            queue_done: None,
             tools,
             encoders: None,
             encoder_error: None,
@@ -389,9 +396,35 @@ impl Kestrel {
     }
 
     pub fn go(&mut self, page: Page, cx: &mut Context<Self>) {
+        self.nav.push(page);
+        self.show_page(page, cx);
+    }
+
+    pub fn go_back(&mut self, cx: &mut Context<Self>) {
+        if let Some(page) = self.nav.back() {
+            self.show_page(page, cx);
+        }
+    }
+
+    pub fn go_forward(&mut self, cx: &mut Context<Self>) {
+        if let Some(page) = self.nav.forward() {
+            self.show_page(page, cx);
+        }
+    }
+
+    fn show_page(&mut self, page: Page, cx: &mut Context<Self>) {
+        // Opening or leaving Activity counts as having seen what it shows.
+        if page == Page::Activity || self.page == Page::Activity {
+            self.activity.mark_read();
+        }
         self.page = page;
         self.open_menu = None;
         self.palette = None;
+        cx.notify();
+    }
+
+    pub fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
+        self.collapsed = !self.collapsed;
         cx.notify();
     }
 
@@ -601,6 +634,17 @@ impl Kestrel {
             };
             self.activity.push(Level::Done, text.clone(), None);
             self.worker_rx = None;
+            let summary = self.queue.summary();
+            if !cancelled || summary.failed > 0 {
+                self.queue_done = Some((std::time::Instant::now(), summary));
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor()
+                        .timer(Duration::from_secs(crate::shell::DONE_PILL_SECONDS))
+                        .await;
+                    this.update(cx, |_, cx| cx.notify()).ok();
+                })
+                .detach();
+            }
             if self.settings.notify_when_done || self.queue.when_done == 1 {
                 self.toast(text, TagKind::Ok, cx);
             }
@@ -1167,6 +1211,7 @@ impl Kestrel {
         let (sender, receiver) = mpsc::channel();
         self.worker_rx = Some(receiver);
         self.queue.begin_run();
+        self.queue_done = None;
         worker::start_queue(spec, self.control.clone(), sender, Arc::new(|| {}));
         self.ensure_poller(cx);
         cx.notify();
@@ -1487,6 +1532,7 @@ impl Render for Kestrel {
         div()
             .relative()
             .flex()
+            .flex_col()
             .size_full()
             .overflow_hidden()
             .font_family("Inter")
@@ -1509,6 +1555,17 @@ impl Render for Kestrel {
             .on_action(cx.listener(|this, _: &GoQueue, _, cx| this.go(Page::Queue, cx)))
             .on_action(cx.listener(|this, _: &GoActivity, _, cx| this.go(Page::Activity, cx)))
             .on_action(cx.listener(|this, _: &GoMetrics, _, cx| this.go(Page::Metrics, cx)))
+            .on_action(cx.listener(|this, _: &GoBack, _, cx| this.go_back(cx)))
+            .on_action(cx.listener(|this, _: &GoForward, _, cx| this.go_forward(cx)))
+            .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_sidebar(cx)))
+            .on_mouse_down(
+                MouseButton::Navigate(gpui::NavigationDirection::Back),
+                cx.listener(|this, _, _, cx| this.go_back(cx)),
+            )
+            .on_mouse_down(
+                MouseButton::Navigate(gpui::NavigationDirection::Forward),
+                cx.listener(|this, _, _, cx| this.go_forward(cx)),
+            )
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
@@ -1521,29 +1578,36 @@ impl Render for Kestrel {
             .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
                 this.add_paths(paths.paths().to_vec(), cx);
             }))
-            .child(sidebar)
+            .child(header)
             .child(
                 div()
                     .flex()
-                    .flex_col()
                     .flex_1()
-                    .min_w_0()
-                    .h_full()
-                    .bg(t.bg)
-                    .child(header)
-                    .children(banners)
-                    // The focus handle lives below the title bar: an ancestor that tracks focus calls
-                    // `prevent_default` on every mouse down, and the window then ignores clicks and
-                    // drags on the title bar buttons and drag regions.
+                    .min_h_0()
+                    .w_full()
+                    .child(sidebar)
                     .child(
                         div()
                             .flex()
+                            .flex_col()
                             .flex_1()
-                            .min_h_0()
-                            .track_focus(&self.focus)
-                            .child(page),
-                    )
-                    .child(footer),
+                            .min_w_0()
+                            .h_full()
+                            .bg(t.bg)
+                            .children(banners)
+                            // The focus handle lives below the title bar: an ancestor that tracks focus calls
+                            // `prevent_default` on every mouse down, and the window then ignores clicks and
+                            // drags on the title bar buttons and drag regions.
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_1()
+                                    .min_h_0()
+                                    .track_focus(&self.focus)
+                                    .child(page),
+                            )
+                            .child(footer),
+                    ),
             )
             .children(palette)
             .children(save_dialog)

@@ -17,6 +17,9 @@ use crate::widgets::{BtnKind, TagKind, button, card, dot, icon, kbd, label, tag}
 const SIDEBAR_WIDTH: f32 = 236.0;
 const SIDEBAR_COLLAPSED: f32 = 60.0;
 const HEADER_HEIGHT: f32 = 52.0;
+/// How long the queue pill shows "Done" after a clean run.
+pub const DONE_PILL_SECONDS: u64 = 10;
+const BAR_BUTTON: f32 = 30.0;
 const CAPTION_BUTTON_WIDTH: f32 = 46.0;
 /// macOS keeps its native traffic lights, drawn over the left of the sidebar header.
 const MAC_TRAFFIC_LIGHTS: bool = cfg!(target_os = "macos");
@@ -129,62 +132,6 @@ impl Kestrel {
         let collapsed = self.collapsed;
         let queue_badge = self.queue.active_count();
         let library_count = self.library.sources.len();
-
-        let mark = gpui::img(gpui::ImageSource::Resource(gpui::Resource::Embedded(
-            if t.light {
-                crate::assets::LOGO_LIGHT
-            } else {
-                crate::assets::LOGO
-            }
-            .into(),
-        )))
-        .flex_none()
-        .size(px(22.0))
-        .object_fit(gpui::ObjectFit::Contain);
-        // Same height as the header row; its bottom line continues across the header.
-        let logo_row =
-            div()
-                .id("sidebar-logo")
-                .window_control_area(WindowControlArea::Drag)
-                .flex()
-                .flex_none()
-                .items_center()
-                .gap(px(10.0))
-                .h(px(HEADER_HEIGHT))
-                .mx(px(-10.0))
-                .px(px(18.0))
-                .mb(px(14.0))
-                .border_b_1()
-                .border_color(t.line)
-                .when(MAC_TRAFFIC_LIGHTS && !collapsed, |this| this.pl(px(78.0)))
-                .when(collapsed, |this| this.justify_center().px(px(0.0)))
-                .when(MAC_TRAFFIC_LIGHTS && collapsed, |this| this.opacity(0.0))
-                .child(mark)
-                .when(!collapsed, |this| {
-                    this.child(
-                        div()
-                            .text_size(px(15.0))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("Kestrel"),
-                    )
-                    .child(div().flex_1().flex().justify_end().child(tag(
-                        "4.0",
-                        TagKind::Plain,
-                        &t,
-                    )))
-                });
-
-        let search = button("open-palette", &t, BtnKind::Default, false)
-            .w_full()
-            .justify_start()
-            .mb(px(14.0))
-            .when(collapsed, |this| this.justify_center().px(px(0.0)))
-            .child(icon("search", 14.0, t.muted))
-            .when(!collapsed, |this| {
-                this.child(div().text_color(t.muted).child("Search or run..."))
-                    .child(div().flex_1().flex().justify_end().child(kbd("Ctrl K", &t)))
-            })
-            .on_click(cx.listener(|this, _, window, cx| this.open_palette(window, cx)));
 
         let nav = div()
             .flex()
@@ -348,9 +295,8 @@ impl Kestrel {
             .border_r_1()
             .border_color(t.line)
             .px(px(10.0))
+            .pt(px(12.0))
             .pb(px(10.0))
-            .child(logo_row)
-            .child(search)
             .child(nav)
             .when(!collapsed, |this| {
                 this.child(
@@ -430,69 +376,405 @@ impl Kestrel {
             .into_any_element()
     }
 
+    /// Icon-only button for the top bar. A disabled one is dimmed and ignores clicks.
+    fn bar_icon_button(
+        &self,
+        id: &'static str,
+        glyph: &'static str,
+        tip: &'static str,
+        enabled: bool,
+    ) -> Stateful<Div> {
+        let t = self.theme();
+        div()
+            .id(id)
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .size(px(BAR_BUTTON))
+            .rounded(px(7.0))
+            .when(enabled, |this| {
+                this.cursor_pointer()
+                    .hover(move |s| s.bg(t.hover))
+                    .tooltip(tooltip(tip))
+            })
+            .child(icon(glyph, 15.0, if enabled { t.muted } else { t.faint }))
+            .when(!enabled, |this| this.opacity(0.45))
+    }
+
+    /// Live queue status: progress while running or paused, then "Done" or "N failed".
+    /// `compact` drops the file name and ETA so the bar fits a narrow window.
+    fn queue_pill(&self, compact: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let t = self.theme();
+        let pill = div()
+            .flex()
+            .flex_shrink()
+            .min_w_0()
+            .items_center()
+            .h(px(BAR_BUTTON))
+            .rounded(px(8.0))
+            .border_1()
+            .border_color(t.line2)
+            .bg(t.raised)
+            .overflow_hidden();
+        let body = |id: &'static str| {
+            div()
+                .id(id)
+                .flex()
+                .flex_shrink()
+                .min_w_0()
+                .overflow_hidden()
+                .items_center()
+                .h_full()
+                .gap(px(8.0))
+                .px(px(10.0))
+                .text_size(px(12.0))
+                .cursor_pointer()
+                .hover(move |s| s.bg(t.hover))
+        };
+        let mono = |text: String, color: Rgba| {
+            div()
+                .flex_none()
+                .font_family(crate::widgets::MONO)
+                .text_size(px(11.0))
+                .text_color(color)
+                .child(text)
+        };
+        if self.queue.running {
+            let paused = self.queue.paused;
+            let percent = self.queue.current().map_or(0, |job| job.percent.min(100));
+            let name = self
+                .queue
+                .current()
+                .map_or_else(|| "Preparing".to_owned(), |job| job.name.clone());
+            let color = if paused { t.warn } else { t.accent };
+            let eta = if paused {
+                "Paused".to_owned()
+            } else {
+                self.queue
+                    .live
+                    .eta_seconds
+                    .map_or_else(String::new, |eta| format!("ETA {}", format_clock(eta)))
+            };
+            let bar = div()
+                .flex_none()
+                .w(px(40.0))
+                .h(px(4.0))
+                .rounded_full()
+                .bg(t.line2)
+                .child(
+                    div()
+                        .h_full()
+                        .rounded_full()
+                        .bg(color)
+                        .w(gpui::relative(f32::from(percent as u16) / 100.0)),
+                );
+            return Some(
+                pill.child(
+                    body("queue-pill")
+                        .tooltip(tooltip("Open the queue (Ctrl+4)"))
+                        .child(bar)
+                        .when(!compact, |this| {
+                            this.child(
+                                div()
+                                    .flex_shrink()
+                                    .min_w_0()
+                                    .max_w(px(120.0))
+                                    .truncate()
+                                    .text_color(t.text)
+                                    .child(name),
+                            )
+                        })
+                        .child(mono(format!("{percent}%"), t.muted))
+                        .when(!compact && !eta.is_empty(), |this| {
+                            this.child(mono(eta, t.faint))
+                        })
+                        .on_click(cx.listener(|this, _, _, cx| this.go(Page::Queue, cx))),
+                )
+                .child(
+                    div()
+                        .id("queue-pill-pause")
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .h_full()
+                        .w(px(30.0))
+                        .border_l_1()
+                        .border_color(t.line2)
+                        .cursor_pointer()
+                        .hover(move |s| s.bg(t.hover))
+                        .tooltip(tooltip(if paused {
+                            "Resume the queue"
+                        } else {
+                            "Pause the queue"
+                        }))
+                        .child(icon(if paused { "play" } else { "pause" }, 12.0, t.text))
+                        .on_click(cx.listener(|this, _, _, cx| this.toggle_pause(cx))),
+                )
+                .into_any_element(),
+            );
+        }
+        let (finished, summary) = self.queue_done?;
+        if summary.failed > 0 {
+            return Some(
+                pill.border_color(t.bad)
+                    .bg(t.bad_soft)
+                    .child(
+                        body("queue-pill-failed")
+                            .tooltip(tooltip("Show the failures in Activity"))
+                            .child(icon("alert", 13.0, t.bad))
+                            .child(
+                                div()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(t.bad)
+                                    .child(format!("{} failed", summary.failed)),
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.queue_done = None;
+                                this.go(Page::Activity, cx);
+                            })),
+                    )
+                    .into_any_element(),
+            );
+        }
+        if finished.elapsed().as_secs() >= DONE_PILL_SECONDS {
+            return None;
+        }
+        let noun = if summary.done == 1 { "file" } else { "files" };
+        Some(
+            pill.child(
+                body("queue-pill-done")
+                    .tooltip(tooltip("Open the queue (Ctrl+4)"))
+                    .child(icon("check", 13.0, t.ok))
+                    .child(
+                        div()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(t.ok)
+                            .child(format!("Done \u{b7} {} {noun}", summary.done)),
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| this.go(Page::Queue, cx))),
+            )
+            .into_any_element(),
+        )
+    }
+
     pub fn render_header(&mut self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme();
         let captions = (!MAC_TRAFFIC_LIGHTS).then(|| self.caption_buttons(window, cx));
-        // The breadcrumb is the drag area. Controls sit beside it, not inside, so the
-        // platform hit test finds each button rather than the drag region.
-        let drag = div()
-            .id("header-drag")
-            .window_control_area(WindowControlArea::Drag)
+        // Drag regions are siblings of the controls, never their parents: the platform hit
+        // test returns the first control area under the pointer, so a drag parent would
+        // swallow every button.
+        let drag = |id: &'static str| {
+            div()
+                .id(id)
+                .window_control_area(WindowControlArea::Drag)
+                .h_full()
+        };
+        let mark = gpui::img(gpui::ImageSource::Resource(gpui::Resource::Embedded(
+            if t.light {
+                crate::assets::LOGO_LIGHT
+            } else {
+                crate::assets::LOGO
+            }
+            .into(),
+        )))
+        .flex_none()
+        .size(px(20.0))
+        .object_fit(gpui::ObjectFit::Contain);
+        let can_back = self.nav.can_back();
+        let can_forward = self.nav.can_forward();
+        let back = self
+            .bar_icon_button("nav-back", "arrow-left", "Back (Alt+Left)", can_back)
+            .when(can_back, |this| {
+                this.on_click(cx.listener(|this, _, _, cx| this.go_back(cx)))
+            });
+        let forward = self
+            .bar_icon_button(
+                "nav-forward",
+                "arrow-right",
+                "Forward (Alt+Right)",
+                can_forward,
+            )
+            .when(can_forward, |this| {
+                this.on_click(cx.listener(|this, _, _, cx| this.go_forward(cx)))
+            });
+        let sidebar_toggle = self
+            .bar_icon_button(
+                "toggle-sidebar",
+                "panel-left",
+                if self.collapsed {
+                    "Show sidebar (Ctrl+B)"
+                } else {
+                    "Hide sidebar (Ctrl+B)"
+                },
+                true,
+            )
+            .on_click(cx.listener(|this, _, _, cx| this.toggle_sidebar(cx)));
+        let breadcrumb = drag("header-title")
             .flex()
-            .flex_1()
-            .min_w_0()
-            .h_full()
+            .flex_none()
             .items_center()
-            .gap(px(10.0))
-            .pl(px(18.0))
-            .child(div().text_color(t.faint).child("Kestrel"))
+            .gap(px(8.0))
+            .pl(px(10.0))
+            .pr(px(8.0))
+            .child(mark)
+            .child(
+                div()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_size(px(14.0))
+                    .child("Kestrel"),
+            )
+            .child(tag("4.0", TagKind::Plain, &t))
             .child(div().text_color(t.faint).child("/"))
             .child(
                 div()
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(self.page.label()),
             );
-        let actions = div()
+        let search = div()
+            .id("open-palette")
             .flex()
-            .flex_none()
+            .flex_shrink()
             .items_center()
             .gap(px(8.0))
+            .w(px(360.0))
+            .min_w(px(120.0))
+            .h(px(BAR_BUTTON))
             .px(px(10.0))
+            .rounded(px(8.0))
+            .border_1()
+            .border_color(t.line2)
+            .bg(t.raised)
+            .cursor_pointer()
+            .hover(move |s| s.bg(t.hover))
+            .tooltip(tooltip("Search files, presets and actions (Ctrl+K)"))
+            .child(icon("search", 14.0, t.muted))
             .child(
-                button("toggle-theme", &t, BtnKind::Ghost, true)
-                    .tooltip(tooltip("Toggle light and dark theme"))
-                    .child(icon(if t.light { "moon" } else { "sun" }, 14.0, t.muted))
-                    .child(if t.light { "Dark" } else { "Light" })
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_theme(cx))),
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(t.muted)
+                    .child("Search files, presets and actions"),
             )
-            .child(
-                button("add-media", &t, BtnKind::Default, true)
-                    .child(icon("plus", 13.0, t.text))
-                    .child("Add media")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.go(Page::Library, cx);
-                        this.pick(Pick::Files, cx);
-                    })),
+            .child(kbd("Ctrl K", &t))
+            .on_click(cx.listener(|this, _, window, cx| this.open_palette(window, cx)));
+        let unread = if self.page == Page::Activity {
+            0
+        } else {
+            self.activity.unread
+        };
+        let bell = self
+            .bar_icon_button("open-activity", "bell", "Activity (Ctrl+5)", true)
+            .relative()
+            .when(unread > 0, |this| {
+                this.child(
+                    div()
+                        .absolute()
+                        .top(px(2.0))
+                        .right(px(1.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .min_w(px(15.0))
+                        .h(px(15.0))
+                        .px(px(3.0))
+                        .rounded_full()
+                        .bg(t.bad)
+                        .text_color(gpui::white())
+                        .text_size(px(9.0))
+                        .font_weight(FontWeight::BOLD)
+                        .child(if unread > 9 {
+                            "9+".to_owned()
+                        } else {
+                            unread.to_string()
+                        }),
+                )
+            })
+            .on_click(cx.listener(|this, _, _, cx| this.go(Page::Activity, cx)));
+        let theme_toggle = self
+            .bar_icon_button(
+                "toggle-theme",
+                if t.light { "moon" } else { "sun" },
+                if t.light {
+                    "Switch to the dark theme"
+                } else {
+                    "Switch to the light theme"
+                },
+                true,
             )
-            .child(
-                button("start-queue", &t, BtnKind::Primary, true)
-                    .child(icon("play", 12.0, t.on_accent))
-                    .child("Start queue")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.go(Page::Queue, cx);
-                        this.start_queue(cx);
-                    })),
-            );
+            .on_click(cx.listener(|this, _, _, cx| this.toggle_theme(cx)));
+        let running = self.queue.running;
+        let paused = self.queue.paused;
+        let start = button("start-queue", &t, BtnKind::Primary, true)
+            .tooltip(tooltip(if running {
+                if paused {
+                    "Resume the queue"
+                } else {
+                    "Pause the queue"
+                }
+            } else {
+                "Start the queue (Ctrl+4 shows it)"
+            }))
+            .child(icon(
+                if running && !paused { "pause" } else { "play" },
+                12.0,
+                t.on_accent,
+            ))
+            .child(match (running, paused) {
+                (true, false) => "Pause",
+                (true, true) => "Resume",
+                _ => "Start queue",
+            })
+            .on_click(cx.listener(|this, _, _, cx| {
+                if this.queue.running {
+                    this.toggle_pause(cx);
+                } else {
+                    this.go(Page::Queue, cx);
+                    this.start_queue(cx);
+                }
+            }));
+        let add_media = button("add-media", &t, BtnKind::Default, true)
+            .tooltip(tooltip("Add media (Ctrl+O)"))
+            .child(icon("plus", 13.0, t.text))
+            .child("Add media")
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.go(Page::Library, cx);
+                this.pick(Pick::Files, cx);
+            }));
+        let compact = window.viewport_size().width < px(1280.0);
+        let pill = self.queue_pill(compact, cx);
         div()
             .flex()
             .flex_none()
             .items_center()
+            .w_full()
             .h(px(HEADER_HEIGHT))
             .bg(t.panel)
             .border_b_1()
             .border_color(t.line)
-            .child(drag)
-            .child(actions)
+            .child(drag("header-lead").w(px(if MAC_TRAFFIC_LIGHTS { 78.0 } else { 10.0 })))
+            .child(sidebar_toggle)
+            .child(div().w(px(2.0)))
+            .child(back)
+            .child(forward)
+            .child(breadcrumb)
+            .child(drag("header-drag-left").flex_1().min_w(px(8.0)))
+            .child(search)
+            .child(drag("header-drag-right").flex_1().min_w(px(8.0)))
+            .child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .gap(px(8.0))
+                    .pr(px(10.0))
+                    .children(pill)
+                    .child(bell)
+                    .child(theme_toggle)
+                    .child(add_media)
+                    .child(start),
+            )
             .children(captions)
             .into_any_element()
     }

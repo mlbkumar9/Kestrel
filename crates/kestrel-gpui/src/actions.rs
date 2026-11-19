@@ -17,6 +17,9 @@ actions!(
         GoQueue,
         GoActivity,
         GoMetrics,
+        GoBack,
+        GoForward,
+        ToggleSidebar,
     ]
 );
 
@@ -36,5 +39,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-4", GoQueue, None),
         KeyBinding::new("ctrl-5", GoActivity, None),
         KeyBinding::new("ctrl-6", GoMetrics, None),
+        KeyBinding::new("ctrl-b", ToggleSidebar, None),
+        KeyBinding::new("alt-left", GoBack, None),
+        KeyBinding::new("alt-right", GoForward, None),
     ]);
 }
