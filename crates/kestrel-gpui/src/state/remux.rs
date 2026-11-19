@@ -1,19 +1,22 @@
 //! Remux page view model: language filters, per-file track edits and added files.
 //!
-//! Track edits and added files are kept as plain data so a later step can map
-//! them to the core remux editor. Language selection and container already map
-//! to `kestrel_core::transcode::JobSettings`.
+//! Track edits and added files are kept as plain data. [`core_track_edits`] maps them onto
+//! `kestrel_core::remux_edit::TrackEdits`, and language selection and container map onto
+//! `kestrel_core::transcode::JobSettings` in [`RemuxState::job_settings`].
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
+use kestrel_core::external::{ExternalKind, ExternalTrack};
 use kestrel_core::formats::Container;
 use kestrel_core::inputs::ExistingPolicy;
 use kestrel_core::mkv::MediaMetadata;
+use kestrel_core::remux_edit::{self, TrackEdit, TrackEdits};
 use kestrel_core::transcode::{AudioSettings, JobSettings, SubtitleSettings};
 use kestrel_core::worker::RemuxEngine;
 
 use super::format::{channel_label, codec_label};
+use super::transcode::language_code;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TrackKind {
@@ -329,11 +332,68 @@ impl RemuxState {
     }
 }
 
-// TODO(integration): map to kestrel_core::remux_edit::TrackEdits
-#[allow(dead_code)] // seam for the core remux_edit mapping, exercised by tests
-/// Placeholder for the core mapping: the edits that will be handed to the remux editor.
-pub fn pending_core_edits<'a>(state: &'a RemuxState, path: &Path) -> Option<&'a FileEdits> {
-    state.edits.get(path)
+/// Maps one file's edits onto core track edits. Only values that differ from the probed file
+/// are sent, so an untouched table produces an empty (no-op) `TrackEdits`. Video rows are not
+/// editable and are skipped. Languages must be ISO 639-2 codes (two-letter codes are converted).
+pub fn core_track_edits(meta: &MediaMetadata, edits: &FileEdits) -> Result<TrackEdits, String> {
+    let original = FileEdits::from_metadata(meta);
+    let skip = usize::from(meta.video.is_some() || meta.video_codec.is_some());
+    let mut out = TrackEdits::default();
+    let sources = meta.audio_tracks.iter().chain(&meta.subtitle_tracks);
+    for ((track, edit), base) in sources
+        .zip(edits.tracks.iter().skip(skip))
+        .zip(original.tracks.iter().skip(skip))
+    {
+        if edit == base {
+            continue;
+        }
+        let language = if edit.language == base.language || edit.language.trim().is_empty() {
+            None
+        } else {
+            let code = language_code(&edit.language)
+                .or_else(|| {
+                    (edit.language.trim().eq_ignore_ascii_case("und")).then(|| "und".to_owned())
+                })
+                .ok_or_else(|| {
+                    format!(
+                        "Track {}: '{}' is not a language code (use three letters such as eng)",
+                        track.id, edit.language
+                    )
+                })?;
+            Some(remux_edit::normalize_language_code(&code)?)
+        };
+        out.tracks.push(TrackEdit {
+            id: track.id,
+            keep: edit.keep,
+            default: (edit.default != base.default).then_some(edit.default),
+            forced: (edit.forced != base.forced).then_some(edit.forced),
+            language,
+            title: (edit.title != base.title).then(|| edit.title.clone()),
+        });
+    }
+    for file in &edits.added {
+        let kind = match file.kind {
+            AddedKind::Subtitle => ExternalKind::Subtitle,
+            AddedKind::Audio => ExternalKind::Audio,
+        };
+        let title = file.title.trim();
+        let charset = file.charset.trim();
+        out.external.push(ExternalTrack {
+            path: file.path.clone(),
+            kind,
+            language: language_code(&file.language),
+            title: (!title.is_empty()).then(|| title.to_owned()),
+            default: file.default,
+            forced: file.forced,
+            offset_ms: i64::from(file.offset_ms),
+            charset: (kind == ExternalKind::Subtitle
+                && !charset.is_empty()
+                && !charset.eq_ignore_ascii_case("utf-8"))
+            .then(|| charset.to_owned()),
+            burn_in: false,
+        });
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -402,5 +462,104 @@ mod tests {
         assert_eq!(settings.audio.languages, vec!["jpn".to_owned()]);
         assert_eq!(settings.subtitles.languages, vec!["eng".to_owned()]);
         assert!(settings.is_remux_only());
+    }
+
+    fn meta_with_ids() -> MediaMetadata {
+        let mut meta = meta();
+        meta.audio_tracks[0].id = 1;
+        meta.subtitle_tracks[0].id = 2;
+        meta
+    }
+
+    #[test]
+    fn untouched_edits_map_to_a_no_op() {
+        let meta = meta_with_ids();
+        let edits = FileEdits::from_metadata(&meta);
+        let core = core_track_edits(&meta, &edits).unwrap();
+        assert!(core.is_empty());
+    }
+
+    #[test]
+    fn track_edits_map_by_source_track_id() {
+        let meta = meta_with_ids();
+        let mut edits = FileEdits::from_metadata(&meta);
+        // Rows: 0 video, 1 audio (id 1), 2 subtitle (id 2).
+        edits.tracks[1].language = "es".to_owned();
+        edits.tracks[1].title = "Commentary".to_owned();
+        edits.tracks[1].default = false;
+        edits.tracks[2].keep = false;
+        let core = core_track_edits(&meta, &edits).unwrap();
+        assert_eq!(
+            core.tracks,
+            vec![
+                TrackEdit {
+                    id: 1,
+                    keep: true,
+                    default: Some(false),
+                    forced: None,
+                    language: Some("spa".to_owned()),
+                    title: Some("Commentary".to_owned()),
+                },
+                TrackEdit {
+                    id: 2,
+                    keep: false,
+                    ..TrackEdit::default()
+                },
+            ]
+        );
+        assert!(core.external.is_empty() && core.order.is_empty());
+    }
+
+    #[test]
+    fn invalid_language_edits_are_rejected_with_the_track_id() {
+        let meta = meta_with_ids();
+        let mut edits = FileEdits::from_metadata(&meta);
+        edits.tracks[2].language = "english!".to_owned();
+        let error = core_track_edits(&meta, &edits).unwrap_err();
+        assert!(error.contains("Track 2"), "{error}");
+    }
+
+    #[test]
+    fn added_files_map_to_external_tracks() {
+        let meta = meta_with_ids();
+        let mut edits = FileEdits::from_metadata(&meta);
+        let mut subtitle = AddedFile::new(PathBuf::from("movie.fr.srt"), AddedKind::Subtitle);
+        subtitle.default = true;
+        subtitle.offset_ms = -250;
+        subtitle.charset = "Windows-1252".to_owned();
+        let mut audio = AddedFile::new(PathBuf::from("dub.ac3"), AddedKind::Audio);
+        audio.language = "und".to_owned();
+        audio.title = String::new();
+        audio.charset = "Windows-1252".to_owned();
+        edits.added.push(subtitle);
+        edits.added.push(audio);
+        let core = core_track_edits(&meta, &edits).unwrap();
+        assert_eq!(
+            core.external,
+            vec![
+                ExternalTrack {
+                    path: PathBuf::from("movie.fr.srt"),
+                    kind: ExternalKind::Subtitle,
+                    language: Some("fra".to_owned()),
+                    title: Some("Added from file".to_owned()),
+                    default: true,
+                    forced: false,
+                    offset_ms: -250,
+                    charset: Some("Windows-1252".to_owned()),
+                    burn_in: false,
+                },
+                ExternalTrack {
+                    path: PathBuf::from("dub.ac3"),
+                    kind: ExternalKind::Audio,
+                    language: None,
+                    title: None,
+                    default: false,
+                    forced: false,
+                    offset_ms: 0,
+                    charset: None,
+                    burn_in: false,
+                },
+            ]
+        );
     }
 }

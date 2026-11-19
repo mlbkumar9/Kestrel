@@ -265,6 +265,7 @@ mod tests {
         let encoders = EncoderSet {
             software: Vec::new(),
             hardware: vec![hardware_encoder()],
+            ..EncoderSet::default()
         };
         let preset = builtins(&encoders).pop().unwrap();
         assert_eq!(preset.id, "hardware");

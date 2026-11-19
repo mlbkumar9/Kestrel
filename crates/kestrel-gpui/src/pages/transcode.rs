@@ -4,6 +4,7 @@ use gpui::{
     AnyElement, Context, Div, FontWeight, SharedString, Stateful, Window, div, prelude::*, px,
 };
 use kestrel_core::formats::Container;
+use kestrel_core::transcode::encoder_tunes;
 
 use super::{grid, inspector, summary_row};
 use crate::app::{Kestrel, Pick};
@@ -184,6 +185,36 @@ impl Kestrel {
         )
     }
 
+    /// Width and height of the current source's video, when probed.
+    fn current_dims(&self) -> Option<(u32, u32)> {
+        let video = self.library.current_source()?.metadata()?.video.as_ref()?;
+        Some((video.width?, video.height?))
+    }
+
+    /// Edits the scaled size fields. The first edit leaves optimal size and fills the other
+    /// field from the computed size.
+    fn edit_scaled(&mut self, width: Option<u32>, height: Option<u32>) {
+        if self.form.optimal_size {
+            let dims = self.current_dims();
+            self.form.seed_scaled_size(dims);
+            self.form.optimal_size = false;
+        }
+        if let Some(width) = width {
+            self.form.scaled_width = width;
+        }
+        if let Some(height) = height {
+            self.form.scaled_height = height;
+        }
+    }
+
+    fn set_optimal_size(&mut self, on: bool) {
+        if !on && self.form.optimal_size {
+            let dims = self.current_dims();
+            self.form.seed_scaled_size(dims);
+        }
+        self.form.optimal_size = on;
+    }
+
     fn current_meta(&self) -> Option<kestrel_core::mkv::MediaMetadata> {
         self.library
             .current_source()
@@ -214,30 +245,6 @@ impl Kestrel {
             Some(row) => self.form.audio_tracks.push(row),
             None => self.toast(
                 "Every source audio track is already listed",
-                TagKind::Info,
-                cx,
-            ),
-        }
-    }
-
-    fn add_sub_track(&mut self, cx: &mut Context<Self>) {
-        let Some(meta) = self.current_meta() else {
-            self.toast("Add a source first", TagKind::Warn, cx);
-            return;
-        };
-        let next = (0..meta.subtitle_tracks.len()).find_map(|index| {
-            self.form.source_sub_track(&meta, index).filter(|row| {
-                !self
-                    .form
-                    .sub_tracks
-                    .iter()
-                    .any(|have| have.source == row.source)
-            })
-        });
-        match next {
-            Some(row) => self.form.sub_tracks.push(row),
-            None => self.toast(
-                "Every source subtitle track is already listed",
                 TagKind::Info,
                 cx,
             ),
@@ -653,11 +660,8 @@ impl Kestrel {
     fn tab_dimensions(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let t = self.theme();
         let form = self.form.clone();
-        let dims = self.library.current_source().and_then(|source| {
-            let video = source.metadata()?.video.as_ref()?;
-            Some((video.width?, video.height?))
-        });
-        let custom_crop = form.crop_mode == 3;
+        let dims = self.current_dims();
+        let custom_crop = form.crop_mode == CROP_CUSTOM;
         let crop_fields: Vec<AnyElement> =
             [("Top", 0usize), ("Bottom", 1), ("Left", 2), ("Right", 3)]
                 .into_iter()
@@ -721,24 +725,30 @@ impl Kestrel {
             "tr-par",
             "Pixel aspect",
             &form.pixel_aspect,
-            InputCfg::default().mono(),
+            InputCfg::default()
+                .mono()
+                .disabled(form.anamorphic != ANAMORPHIC_CUSTOM),
             |this, text| this.form.pixel_aspect = text.to_owned(),
         );
+        let (scaled_width, scaled_height) = match dims {
+            Some(source) if form.optimal_size => form.output_size(source),
+            _ => (form.scaled_width, form.scaled_height),
+        };
         let scaled_w = self.fnum(
             cx,
             window,
             "tr-scaled-w",
             "Scaled width",
-            i64::from(form.scaled_width),
-            |this, n| this.form.scaled_width = n.max(0) as u32,
+            i64::from(scaled_width),
+            |this, n| this.edit_scaled(Some(n.max(0) as u32), None),
         );
         let scaled_h = self.fnum(
             cx,
             window,
             "tr-scaled-h",
             "Scaled height",
-            i64::from(form.scaled_height),
-            |this, n| this.form.scaled_height = n.max(0) as u32,
+            i64::from(scaled_height),
+            |this, n| this.edit_scaled(None, Some(n.max(0) as u32)),
         );
         let resolution = div()
             .child(section_title("Resolution and scaling", &t))
@@ -751,7 +761,10 @@ impl Kestrel {
                         "Resolution limit",
                         &RES_LIMITS,
                         form.res_limit,
-                        |this, i| this.form.res_limit = i,
+                        |this, i| {
+                            this.form.res_limit = i;
+                            this.form.optimal_size = true;
+                        },
                     ))
                     .child(self.fsel(
                         cx,
@@ -768,9 +781,7 @@ impl Kestrel {
                         "Modulus",
                         &MODULUS,
                         form.modulus,
-                        |this, i| {
-                            this.form.modulus = i;
-                        },
+                        |this, i| this.form.modulus = i,
                     ))
                     .child(scaled_w)
                     .child(scaled_h)
@@ -779,7 +790,7 @@ impl Kestrel {
                         "tr-optimal",
                         "Optimal size",
                         form.optimal_size,
-                        |this, on| this.form.optimal_size = on,
+                        |this, on| this.set_optimal_size(on),
                     )))
                     .child(div().flex().items_end().child(self.fcheck(
                         cx,
@@ -789,6 +800,39 @@ impl Kestrel {
                         |this, on| this.form.allow_upscale = on,
                     ))),
             );
+        let border_custom = form.border_fill == BORDER_CUSTOM;
+        let border_fields: Vec<AnyElement> =
+            [("Top", 0usize), ("Bottom", 1), ("Left", 2), ("Right", 3)]
+                .into_iter()
+                .map(|(name, slot)| {
+                    let id = [
+                        "tr-border-top",
+                        "tr-border-bottom",
+                        "tr-border-left",
+                        "tr-border-right",
+                    ][slot];
+                    let input = self.field_number(
+                        cx,
+                        window,
+                        id,
+                        i64::from(form.border[slot]),
+                        InputCfg::default().disabled(!border_custom),
+                        move |this, number, _| this.form.border[slot] = number.max(0) as u32,
+                    );
+                    field(name, &t, input).into_any_element()
+                })
+                .collect();
+        let custom_colour = self.ftext(
+            cx,
+            window,
+            "tr-border-colour-custom",
+            "Colour value",
+            &form.border_color_custom,
+            InputCfg::default()
+                .mono()
+                .disabled(form.border_color != BORDER_COLOR_CUSTOM),
+            |this, text| this.form.border_color_custom = text.to_owned(),
+        );
         let borders = div().child(section_title("Borders", &t)).child(
             grid(4)
                 .mt(px(10.0))
@@ -808,6 +852,8 @@ impl Kestrel {
                     form.border_color,
                     |this, i| this.form.border_color = i,
                 ))
+                .child(custom_colour)
+                .children(border_fields)
                 .child(
                     field(
                         "Final dimensions",
@@ -821,7 +867,7 @@ impl Kestrel {
                             .font_family(crate::widgets::MONO)
                             .child(form.final_dimensions(dims)),
                     )
-                    .col_span(2),
+                    .col_span(4),
                 ),
         );
         div()
@@ -852,34 +898,58 @@ impl Kestrel {
                 form.interlace_detect,
                 |this, i| this.form.interlace_detect = i,
             ))
-            .child(self.pair_select(
+            .child(self.fsel(
                 cx,
-                ["tr-deint", "tr-deint-preset"],
-                "Deinterlace",
-                (&DEINTERLACE, form.deinterlace),
-                (&DEINTERLACE_PRESETS, form.deinterlace_preset),
-                |this, i, second| {
-                    if second {
-                        this.form.deinterlace_preset = i;
-                    } else {
-                        this.form.deinterlace = i;
-                    }
+                "tr-chroma",
+                "Chroma smooth",
+                &STRENGTHS,
+                form.chroma_smooth,
+                |this, i| this.form.chroma_smooth = i,
+            ))
+            .child(
+                self.pair_select(
+                    cx,
+                    ["tr-deint", "tr-deint-preset"],
+                    "Deinterlace",
+                    (&DEINTERLACE, form.deinterlace),
+                    (&DEINTERLACE_PRESETS, form.deinterlace_preset),
+                    |this, i, second| {
+                        if second {
+                            this.form.deinterlace_preset = i;
+                        } else {
+                            this.form.deinterlace = i;
+                        }
+                    },
+                )
+                .col_span(2),
+            )
+            .child(self.fsel(
+                cx,
+                "tr-deblock",
+                "Deblock",
+                &STRENGTHS,
+                form.deblock,
+                |this, i| {
+                    this.form.deblock = i;
                 },
             ))
-            .child(self.pair_select(
-                cx,
-                ["tr-denoise", "tr-denoise-preset"],
-                "Denoise",
-                (&DENOISE, form.denoise),
-                (&DENOISE_PRESETS, form.denoise_preset),
-                |this, i, second| {
-                    if second {
-                        this.form.denoise_preset = i;
-                    } else {
-                        this.form.denoise = i;
-                    }
-                },
-            ))
+            .child(
+                self.pair_select(
+                    cx,
+                    ["tr-denoise", "tr-denoise-preset"],
+                    "Denoise",
+                    (&DENOISE, form.denoise),
+                    (&DENOISE_PRESETS, form.denoise_preset),
+                    |this, i, second| {
+                        if second {
+                            this.form.denoise_preset = i;
+                        } else {
+                            this.form.denoise = i;
+                        }
+                    },
+                )
+                .col_span(2),
+            )
             .child(self.fsel(
                 cx,
                 "tr-denoise-tune",
@@ -888,38 +958,23 @@ impl Kestrel {
                 form.denoise_tune,
                 |this, i| this.form.denoise_tune = i,
             ))
-            .child(self.fsel(
-                cx,
-                "tr-chroma",
-                "Chroma smooth",
-                &CHROMA_SMOOTH,
-                form.chroma_smooth,
-                |this, i| this.form.chroma_smooth = i,
-            ))
-            .child(self.pair_select(
-                cx,
-                ["tr-sharpen", "tr-sharpen-preset"],
-                "Sharpen",
-                (&SHARPEN, form.sharpen),
-                (&SHARPEN_PRESETS, form.sharpen_preset),
-                |this, i, second| {
-                    if second {
-                        this.form.sharpen_preset = i;
-                    } else {
-                        this.form.sharpen = i;
-                    }
-                },
-            ))
-            .child(self.fsel(
-                cx,
-                "tr-deblock",
-                "Deblock",
-                &DEBLOCK,
-                form.deblock,
-                |this, i| {
-                    this.form.deblock = i;
-                },
-            ))
+            .child(
+                self.pair_select(
+                    cx,
+                    ["tr-sharpen", "tr-sharpen-preset"],
+                    "Sharpen",
+                    (&SHARPEN, form.sharpen),
+                    (&SHARPEN_PRESETS, form.sharpen_preset),
+                    |this, i, second| {
+                        if second {
+                            this.form.sharpen_preset = i;
+                        } else {
+                            this.form.sharpen = i;
+                        }
+                    },
+                )
+                .col_span(2),
+            )
             .child(self.fsel(
                 cx,
                 "tr-colourspace",
@@ -982,15 +1037,27 @@ impl Kestrel {
                 .when(right, |this| this.text_right())
                 .child(text)
         };
-        let top = grid(3)
-            .child(self.fsel(
+        let options = form.encoder_options(self.encoders.as_ref());
+        let selected = form.encoder_index(&options).unwrap_or(0);
+        let labels: Vec<String> = options.iter().map(|choice| choice.label.clone()).collect();
+        let picker = field(
+            "Video encoder",
+            &t,
+            self.select(
                 cx,
                 "tr-encoder",
-                "Video encoder",
-                &ENCODERS,
-                form.encoder,
-                |this, i| this.form.encoder = i,
-            ))
+                labels,
+                selected,
+                false,
+                move |this, index, _| {
+                    if let Some(choice) = options.get(index) {
+                        this.form.set_encoder(choice);
+                    }
+                },
+            ),
+        );
+        let top = grid(3)
+            .child(picker)
             .child(self.fsel(
                 cx,
                 "tr-fps",
@@ -1019,6 +1086,7 @@ impl Kestrel {
             },
         );
         let quality_body = if form.is_constant_quality() {
+            let max = f32::from(rf_max(&form.encoder));
             div()
                 .child(
                     div()
@@ -1029,9 +1097,12 @@ impl Kestrel {
                         .child(slider(
                             cx,
                             "tr-rf",
-                            f32::from(form.rf) / 51.0,
+                            f32::from(form.rf) / max,
                             &t,
-                            |this, fraction, _| this.form.rf = (fraction * 51.0).round() as u8,
+                            |this, fraction, _| {
+                                let max = f32::from(rf_max(&this.form.encoder));
+                                this.form.rf = (fraction * max).round() as u8;
+                            },
                         ))
                         .child(side_label("Smaller file", true))
                         .child(quality_tag(format!("{} {}", form.quality_label(), form.rf))),
@@ -1052,14 +1123,19 @@ impl Kestrel {
                 i64::from(form.bitrate_kbps),
                 |this, n| this.form.bitrate_kbps = n.max(0) as u32,
             );
+            let multi = form.encoder.supports_multi_pass();
             div().child(
                 grid(3)
                     .child(bitrate)
                     .child(div().flex().items_end().child(self.fcheck(
                         cx,
                         "tr-multipass",
-                        "Multi-pass encoding",
-                        form.multipass,
+                        if multi {
+                            "Multi-pass encoding"
+                        } else {
+                            "Multi-pass (software encoders only)"
+                        },
+                        form.multipass && multi,
                         |this, on| this.form.multipass = on,
                     )))
                     .child(div().flex().items_end().child(self.fcheck(
@@ -1081,70 +1157,123 @@ impl Kestrel {
                     .child(div().flex_1().flex().justify_end().child(rate_seg)),
             )
             .child(quality_body);
+        let supports_advanced = form.encoder.supports_advanced_options();
         let advanced = self.ftext(
             cx,
             window,
             "tr-advanced",
             "Advanced options",
             &form.advanced,
-            InputCfg::default().mono().ph("key=value:key=value"),
+            InputCfg::default()
+                .mono()
+                .ph(if supports_advanced {
+                    "key=value:key=value"
+                } else {
+                    "Not available for this encoder"
+                })
+                .disabled(!supports_advanced),
             |this, text| this.form.advanced = text.to_owned(),
         );
+        let tunes = encoder_tunes(&form.encoder);
+        let profiles = profile_names(&form.encoder);
+        let levels = level_names(&form.encoder);
+        let tune_select = field(
+            "Tune",
+            &t,
+            self.select(
+                cx,
+                "tr-tune",
+                with_auto(tunes, "None"),
+                auto_index(tunes, &form.tune),
+                false,
+                |this, index, _| {
+                    let names = encoder_tunes(&this.form.encoder);
+                    this.form.tune = index
+                        .checked_sub(1)
+                        .and_then(|i| names.get(i))
+                        .map_or_else(String::new, |name| (*name).to_owned());
+                },
+            ),
+        );
+        let profile_select = field(
+            "Profile",
+            &t,
+            self.select(
+                cx,
+                "tr-profile",
+                with_auto(profiles, "Auto"),
+                auto_index(profiles, &form.profile),
+                false,
+                |this, index, _| {
+                    let names = profile_names(&this.form.encoder);
+                    this.form.profile = index
+                        .checked_sub(1)
+                        .and_then(|i| names.get(i))
+                        .map_or_else(String::new, |name| (*name).to_owned());
+                },
+            ),
+        );
+        let level_select = field(
+            "Level",
+            &t,
+            self.select(
+                cx,
+                "tr-level",
+                with_auto(levels, "Auto"),
+                auto_index(levels, &form.level),
+                false,
+                |this, index, _| {
+                    let names = level_names(&this.form.encoder);
+                    this.form.level = index
+                        .checked_sub(1)
+                        .and_then(|i| names.get(i))
+                        .map_or_else(String::new, |name| (*name).to_owned());
+                },
+            ),
+        );
+        let fast_decode_label = if form.encoder.supports_fast_decode() {
+            "Fast decode"
+        } else {
+            "Fast decode (x264, x265, SVT-AV1)"
+        };
+        let preset_row = if form.has_presets() {
+            div()
+                .mt(px(10.0))
+                .mb(px(16.0))
+                .flex()
+                .items_center()
+                .gap(px(16.0))
+                .child(side_label("Faster", false))
+                .child(slider(
+                    cx,
+                    "tr-speed",
+                    form.preset_fraction(),
+                    &t,
+                    |this, fraction, _| this.form.set_preset_fraction(fraction),
+                ))
+                .child(side_label("Smaller", true))
+                .child(quality_tag(form.speed_label()))
+        } else {
+            div()
+                .mt(px(10.0))
+                .mb(px(16.0))
+                .text_size(px(12.0))
+                .text_color(t.faint)
+                .child("This encoder has no speed presets.")
+        };
         let options = div()
             .child(section_title("Encoder options", &t))
-            .child(
-                div()
-                    .mt(px(10.0))
-                    .mb(px(16.0))
-                    .flex()
-                    .items_center()
-                    .gap(px(16.0))
-                    .child(side_label("Faster", false))
-                    .child(slider(
-                        cx,
-                        "tr-speed",
-                        f32::from(form.speed) / 9.0,
-                        &t,
-                        |this, fraction, _| this.form.speed = (fraction * 9.0).round() as u8,
-                    ))
-                    .child(side_label("Smaller", true))
-                    .child(quality_tag(form.speed_label())),
-            )
+            .child(preset_row)
             .child(
                 grid(4)
-                    .child(self.fsel(
-                        cx,
-                        "tr-tune",
-                        "Tune",
-                        &VIDEO_TUNES,
-                        form.video_tune,
-                        |this, i| {
-                            this.form.video_tune = i;
-                        },
-                    ))
-                    .child(self.fsel(
-                        cx,
-                        "tr-profile",
-                        "Profile",
-                        &VIDEO_PROFILES,
-                        form.video_profile,
-                        |this, i| this.form.video_profile = i,
-                    ))
-                    .child(self.fsel(
-                        cx,
-                        "tr-level",
-                        "Level",
-                        &VIDEO_LEVELS,
-                        form.video_level,
-                        |this, i| {
-                            this.form.video_level = i;
-                        },
-                    ))
+                    .child(tune_select)
+                    .child(profile_select)
+                    .child(level_select)
                     .child(div().flex().items_end().child(self.fcheck(
                         cx,
                         "tr-fast-decode",
-                        "Fast decode",
-                        form.fast_decode,
+                        fast_decode_label,
+                        form.fast_decode && form.encoder.supports_fast_decode(),
                         |this, on| this.form.fast_decode = on,
                     ))),
             )
@@ -1206,19 +1335,31 @@ impl Kestrel {
                                 .truncate(),
                         )
                         .into_any_element(),
-                    self.select(
-                        cx,
-                        format!("tr-aenc-{index}"),
-                        AUDIO_ENCODERS,
-                        track.encoder,
-                        true,
-                        move |this, i, _| {
-                            if let Some(row) = this.form.audio_tracks.get_mut(index) {
-                                row.encoder = i;
-                            }
-                        },
-                    )
-                    .into_any_element(),
+                    {
+                        let choices =
+                            audio_encoder_options(self.encoders.as_ref(), Some(track.encoder));
+                        let selected = choices
+                            .iter()
+                            .position(|(encoder, _)| *encoder == track.encoder)
+                            .unwrap_or(0);
+                        let labels: Vec<&'static str> =
+                            choices.iter().map(|(_, label)| *label).collect();
+                        self.select(
+                            cx,
+                            format!("tr-aenc-{index}"),
+                            labels,
+                            selected,
+                            true,
+                            move |this, i, _| {
+                                if let (Some(row), Some((encoder, _))) =
+                                    (this.form.audio_tracks.get_mut(index), choices.get(i))
+                                {
+                                    row.encoder = *encoder;
+                                }
+                            },
+                        )
+                        .into_any_element()
+                    },
                     self.select(
                         cx,
                         format!("tr-amix-{index}"),
@@ -1430,84 +1571,125 @@ impl Kestrel {
             .iter()
             .enumerate()
             .map(|(index, track)| {
-                let offset = self.field_number(
-                    cx,
-                    window,
-                    format!("tr-soff-{index}"),
-                    i64::from(track.offset_ms),
-                    InputCfg::default().compact(),
-                    move |this, n, _| {
-                        if let Some(row) = this.form.sub_tracks.get_mut(index) {
-                            row.offset_ms = n as i32;
-                        }
-                    },
-                );
-                let cells = vec![
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(8.0))
-                        .min_w_0()
-                        .child(
-                            div()
-                                .truncate()
-                                .font_weight(FontWeight::MEDIUM)
-                                .child(track.source.clone()),
-                        )
-                        .child(tag(
-                            track.kind.clone(),
-                            if track.external.is_some() {
-                                TagKind::Acc
-                            } else {
-                                TagKind::Plain
+                let imported = track.external.is_some();
+                let name_cell = div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .min_w_0()
+                    .child(
+                        div()
+                            .truncate()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(track.source.clone()),
+                    )
+                    .child(tag(
+                        track.kind.clone(),
+                        if imported {
+                            TagKind::Acc
+                        } else {
+                            TagKind::Plain
+                        },
+                        &t,
+                    ))
+                    .into_any_element();
+                let flag = |on: bool| {
+                    mono(if on { "yes" } else { "-" })
+                        .text_color(t.faint)
+                        .into_any_element()
+                };
+                let (forced, burn, default, offset, remove) = if imported {
+                    let offset = self.field_number(
+                        cx,
+                        window,
+                        format!("tr-soff-{index}"),
+                        i64::from(track.offset_ms),
+                        InputCfg::default().compact(),
+                        move |this, n, _| {
+                            if let Some(row) = this.form.sub_tracks.get_mut(index) {
+                                row.offset_ms = n as i32;
+                            }
+                        },
+                    );
+                    (
+                        self.check_box(
+                            cx,
+                            format!("tr-sforced-{index}"),
+                            track.forced_only,
+                            move |this, on, _| {
+                                if let Some(row) = this.form.sub_tracks.get_mut(index) {
+                                    row.forced_only = on;
+                                }
                             },
-                            &t,
-                        ))
+                        )
                         .into_any_element(),
+                        self.check_box(
+                            cx,
+                            format!("tr-sburn-{index}"),
+                            track.burn,
+                            move |this, on, _| {
+                                // Core burns one subtitle at most.
+                                for (position, row) in this.form.sub_tracks.iter_mut().enumerate() {
+                                    if row.external.is_some() {
+                                        row.burn = on && position == index;
+                                    }
+                                }
+                            },
+                        )
+                        .into_any_element(),
+                        self.check_box(
+                            cx,
+                            format!("tr-sdef-{index}"),
+                            track.default,
+                            move |this, on, _| {
+                                if let Some(row) = this.form.sub_tracks.get_mut(index) {
+                                    row.default = on;
+                                }
+                            },
+                        )
+                        .into_any_element(),
+                        div().w_full().child(offset).into_any_element(),
+                        button(format!("tr-sremove-{index}"), &t, BtnKind::Ghost, true)
+                            .child(icon("x", 12.0, t.muted))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if index < this.form.sub_tracks.len() {
+                                    this.form.sub_tracks.remove(index);
+                                }
+                                cx.notify();
+                            }))
+                            .into_any_element(),
+                    )
+                } else {
+                    // Source tracks are picked by the selection settings below, so their flags
+                    // are shown, not edited. The foreign audio scan row drives the burn choice.
+                    let scan = track.kind == "search";
+                    let burn = if scan {
+                        self.check_box(
+                            cx,
+                            "tr-sburn-scan",
+                            matches!(form.sub_burn, 1 | 3),
+                            |this, on, _| this.form.sub_burn = usize::from(on),
+                        )
+                        .into_any_element()
+                    } else {
+                        flag(false)
+                    };
+                    (
+                        flag(track.forced_only),
+                        burn,
+                        flag(track.default),
+                        flag(false),
+                        div().into_any_element(),
+                    )
+                };
+                let cells = vec![
+                    name_cell,
                     mono(track.language.clone()).into_any_element(),
-                    self.check_box(
-                        cx,
-                        format!("tr-sforced-{index}"),
-                        track.forced_only,
-                        move |this, on, _| {
-                            if let Some(row) = this.form.sub_tracks.get_mut(index) {
-                                row.forced_only = on;
-                            }
-                        },
-                    )
-                    .into_any_element(),
-                    self.check_box(
-                        cx,
-                        format!("tr-sburn-{index}"),
-                        track.burn,
-                        move |this, on, _| {
-                            if let Some(row) = this.form.sub_tracks.get_mut(index) {
-                                row.burn = on;
-                            }
-                        },
-                    )
-                    .into_any_element(),
-                    self.check_box(
-                        cx,
-                        format!("tr-sdef-{index}"),
-                        track.default,
-                        move |this, on, _| {
-                            if let Some(row) = this.form.sub_tracks.get_mut(index) {
-                                row.default = on;
-                            }
-                        },
-                    )
-                    .into_any_element(),
-                    div().w_full().child(offset).into_any_element(),
-                    button(format!("tr-sremove-{index}"), &t, BtnKind::Ghost, true)
-                        .child(icon("x", 12.0, t.muted))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if index < this.form.sub_tracks.len() {
-                                this.form.sub_tracks.remove(index);
-                            }
-                            cx.notify();
-                        }))
-                        .into_any_element(),
+                    forced,
+                    burn,
+                    default,
+                    offset,
+                    remove,
                 ];
                 body_row(&t, &SUB_COLS, cells, index + 1 == form.sub_tracks.len())
                     .into_any_element()
@@ -1528,14 +1710,6 @@ impl Kestrel {
                             .justify_end()
                             .flex()
                             .gap(px(6.0))
-                            .child(
-                                button("tr-add-sub", &t, BtnKind::Default, true)
-                                    .child("Add track")
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.add_sub_track(cx);
-                                        cx.notify();
-                                    })),
-                            )
                             .child(
                                 button("tr-import-sub", &t, BtnKind::Primary, true)
                                     .child("Import SRT / ASS / VTT...")
@@ -1603,30 +1777,41 @@ impl Kestrel {
                     ))
                     .child(self.fsel(
                         cx,
+                        "tr-sdefault",
+                        "Default track",
+                        &SUB_DEFAULT,
+                        form.sub_default,
+                        |this, i| this.form.sub_default = i,
+                    )),
+            )
+            .child(
+                grid(3)
+                    .mt(px(14.0))
+                    .child(self.fsel(
+                        cx,
                         "tr-scharset",
                         "Import character set",
                         &CHARSETS,
                         form.charset,
                         |this, i| this.form.charset = i,
-                    )),
-            )
-            .child(
-                grid(2)
-                    .mt(px(14.0))
-                    .child(self.fcheck(
+                    ))
+                    .child(div().flex().items_end().child(self.fcheck(
+                        cx,
+                        "tr-sforced-only",
+                        "Keep forced tracks only",
+                        form.sub_forced_only,
+                        |this, on| this.form.sub_forced_only = on,
+                    )))
+                    .child(div().flex().items_end().child(self.fcheck(
                         cx,
                         "tr-foreign",
-                        "Add foreign audio scan",
+                        "Foreign audio scan row",
                         form.foreign_scan,
-                        |this, on| this.form.foreign_scan = on,
-                    ))
-                    .child(self.fcheck(
-                        cx,
-                        "tr-cc",
-                        "Add closed captions when available",
-                        form.closed_captions,
-                        |this, on| this.form.closed_captions = on,
-                    )),
+                        |this, on| {
+                            this.form.foreign_scan = on;
+                            this.seed_form();
+                        },
+                    ))),
             );
         div()
             .child(section(&t, false).child(tracks))
@@ -1866,6 +2051,7 @@ impl Kestrel {
             ),
         };
         let filters = form.filter_summary();
+        let warnings = self.transcode_warnings();
         let dimension_text = form
             .final_dimensions(dims)
             .rsplit("-> ")
@@ -2013,6 +2199,29 @@ impl Kestrel {
                     ),
             )
             .child(summary)
+            .children((!warnings.is_empty()).then(|| {
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.0))
+                    .p(px(10.0))
+                    .rounded(px(8.0))
+                    .bg(t.warn_soft)
+                    .text_size(px(12.0))
+                    .text_color(t.warn)
+                    .children(warnings.into_iter().map(|text| {
+                        div()
+                            .flex()
+                            .gap(px(6.0))
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .mt(px(1.0))
+                                    .child(icon("alert", 12.0, t.warn)),
+                            )
+                            .child(div().flex_1().min_w_0().child(text))
+                    }))
+            }))
             .child(save_as)
             .child(folder)
             .child(apply)

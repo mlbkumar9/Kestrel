@@ -1972,6 +1972,7 @@ mod tests {
                 VideoEncoder::Vp9,
             ],
             hardware: Vec::new(),
+            ..EncoderSet::default()
         }
     }
 

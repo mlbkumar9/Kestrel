@@ -17,7 +17,7 @@ use kestrel_core::legacy::LegacyInstall;
 use kestrel_core::mkv::{self, MediaMetadata};
 use kestrel_core::presets::{self, Preset};
 use kestrel_core::tools::Toolchain;
-use kestrel_core::transcode;
+use kestrel_core::transcode::{self, Crop, JobResources, VideoSettings};
 use kestrel_core::worker::{self, JobSpec, QueueSpec, WorkerControl, WorkerEvent};
 
 use crate::actions::{
@@ -27,9 +27,9 @@ use crate::actions::{
 use crate::palette::{Command, PaletteState};
 use crate::state::activity::{ActivityLog, Level};
 use crate::state::library::{Library, Probe};
-use crate::state::probe::{chapters_from_csv, read_chapters};
+use crate::state::probe::{chapter_names_from_csv, read_chapters};
 use crate::state::queue::{JobKind, QueueState};
-use crate::state::remux::{AddedFile, AddedKind, RemuxState};
+use crate::state::remux::{AddedFile, AddedKind, RemuxState, core_track_edits};
 use crate::state::transcode::{ChapterRow, SubTrackForm, Tab, TranscodeForm};
 use crate::state::{AppSettings, Page};
 use crate::theme::{Appearance, Theme};
@@ -88,6 +88,9 @@ pub struct DebugOptions {
     pub palette: bool,
     /// 1 queues the loaded files once probed, 2 also starts the queue.
     pub queue: u8,
+    /// Retitles the second audio track of each source and makes it the default one, so the
+    /// queued remux carries a track edit.
+    pub edit: bool,
 }
 
 impl DebugOptions {
@@ -111,6 +114,7 @@ impl DebugOptions {
                 Some("run") => 2,
                 _ => 0,
             },
+            edit: var("KESTREL_DEBUG_EDIT").as_deref() == Some("1"),
         }
     }
 }
@@ -144,6 +148,7 @@ pub struct Kestrel {
     pub legacy_dismissed: bool,
     legacy_removing: bool,
     debug_queue: u8,
+    debug_edit: bool,
     pub control: WorkerControl,
     ui_tx: mpsc::Sender<UiEvent>,
     ui_rx: mpsc::Receiver<UiEvent>,
@@ -199,6 +204,7 @@ impl Kestrel {
             legacy_dismissed: false,
             legacy_removing: false,
             debug_queue: debug.queue,
+            debug_edit: debug.edit,
             control: WorkerControl::default(),
             ui_tx,
             ui_rx,
@@ -372,21 +378,15 @@ impl Kestrel {
             }
             UiEvent::ChapterText(text) => {
                 self.inflight = self.inflight.saturating_sub(1);
-                let total = self
-                    .library
-                    .current_source()
-                    .and_then(|source| source.metadata())
-                    .and_then(|meta| meta.duration);
-                let chapters = chapters_from_csv(&text, total);
-                if chapters.is_empty() {
-                    self.toast("No chapters found in that file", TagKind::Warn, cx);
-                } else {
-                    self.toast(
-                        format!("Imported {} chapters", chapters.len()),
+                let applied = chapter_names_from_csv(&text)
+                    .and_then(|names| self.form.apply_chapter_names(names));
+                match applied {
+                    Ok(()) => self.toast(
+                        format!("Imported {} chapter names", self.form.chapters.len()),
                         TagKind::Ok,
                         cx,
-                    );
-                    self.form.chapters = chapters;
+                    ),
+                    Err(error) => self.toast(error, TagKind::Warn, cx),
                 }
             }
             UiEvent::Encoders(result) => {
@@ -610,6 +610,18 @@ impl Kestrel {
         }
         let run = self.debug_queue == 2;
         self.debug_queue = 0;
+        if self.debug_edit {
+            for (path, meta) in self.ready_selected(cx) {
+                if meta.audio_tracks.len() < 2 {
+                    continue;
+                }
+                let first = usize::from(meta.video.is_some() || meta.video_codec.is_some());
+                let edits = self.remux.edits_for(&path, &meta);
+                edits.tracks[first].default = false;
+                edits.tracks[first + 1].default = true;
+                edits.tracks[first + 1].title = "Commentary".to_owned();
+            }
+        }
         self.queue_remux(cx);
         self.form.apply_to_all = true;
         self.queue_transcode(cx);
@@ -846,12 +858,26 @@ impl Kestrel {
         let summary = self.remux.summary();
         let mut count = 0;
         for ((path, meta), plan) in ready.into_iter().zip(planned) {
-            // TODO(integration): attach this file's track edits (self.remux.edits) to the job.
+            let mut settings = settings.clone();
+            if let Some(edits) = self.remux.edits.get(&path) {
+                match core_track_edits(&meta, edits) {
+                    Ok(track_edits) => settings.track_edits = track_edits,
+                    Err(error) => {
+                        let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
+                        self.toast(
+                            format!("{}: {error}", name.unwrap_or_default()),
+                            TagKind::Bad,
+                            cx,
+                        );
+                        continue;
+                    }
+                }
+            }
             self.queue.add(
                 path,
                 plan.output,
                 JobKind::Remux,
-                settings.clone(),
+                settings,
                 meta,
                 summary.clone(),
             );
@@ -943,6 +969,7 @@ impl Kestrel {
             .queued()
             .into_iter()
             .map(|job| JobSpec {
+                execution: None,
                 id: job.id,
                 input: job.input.clone(),
                 output: job.output.clone(),
@@ -1013,7 +1040,9 @@ impl Kestrel {
         self.ensure_poller(cx);
     }
 
-    /// The FFmpeg command the current form would run for the current source.
+    /// The FFmpeg command(s) the current form would run for the current source, built by the
+    /// same function the worker calls. Files the worker prepares at run time (extracted
+    /// subtitles, chapter metadata, pass logs) appear under placeholder names.
     pub fn ffmpeg_preview(&self) -> String {
         let Some(source) = self.library.current_source() else {
             return "Add a source to preview the command.".to_owned();
@@ -1025,28 +1054,65 @@ impl Kestrel {
             return "Detecting encoders...".to_owned();
         };
         let output = Path::new(&self.form.folder).join(&self.form.save_as);
-        match transcode::build_ffmpeg_job_arguments(
+        let mut settings = self.form.to_job_settings();
+        let mut notes = Vec::new();
+        if let VideoSettings::Encode(encode) = &mut settings.video
+            && matches!(encode.crop, Crop::Automatic | Crop::Conservative)
+        {
+            encode.crop = Crop::None;
+            notes.push("# crop is detected when the job runs".to_owned());
+        }
+        let resources = JobResources {
+            text_burn_in_file: Some("subtitle.ass".to_owned()),
+            chapters_file: (!settings.chapter_names.is_empty())
+                .then(|| PathBuf::from("chapters.ffmetadata")),
+            pass_log_prefix: Some(PathBuf::from("pass")),
+        };
+        match transcode::build_ffmpeg_job_passes(
             &source.path,
             &output,
             meta,
-            &self.form.to_job_settings(),
+            &settings,
             set,
-            None,
+            &resources,
         ) {
-            Ok(args) => {
-                let mut parts = vec!["ffmpeg".to_owned()];
-                parts.extend(args.iter().map(|arg| {
+            Ok(passes) => {
+                let quote = |arg: &std::ffi::OsString| {
                     let text = arg.to_string_lossy();
                     if text.contains(' ') || text.contains('"') {
                         format!("\"{}\"", text.replace('"', "\\\""))
                     } else {
                         text.into_owned()
                     }
-                }));
-                parts.join(" ")
+                };
+                let mut lines = notes;
+                for (index, pass) in passes.iter().enumerate() {
+                    if passes.len() > 1 {
+                        lines.push(format!("# pass {}", index + 1));
+                    }
+                    let mut parts = vec!["ffmpeg".to_owned()];
+                    parts.extend(pass.iter().map(quote));
+                    lines.push(parts.join(" "));
+                }
+                lines.join(
+                    "
+",
+                )
             }
             Err(error) => error,
         }
+    }
+
+    /// Notes from core about the current form and source (dropped streams, missing tracks).
+    pub fn transcode_warnings(&self) -> Vec<String> {
+        let Some(meta) = self
+            .library
+            .current_source()
+            .and_then(|source| source.metadata())
+        else {
+            return Vec::new();
+        };
+        kestrel_core::compat::job_warnings(meta, &self.form.to_job_settings())
     }
 
     // ----- palette -----

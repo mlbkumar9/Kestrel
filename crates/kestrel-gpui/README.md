@@ -34,8 +34,8 @@ The app follows the approved prototype `plan/design/Main.dc.html`.
 - `src/app.rs`: root view `Kestrel`, background events, queue and probe wiring.
 - `src/shell.rs`: sidebar, header, footer, banners and toasts. `src/palette.rs`: Ctrl+K palette.
 - `src/state/`: view models (`TranscodeForm`, `RemuxTrackEdit`, library, queue, activity).
-  Core mappings are done in `state/transcode.rs`; remux track edits and added remux files
-  stay view-model only and carry `// TODO(integration)` markers.
+  Core mappings: `state/transcode.rs` (form to `JobSettings` and back) and `state/remux.rs`
+  (track edits and added files to `JobSettings.track_edits`).
 - `src/pages/`: Library, Remux, Transcode, Queue, Activity, Metrics (disabled 4.1 placeholder), Settings.
 - `src/widgets/`: own widgets (buttons, selects, text input, sliders, tabs, tables, overlays).
 - `assets/icons/*.svg`: embedded icon set loaded through the `AssetSource` in `src/assets.rs`.

@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use kestrel_core::tools;
+use kestrel_core::transcode::chapters;
 
 use super::format::format_clock;
 use super::transcode::ChapterRow;
@@ -46,6 +47,7 @@ pub fn parse_chapters(json: &str) -> Vec<ChapterRow> {
                     Some(ChapterRow {
                         start,
                         duration: (end - start).max(0.0),
+                        original: name.clone(),
                         name,
                     })
                 })
@@ -60,51 +62,18 @@ pub fn timestamp(seconds: f64) -> String {
     format!("{}.{:03}", format_clock(seconds.floor()), millis.min(999))
 }
 
-pub fn parse_timestamp(text: &str) -> Option<f64> {
-    let mut seconds = 0.0;
-    for part in text.trim().split(':') {
-        seconds = seconds * 60.0 + part.trim().parse::<f64>().ok()?;
-    }
-    Some(seconds)
-}
-
-/// CSV with `start,name` per line.
+/// Chapter names as `number,name` lines, the format core reads back.
 pub fn chapters_to_csv(chapters: &[ChapterRow]) -> String {
-    chapters
+    let names: Vec<String> = chapters
         .iter()
-        .map(|chapter| {
-            format!(
-                "{},{}",
-                timestamp(chapter.start),
-                chapter.name.replace(',', " ")
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+        .map(|chapter| chapter.name.clone())
+        .collect();
+    chapters::chapters_to_csv(&names)
 }
 
-/// Parses `start,name` lines. Lines that do not parse are skipped.
-pub fn chapters_from_csv(text: &str, total: Option<f64>) -> Vec<ChapterRow> {
-    let mut chapters: Vec<ChapterRow> = text
-        .lines()
-        .filter_map(|line| {
-            let (start, name) = line.split_once(',')?;
-            Some(ChapterRow {
-                start: parse_timestamp(start)?,
-                duration: 0.0,
-                name: name.trim().to_owned(),
-            })
-        })
-        .collect();
-    for index in 0..chapters.len() {
-        let end = chapters
-            .get(index + 1)
-            .map(|next| next.start)
-            .or(total)
-            .unwrap_or(chapters[index].start);
-        chapters[index].duration = (end - chapters[index].start).max(0.0);
-    }
-    chapters
+/// Chapter names from `number,name` lines.
+pub fn chapter_names_from_csv(text: &str) -> Result<Vec<String>, String> {
+    chapters::chapters_from_csv(text)
 }
 
 #[cfg(test)]
@@ -124,28 +93,30 @@ mod tests {
     }
 
     #[test]
-    fn timestamps_round_trip() {
+    fn timestamps_format_with_milliseconds() {
         assert_eq!(timestamp(724.12), "00:12:04.120");
-        assert!((parse_timestamp("00:12:04.120").unwrap() - 724.12).abs() < 1e-6);
-        assert_eq!(parse_timestamp("nope"), None);
     }
 
     #[test]
-    fn csv_round_trip_keeps_names_and_starts() {
-        let chapters = vec![
-            ChapterRow {
-                start: 0.0,
-                duration: 60.0,
-                name: "A".into(),
-            },
-            ChapterRow {
-                start: 60.0,
-                duration: 30.0,
-                name: "B".into(),
-            },
-        ];
+    fn csv_round_trip_keeps_names_including_commas() {
+        let row = |name: &str| ChapterRow {
+            start: 0.0,
+            duration: 60.0,
+            name: name.into(),
+            original: name.into(),
+        };
+        let chapters = vec![row("Intro, part 1"), row("B")];
         let csv = chapters_to_csv(&chapters);
-        let back = chapters_from_csv(&csv, Some(90.0));
-        assert_eq!(back, chapters);
+        assert_eq!(
+            csv,
+            "1,Intro, part 1
+2,B
+"
+        );
+        assert_eq!(
+            chapter_names_from_csv(&csv).unwrap(),
+            vec!["Intro, part 1".to_owned(), "B".to_owned()]
+        );
+        assert!(chapter_names_from_csv("2,Skipped one").is_err());
     }
 }

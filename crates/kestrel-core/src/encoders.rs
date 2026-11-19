@@ -12,6 +12,8 @@ use std::time::{Duration, Instant};
 pub struct EncoderSet {
     pub software: Vec<VideoEncoder>,
     pub hardware: Vec<VideoEncoder>,
+    /// FFmpeg names of the audio encoders the build lists (for example `libfdk_aac`).
+    pub audio: Vec<String>,
 }
 
 impl EncoderSet {
@@ -41,6 +43,11 @@ impl EncoderSet {
             _ => self.software.contains(encoder),
         }
     }
+
+    /// Whether FFmpeg lists the audio encoder (`libfdk_aac`, `libopus`, ...).
+    pub fn has_audio_encoder(&self, name: &str) -> bool {
+        self.audio.iter().any(|encoder| encoder == name)
+    }
 }
 
 pub fn detect(ffmpeg: &Path) -> Result<EncoderSet, String> {
@@ -60,6 +67,9 @@ pub fn detect(ffmpeg: &Path) -> Result<EncoderSet, String> {
         String::from_utf8_lossy(&output.stderr)
     );
     let names = parse_encoder_list(&combined_output);
+    let audio = parse_audio_encoder_list(&combined_output)
+        .into_iter()
+        .collect();
     let software = [
         ("libx264", VideoEncoder::X264),
         ("libx265", VideoEncoder::X265),
@@ -97,7 +107,11 @@ pub fn detect(ffmpeg: &Path) -> Result<EncoderSet, String> {
         }
     }
 
-    Ok(EncoderSet { software, hardware })
+    Ok(EncoderSet {
+        software,
+        hardware,
+        audio,
+    })
 }
 
 pub fn detect_async(ffmpeg: PathBuf) -> mpsc::Receiver<Result<EncoderSet, String>> {
@@ -108,7 +122,17 @@ pub fn detect_async(ffmpeg: PathBuf) -> mpsc::Receiver<Result<EncoderSet, String
     receiver
 }
 
+/// Names of the video encoders in `ffmpeg -encoders` output.
 pub fn parse_encoder_list(output: &str) -> BTreeSet<String> {
+    parse_encoder_names(output, 'V')
+}
+
+/// Names of the audio encoders in `ffmpeg -encoders` output.
+pub fn parse_audio_encoder_list(output: &str) -> BTreeSet<String> {
+    parse_encoder_names(output, 'A')
+}
+
+fn parse_encoder_names(output: &str, media: char) -> BTreeSet<String> {
     output
         .lines()
         .filter_map(|line| {
@@ -116,7 +140,7 @@ pub fn parse_encoder_list(output: &str) -> BTreeSet<String> {
             let flags = fields.next()?;
             let name = fields.next()?;
             (flags.len() == 6
-                && flags.starts_with('V')
+                && flags.starts_with(media)
                 && flags
                     .chars()
                     .all(|flag| flag == '.' || flag.is_ascii_alphabetic()))
@@ -210,6 +234,7 @@ mod fallback_tests {
         let encoders = EncoderSet {
             software: vec![VideoEncoder::X264, VideoEncoder::AomAv1],
             hardware: vec![hardware.clone()],
+            ..EncoderSet::default()
         };
         assert_eq!(
             encoders.resolve(&VideoEncoder::SvtAv1),
@@ -219,7 +244,8 @@ mod fallback_tests {
         assert_eq!(
             EncoderSet {
                 software: vec![],
-                hardware: vec![hardware.clone()]
+                hardware: vec![hardware.clone()],
+                ..EncoderSet::default()
             }
             .resolve(&VideoEncoder::SvtAv1),
             Ok(hardware)
@@ -230,6 +256,7 @@ mod fallback_tests {
         let encoders = EncoderSet {
             software: vec![VideoEncoder::X264],
             hardware: vec![],
+            ..EncoderSet::default()
         };
         assert_eq!(
             encoders.resolve(&VideoEncoder::SvtAv1).unwrap_err(),
