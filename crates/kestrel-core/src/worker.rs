@@ -81,6 +81,12 @@ pub enum WorkerEvent {
         speed: Option<f64>,
         eta_seconds: Option<f64>,
     },
+    Command {
+        job_id: u64,
+        executable: PathBuf,
+        arguments: Vec<OsString>,
+        display: String,
+    },
     Log(String),
     BatchFinished {
         cancelled: bool,
@@ -90,14 +96,22 @@ pub enum WorkerEvent {
 
 #[derive(Clone)]
 pub struct WorkerControl {
+    jobs: Arc<Mutex<JobControl>>,
     paused: Arc<AtomicBool>,
     cancelled: Arc<AtomicBool>,
     active_child: Arc<Mutex<Option<Child>>>,
 }
 
+#[derive(Default)]
+struct JobControl {
+    active: Option<u64>,
+    cancelled: std::collections::HashSet<u64>,
+}
+
 impl Default for WorkerControl {
     fn default() -> Self {
         Self {
+            jobs: Default::default(),
             paused: Arc::new(AtomicBool::new(false)),
             cancelled: Arc::new(AtomicBool::new(false)),
             active_child: Arc::new(Mutex::new(None)),
@@ -107,6 +121,9 @@ impl Default for WorkerControl {
 
 impl WorkerControl {
     pub fn reset(&self) {
+        if let Ok(mut jobs) = self.jobs.lock() {
+            *jobs = JobControl::default();
+        }
         self.paused.store(false, Ordering::SeqCst);
         self.cancelled.store(false, Ordering::SeqCst);
     }
@@ -127,6 +144,22 @@ impl WorkerControl {
             let _ = child.kill();
         }
     }
+    pub fn stop_job(&self, id: u64) {
+        if let Ok(mut jobs) = self.jobs.lock() {
+            jobs.cancelled.insert(id);
+            if jobs.active == Some(id)
+                && let Ok(mut child) = self.active_child.lock()
+                && let Some(child) = child.as_mut()
+            {
+                let _ = child.kill();
+            }
+        }
+    }
+    fn job_stopped(&self, id: u64) -> bool {
+        self.jobs
+            .lock()
+            .is_ok_and(|jobs| jobs.cancelled.contains(&id))
+    }
 }
 
 pub struct BatchSpec {
@@ -143,11 +176,20 @@ pub struct BatchSpec {
 #[derive(Clone)]
 /// One queue job, including source metadata and an independent settings snapshot.
 pub struct JobSpec {
+    pub execution: Option<JobExecution>,
     pub id: u64,
     pub input: PathBuf,
     pub output: PathBuf,
     pub metadata: MediaMetadata,
     pub settings: JobSettings,
+}
+
+#[derive(Clone, Debug)]
+pub struct JobExecution {
+    pub remux_engine: RemuxEngine,
+    pub existing: ExistingPolicy,
+    pub dry_run: bool,
+    pub output_target: crate::inputs::OutputTarget,
 }
 
 #[derive(Clone)]
@@ -495,7 +537,13 @@ fn run_queue(
         &ctx,
         WorkerEvent::Log(format!(
             "{} batch started for {} job(s)",
-            if spec.dry_run { "Dry-run" } else { "Transcode" },
+            if spec.dry_run {
+                "Dry-run"
+            } else if spec.jobs.iter().all(|job| job.settings.is_remux_only()) {
+                "Remux"
+            } else {
+                "Transcode"
+            },
             spec.jobs.len()
         )),
     );
@@ -520,6 +568,18 @@ fn run_queue(
         while control.paused.load(Ordering::SeqCst) && !control.is_cancelled() {
             std::thread::sleep(std::time::Duration::from_millis(80));
         }
+        if control.job_stopped(job.id) {
+            queue_update(
+                &sender,
+                &ctx,
+                job.id,
+                FileStatus::Cancelled,
+                0,
+                Some("Stopped by user".into()),
+            );
+            continue;
+        }
+        let policy = execution_spec(&spec, job);
         let mut resolved_job = job.clone();
         resolved_job.settings =
             match crate::transcode::resolve_job_settings(&job.settings, &spec.encoders) {
@@ -530,7 +590,7 @@ fn run_queue(
                 }
             };
         let job = &resolved_job;
-        if !spec.dry_run
+        if !policy.dry_run
             && let Some(parent) = job.output.parent()
             && let Err(error) = std::fs::create_dir_all(parent)
         {
@@ -544,7 +604,7 @@ fn run_queue(
             );
             continue;
         }
-        let output = match queue_output(&job.output, spec.existing, spec.dry_run) {
+        let output = match queue_output(&job.output, policy.existing, policy.dry_run) {
             Ok(Some(output)) => output,
             Ok(None) => {
                 queue_update(
@@ -562,7 +622,7 @@ fn run_queue(
                 continue;
             }
         };
-        if !spec.dry_run
+        if !policy.dry_run
             && let Err(error) = validate_output_paths(&job.input, &output)
         {
             queue_update(&sender, &ctx, job.id, FileStatus::Error, 0, Some(error));
@@ -576,7 +636,13 @@ fn run_queue(
                 WorkerEvent::Log(format!("{} — {warning}", job.input.display())),
             );
         }
-        let result = process_queue_job(job, &output, &spec, &control, &sender, &ctx);
+        if let Ok(mut jobs) = control.jobs.lock() {
+            jobs.active = Some(job.id);
+        }
+        let result = process_queue_job(job, &output, &policy, &control, &sender, &ctx);
+        if let Ok(mut jobs) = control.jobs.lock() {
+            jobs.active = None;
+        }
         match result {
             Ok(outcome) => {
                 let detail = match &outcome {
@@ -638,6 +704,16 @@ fn run_queue(
                     );
                 }
                 break;
+            }
+            Err(_) if control.job_stopped(job.id) => {
+                queue_update(
+                    &sender,
+                    &ctx,
+                    job.id,
+                    FileStatus::Cancelled,
+                    0,
+                    Some("Stopped by user".into()),
+                );
             }
             Err(error) => {
                 queue_update(
@@ -779,17 +855,20 @@ fn process_queue_job(
     } else {
         queue_ffmpeg_arguments(job, engine_output, spec, text_burn_in_file)?
     };
-    if control.is_cancelled() {
+    if control.is_cancelled() || control.job_stopped(job.id) {
         return Err("Stopped by user".to_owned());
     }
-    let command_text = std::iter::once(executable.to_string_lossy().into_owned())
-        .chain(
-            arguments
-                .iter()
-                .map(|argument| argument.to_string_lossy().into_owned()),
-        )
-        .collect::<Vec<_>>()
-        .join(" ");
+    let command_text = tools::display_command(&executable, &arguments);
+    send(
+        sender,
+        ctx,
+        WorkerEvent::Command {
+            job_id: job.id,
+            executable: executable.clone(),
+            arguments: arguments.clone(),
+            display: command_text.clone(),
+        },
+    );
     send(
         sender,
         ctx,
@@ -879,7 +958,7 @@ fn process_queue_job(
     let status = child
         .wait()
         .map_err(|error| format!("Could not wait for {}: {error}", engine.label()))?;
-    if control.is_cancelled() {
+    if control.is_cancelled() || control.job_stopped(job.id) {
         return Err("Stopped by user".to_owned());
     }
     let output_exists =
@@ -1022,6 +1101,7 @@ impl QueueProgress {
 }
 
 fn register_child(control: &WorkerControl, mut child: Child) -> Result<(), String> {
+    let jobs = control.jobs.lock().ok();
     let mut guard = match control.active_child.lock() {
         Ok(guard) => guard,
         Err(_) => {
@@ -1032,7 +1112,11 @@ fn register_child(control: &WorkerControl, mut child: Child) -> Result<(), Strin
             );
         }
     };
-    if control.is_cancelled() {
+    if control.is_cancelled()
+        || jobs
+            .as_ref()
+            .is_some_and(|jobs| jobs.active.is_some_and(|id| jobs.cancelled.contains(&id)))
+    {
         let _ = child.kill();
     }
     *guard = Some(child);
@@ -1435,8 +1519,235 @@ fn should_skip_existing(skip_existing: bool, dry_run: bool, output_exists: bool)
     !dry_run && skip_existing && output_exists
 }
 
+fn execution_spec(batch: &QueueSpec, job: &JobSpec) -> QueueSpec {
+    QueueSpec {
+        jobs: Vec::new(),
+        tools: batch.tools.clone(),
+        encoders: batch.encoders.clone(),
+        remux_engine: job
+            .execution
+            .as_ref()
+            .map_or(batch.remux_engine, |s| s.remux_engine),
+        existing: job
+            .execution
+            .as_ref()
+            .map_or(batch.existing, |s| s.existing),
+        dry_run: job.execution.as_ref().map_or(batch.dry_run, |s| s.dry_run),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn queue_start_logs_distinguish_remux_transcode_and_dry_run() {
+        use super::*;
+        let remux = JobSpec {
+            id: 1,
+            input: "input.mkv".into(),
+            output: "output.mkv".into(),
+            metadata: Default::default(),
+            settings: Default::default(),
+            execution: None,
+        };
+        let mut transcode = remux.clone();
+        transcode.id = 2;
+        transcode.settings.video = VideoSettings::Encode(Default::default());
+        for (jobs, dry_run, expected) in [
+            (vec![], false, "Remux batch started for 0 job(s)"),
+            (
+                vec![remux.clone()],
+                false,
+                "Remux batch started for 1 job(s)",
+            ),
+            (
+                vec![transcode.clone()],
+                false,
+                "Transcode batch started for 1 job(s)",
+            ),
+            (
+                vec![remux.clone(), transcode],
+                false,
+                "Transcode batch started for 2 job(s)",
+            ),
+            (vec![remux], true, "Dry-run batch started for 1 job(s)"),
+        ] {
+            let events = run_queue_blocking(QueueSpec {
+                jobs,
+                tools: Default::default(),
+                encoders: Default::default(),
+                remux_engine: RemuxEngine::Ffmpeg,
+                existing: Default::default(),
+                dry_run,
+            });
+            assert!(matches!(events.first(),Some(WorkerEvent::Log(text)) if text==expected));
+        }
+    }
+    #[test]
+    fn stop_requested_before_child_registration_kills_only_that_job() {
+        use super::*;
+        if std::env::var_os("KESTREL_WORKER_CONTROL_CHILD").is_some() {
+            std::thread::sleep(std::time::Duration::from_secs(60));
+            return;
+        }
+        let control = WorkerControl::default();
+        control.jobs.lock().unwrap().active = Some(42);
+        control.stop_job(42);
+        let child = crate::tools::command(&std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "worker::tests::stop_requested_before_child_registration_kills_only_that_job",
+            ])
+            .env("KESTREL_WORKER_CONTROL_CHILD", "1")
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap();
+        register_child(&control, child).unwrap();
+        let mut child = control.active_child.lock().unwrap().take().unwrap();
+        assert!(!child.wait().unwrap().success());
+        assert!(control.job_stopped(42));
+        assert!(!control.is_cancelled());
+        assert!(!control.job_stopped(43));
+    }
+    #[test]
+    fn stopping_one_job_does_not_cancel_its_neighbors() {
+        use super::*;
+        let control = WorkerControl::default();
+        control.stop_job(2);
+        assert!(!control.is_cancelled());
+        assert!(!control.job_stopped(1));
+        assert!(control.job_stopped(2));
+        let jobs = (1..=3)
+            .map(|id| JobSpec {
+                id,
+                input: "input.mkv".into(),
+                output: "output.mkv".into(),
+                metadata: MediaMetadata {
+                    video_codec: Some("h264".into()),
+                    ..Default::default()
+                },
+                settings: Default::default(),
+                execution: None,
+            })
+            .collect();
+        let spec = QueueSpec {
+            jobs,
+            tools: Toolchain {
+                ffmpeg: Some(crate::tools::Tool {
+                    path: "unused tool".into(),
+                    version: None,
+                }),
+                ..Default::default()
+            },
+            encoders: Default::default(),
+            remux_engine: RemuxEngine::Ffmpeg,
+            existing: ExistingPolicy::Overwrite,
+            dry_run: true,
+        };
+        let (sender, receiver) = mpsc::channel();
+        run_queue(spec, control.clone(), sender, Arc::new(|| {}));
+        let events = receiver.into_iter().collect::<Vec<_>>();
+        for (id, expected) in [
+            (1, FileStatus::Success),
+            (2, FileStatus::Cancelled),
+            (3, FileStatus::Success),
+        ] {
+            assert!(events.iter().any(|event|matches!(event,WorkerEvent::JobUpdated{job_id,status,..} if *job_id==id&&*status==expected)));
+        }
+        control.reset();
+        assert!(!control.job_stopped(2));
+    }
+    #[test]
+    fn mixed_queue_honors_job_execution_snapshots() {
+        use super::*;
+        let directory = std::env::temp_dir().join(format!(
+            "kestrel-snapshot-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let output = directory.join("movie.mkv");
+        std::fs::write(&output, b"existing output").unwrap();
+        let base = JobSpec {
+            id: 1,
+            input: "source with 'quotes'.mkv".into(),
+            output: output.clone(),
+            metadata: MediaMetadata {
+                video_codec: Some("h264".into()),
+                ..Default::default()
+            },
+            settings: JobSettings::default(),
+            execution: Some(JobExecution {
+                remux_engine: RemuxEngine::Ffmpeg,
+                existing: ExistingPolicy::Overwrite,
+                dry_run: true,
+                output_target: crate::inputs::OutputTarget::File(output.clone()),
+            }),
+        };
+        let mut skip = base.clone();
+        skip.id = 2;
+        let execution = skip.execution.as_mut().unwrap();
+        execution.dry_run = false;
+        execution.existing = ExistingPolicy::Skip;
+        let mut rename = base.clone();
+        rename.id = 3;
+        rename.execution.as_mut().unwrap().existing = ExistingPolicy::Rename;
+        let batch = QueueSpec {
+            jobs: vec![base, skip, rename],
+            tools: Toolchain {
+                ffmpeg: Some(crate::tools::Tool {
+                    path: "nonexistent ffmpeg".into(),
+                    version: None,
+                }),
+                ..Default::default()
+            },
+            encoders: Default::default(),
+            remux_engine: RemuxEngine::MkvToolNix,
+            existing: ExistingPolicy::Overwrite,
+            dry_run: false,
+        };
+        let events = run_queue_blocking(batch);
+        for (id, expected) in [
+            (1, FileStatus::Success),
+            (2, FileStatus::Skipped),
+            (3, FileStatus::Success),
+        ] {
+            assert!(events.iter().any(|event|matches!(event,WorkerEvent::JobUpdated {job_id,status,..} if *job_id==id && *status==expected)));
+        }
+        assert!(events.iter().any(|event|matches!(event,WorkerEvent::Command {job_id:3,arguments,display,..} if arguments.contains(&directory.join("movie (2).mkv").into_os_string()) && display.contains("source with"))));
+        assert_eq!(std::fs::read(&output).unwrap(), b"existing output");
+        assert!(!directory.join("movie (2).mkv").exists());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn legacy_jobs_fall_back_to_batch_policies_and_missing_tools_fail() {
+        use super::*;
+        let job = JobSpec {
+            id: 7,
+            input: "input.mkv".into(),
+            output: "output.mkv".into(),
+            metadata: Default::default(),
+            settings: Default::default(),
+            execution: None,
+        };
+        let batch = QueueSpec {
+            jobs: vec![job.clone()],
+            tools: Default::default(),
+            encoders: Default::default(),
+            remux_engine: RemuxEngine::Ffmpeg,
+            existing: ExistingPolicy::Rename,
+            dry_run: true,
+        };
+        let effective = execution_spec(&batch, &job);
+        assert_eq!(effective.remux_engine, batch.remux_engine);
+        assert_eq!(effective.existing, batch.existing);
+        assert!(effective.dry_run);
+        let events = run_queue_blocking(batch);
+        assert!(events.iter().any(|event|matches!(event,WorkerEvent::JobUpdated{job_id:7,status:FileStatus::Error,detail:Some(detail),..} if detail.contains("FFmpeg is unavailable"))));
+    }
     use super::{
         RemuxEngine, TemporaryOutput, WarningSummary, mkvmerge_engine_eligible,
         should_skip_existing, validate_output_paths,
@@ -1470,6 +1781,7 @@ mod tests {
     #[test]
     fn unavailable_encoder_fails_before_processing_or_starting_a_tool() {
         let job = super::JobSpec {
+            execution: None,
             id: 42,
             input: "missing-source.mkv".into(),
             output: "missing-output.mkv".into(),

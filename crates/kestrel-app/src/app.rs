@@ -586,6 +586,7 @@ impl KestrelApp {
             .iter()
             .filter(|entry| entry.status == FileStatus::Pending)
             .map(|entry| JobSpec {
+                execution: None,
                 id: entry.id,
                 input: entry.input.clone(),
                 output: entry.output.clone(),

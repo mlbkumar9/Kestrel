@@ -119,6 +119,7 @@ fn built_in_software_presets_transcode_supported_fixture_containers() {
             ));
             let events = worker::run_queue_blocking(QueueSpec {
                 jobs: vec![JobSpec {
+                    execution: None,
                     id: job_id,
                     input: input.clone(),
                     output: output.clone(),
@@ -321,6 +322,7 @@ fn real_ffmpeg_burn_in_handles_special_paths_and_image_subtitles() {
     fs::create_dir_all(text_output.parent().unwrap()).unwrap();
     let text_events = worker::run_queue_blocking(QueueSpec {
         jobs: vec![JobSpec {
+            execution: None,
             id: 901,
             input: text_input,
             output: text_output.clone(),
