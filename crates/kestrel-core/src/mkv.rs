@@ -624,9 +624,6 @@ pub fn build_arguments(
     } else {
         Vec::new()
     };
-    if audio_tracks.is_empty() {
-        return Err("No matching audio tracks found".to_owned());
-    }
     if dry_run {
         return Ok(None);
     }
@@ -651,9 +648,15 @@ pub fn build_arguments(
         OsString::from("--gui-mode"),
         OsString::from("-o"),
         output.as_os_str().to_owned(),
-        OsString::from("--audio-tracks"),
-        OsString::from(join_ids(&audio_ids)),
     ];
+    if audio_ids.is_empty() {
+        arguments.push(OsString::from("--no-audio"));
+    } else {
+        arguments.extend([
+            OsString::from("--audio-tracks"),
+            OsString::from(join_ids(&audio_ids)),
+        ]);
+    }
     if subtitle_ids.is_empty() {
         arguments.push(OsString::from("--no-subtitles"));
     } else {
@@ -686,9 +689,6 @@ pub fn build_ffmpeg_arguments(
         audio_tracks = metadata.audio_tracks.iter().collect();
     }
     let subtitle_tracks = matching_tracks(&metadata.subtitle_tracks, subtitle_languages);
-    if audio_tracks.is_empty() {
-        return Err("No matching audio tracks found".to_owned());
-    }
     if dry_run {
         return Ok(None);
     }
@@ -820,6 +820,48 @@ mod tests {
         );
         assert_eq!(audio, [1, 2]);
         assert_eq!(subtitles, [7]);
+    }
+
+    #[test]
+    fn video_only_sources_work_with_both_remux_engines() {
+        let mut metadata = fixture();
+        metadata.audio_tracks.clear();
+        let mkv = build_arguments(
+            Path::new("source.mkv"),
+            Path::new("out.mkv"),
+            &metadata,
+            &[],
+            &[],
+            false,
+            MkvRemuxSettings {
+                include_subtitles: false,
+                keep_chapters: true,
+                keep_metadata: true,
+                title: None,
+            },
+        )
+        .unwrap()
+        .unwrap();
+        assert!(mkv.iter().any(|arg| arg == "--no-audio"));
+        let ffmpeg = super::build_ffmpeg_arguments(
+            Path::new("source.mkv"),
+            Path::new("out.mkv"),
+            &MediaMetadata {
+                audio_tracks: vec![],
+                subtitle_tracks: vec![],
+                ..metadata
+            },
+            &[],
+            &[],
+            false,
+        )
+        .unwrap()
+        .unwrap();
+        assert!(
+            ffmpeg
+                .windows(2)
+                .any(|args| args[0] == "-map" && args[1] == "0:v?")
+        );
     }
 
     #[test]
