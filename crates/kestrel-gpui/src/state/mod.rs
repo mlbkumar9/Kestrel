@@ -12,6 +12,7 @@ use kestrel_core::{
     mkv,
     settings::{self, Preferences},
     tools::Toolchain,
+    transcode::JobSettings,
     worker::{self, JobSpec, QueueSpec, WorkerControl, WorkerEvent},
 };
 use reducer::{SourceEntry, StateData};
@@ -92,7 +93,7 @@ impl AppState {
                 }
             }
         });
-        discover(sender.clone());
+        discover(bridge(sender.clone()));
         Self {
             legacy_running: false,
             data,
@@ -234,7 +235,7 @@ impl AppState {
         self.data.scanning = true;
         let preferences = self.data.preferences.clone();
         let tools = self.data.tools.clone();
-        let sender = self.sender.clone();
+        let sender = bridge(self.sender.clone());
         std::thread::spawn(move || scan(preferences, tools, generation, sender));
         cx.notify();
     }
@@ -289,6 +290,7 @@ impl AppState {
             .map(|s| s.source.clone())
             .collect::<Vec<_>>();
         let plans = inputs::plan_outputs(&sources, &target, prefs.current_settings.container)?;
+        let settings = remux_settings(&prefs.current_settings);
         let specs = selected
             .into_iter()
             .zip(plans)
@@ -303,7 +305,7 @@ impl AppState {
                 input: p.input,
                 output: p.output,
                 metadata: s.metadata.clone().unwrap(),
-                settings: prefs.current_settings.clone(),
+                settings: settings.clone(),
             })
             .collect::<Vec<_>>();
         let ids = specs
@@ -544,7 +546,36 @@ impl Drop for AppState {
     }
 }
 
-fn discover(sender: Sender<Event>) {
+/// Forwards events from a std mpsc channel to the async channel the UI task reads.
+/// The forwarding thread ends when every `mpsc::Sender` is dropped.
+fn bridge(events: Sender<Event>) -> mpsc::Sender<Event> {
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        for event in receiver {
+            if events.send_blocking(event).is_err() {
+                return;
+            }
+        }
+    });
+    sender
+}
+
+/// Remux snapshot of the stored settings: stream copy only, keeping just the
+/// choices the Remux page exposes. Stored transcode preferences stay untouched.
+fn remux_settings(stored: &JobSettings) -> JobSettings {
+    let mut settings = JobSettings {
+        container: stored.container,
+        keep_chapters: stored.keep_chapters,
+        keep_metadata: stored.keep_metadata,
+        ..JobSettings::default()
+    };
+    settings.audio.languages = stored.audio.languages.clone();
+    settings.subtitles.languages = stored.subtitles.languages.clone();
+    settings.subtitles.include = stored.subtitles.include;
+    settings
+}
+
+fn discover(sender: mpsc::Sender<Event>) {
     std::thread::spawn(move || {
         let tools = if debug_flag("KESTREL_DEBUG_NO_TOOLS") {
             Toolchain::default()
@@ -570,7 +601,7 @@ fn discover(sender: Sender<Event>) {
         } else {
             legacy
         };
-        let _ = sender.send_blocking(Event::Ready {
+        let _ = sender.send(Event::Ready {
             tools,
             encoders,
             legacy,
@@ -582,7 +613,7 @@ fn discover(sender: Sender<Event>) {
 pub fn debug_flag(name: &str) -> bool {
     cfg!(debug_assertions) && std::env::var(name).as_deref() == Ok("1")
 }
-fn scan(preferences: Preferences, tools: Toolchain, generation: u64, sender: Sender<Event>) {
+fn scan(preferences: Preferences, tools: Toolchain, generation: u64, sender: mpsc::Sender<Event>) {
     let target = inputs::default_output_target(
         &preferences.input_items,
         preferences.current_settings.container,
@@ -614,7 +645,7 @@ fn scan(preferences: Preferences, tools: Toolchain, generation: u64, sender: Sen
         })
         .collect();
     if sender
-        .send_blocking(Event::Expanded {
+        .send(Event::Expanded {
             generation,
             sources: entries,
         })
@@ -629,7 +660,7 @@ fn scan(preferences: Preferences, tools: Toolchain, generation: u64, sender: Sen
             &source.path,
         );
         if sender
-            .send_blocking(Event::Probed {
+            .send(Event::Probed {
                 generation,
                 path: source.path,
                 result,
@@ -639,5 +670,40 @@ fn scan(preferences: Preferences, tools: Toolchain, generation: u64, sender: Sen
             return;
         }
     }
-    let _ = sender.send_blocking(Event::ScanFinished { generation });
+    let _ = sender.send(Event::ScanFinished { generation });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kestrel_core::transcode::{AudioChoice, BurnIn, VideoSettings};
+
+    #[test]
+    fn remux_snapshot_drops_imported_encoding_preset() {
+        let root = tempfile::tempdir().unwrap();
+        let paths = SettingsPaths {
+            gpui: root.path().join("gpui/gpui.ron"),
+            egui: root.path().join("egui/app.ron"),
+            legacy_egui: Vec::new(),
+        };
+        std::fs::create_dir_all(paths.egui.parent().unwrap()).unwrap();
+        std::fs::write(&paths.egui, include_str!("fixtures/egui_encode.ron")).unwrap();
+        let (_, prefs) = FileStorage::open(&paths).unwrap();
+        let stored = &prefs.current_settings;
+        assert!(matches!(stored.video, VideoSettings::Encode(_)));
+        assert!(!stored.is_remux_only());
+
+        let remux = remux_settings(stored);
+        assert!(remux.is_remux_only());
+        assert_eq!(remux.video, VideoSettings::Copy);
+        assert_eq!(remux.audio.codec, AudioChoice::Passthrough);
+        assert_eq!(remux.subtitles.burn_in, BurnIn::None);
+        assert_eq!(remux.container, stored.container);
+        assert_eq!(remux.audio.languages, vec!["fra"]);
+        assert_eq!(remux.subtitles.languages, vec!["deu"]);
+        assert!(!remux.subtitles.include);
+        assert!(!remux.keep_chapters);
+        assert!(!remux.keep_metadata);
+        assert!(matches!(stored.video, VideoSettings::Encode(_)));
+    }
 }
