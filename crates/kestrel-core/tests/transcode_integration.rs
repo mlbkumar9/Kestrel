@@ -95,15 +95,7 @@ fn built_in_software_presets_transcode_supported_fixture_containers() {
         inputs.push(path);
     }
 
-    let encoders = EncoderSet {
-        software: vec![
-            VideoEncoder::X264,
-            VideoEncoder::X265,
-            VideoEncoder::SvtAv1,
-            VideoEncoder::Vp9,
-        ],
-        hardware: Vec::new(),
-    };
+    let encoders = encoders::detect(&ffmpeg.path).expect("FFmpeg encoders should be detected");
     let builtin_presets = presets::builtins(&EncoderSet::default())
         .into_iter()
         .filter(|preset| preset.id != "hardware")

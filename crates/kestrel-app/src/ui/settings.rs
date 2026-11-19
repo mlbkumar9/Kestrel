@@ -248,7 +248,7 @@ fn summary(app: &mut KestrelApp, ui: &mut egui::Ui) {
                     match &encode.encoder {
                         VideoEncoder::X264 => "H.264".to_owned(),
                         VideoEncoder::X265 => "H.265".to_owned(),
-                        VideoEncoder::SvtAv1 => "AV1".to_owned(),
+                        VideoEncoder::SvtAv1 | VideoEncoder::AomAv1 => "AV1".to_owned(),
                         VideoEncoder::Vp9 => "VP9".to_owned(),
                         VideoEncoder::Hardware { codec, .. } => match codec {
                             HwCodec::H264 => "H.264".to_owned(),
@@ -756,14 +756,14 @@ fn codec_matches(selected: &VideoEncoder, software: &VideoEncoder) -> bool {
     let selected_codec = match selected {
         VideoEncoder::X264 => HwCodec::H264,
         VideoEncoder::X265 => HwCodec::Hevc,
-        VideoEncoder::SvtAv1 | VideoEncoder::Vp9 => HwCodec::Av1,
+        VideoEncoder::SvtAv1 | VideoEncoder::AomAv1 | VideoEncoder::Vp9 => HwCodec::Av1,
         VideoEncoder::Hardware { codec, .. } => *codec,
     };
     match software {
         VideoEncoder::X264 => selected_codec == HwCodec::H264,
         VideoEncoder::X265 => selected_codec == HwCodec::Hevc,
-        VideoEncoder::SvtAv1 => {
-            matches!(selected, VideoEncoder::SvtAv1)
+        VideoEncoder::SvtAv1 | VideoEncoder::AomAv1 => {
+            matches!(selected, VideoEncoder::SvtAv1 | VideoEncoder::AomAv1)
                 || matches!(
                     selected,
                     VideoEncoder::Hardware {
@@ -790,6 +790,7 @@ fn codec_hint(encoder: &VideoEncoder) -> &'static str {
             ..
         } => "Smaller files",
         VideoEncoder::SvtAv1
+        | VideoEncoder::AomAv1
         | VideoEncoder::Hardware {
             codec: HwCodec::Av1,
             ..
@@ -803,6 +804,7 @@ fn encoder_label(encoder: &VideoEncoder) -> &'static str {
         VideoEncoder::X264 => "Software (x264)",
         VideoEncoder::X265 => "Software (x265)",
         VideoEncoder::SvtAv1 => "Software (SVT-AV1)",
+        VideoEncoder::AomAv1 => "Software (libaom AV1)",
         VideoEncoder::Vp9 => "Software (VP9)",
         VideoEncoder::Hardware { vendor, .. } => match vendor {
             HwVendor::Nvenc => "NVIDIA NVENC",

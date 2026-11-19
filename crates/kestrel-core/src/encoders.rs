@@ -15,6 +15,26 @@ pub struct EncoderSet {
 }
 
 impl EncoderSet {
+    /// Keeps a supported encoder or chooses an available encoder in the same codec family.
+    /// Software alternatives are preferred to hardware alternatives.
+    pub fn resolve(&self, requested: &VideoEncoder) -> Result<VideoEncoder, String> {
+        if self.supports(requested) {
+            return Ok(requested.clone());
+        }
+        self.software
+            .iter()
+            .chain(&self.hardware)
+            .find(|candidate| candidate.codec_family() == requested.codec_family())
+            .cloned()
+            .ok_or_else(|| {
+                format!(
+                    "Video encoder {} is unavailable; no available {} encoder can replace it",
+                    crate::transcode::video_encoder_name_for_detection(requested),
+                    requested.codec_family()
+                )
+            })
+    }
+
     pub fn supports(&self, encoder: &VideoEncoder) -> bool {
         match encoder {
             VideoEncoder::Hardware { .. } => self.hardware.contains(encoder),
@@ -44,6 +64,7 @@ pub fn detect(ffmpeg: &Path) -> Result<EncoderSet, String> {
         ("libx264", VideoEncoder::X264),
         ("libx265", VideoEncoder::X265),
         ("libsvtav1", VideoEncoder::SvtAv1),
+        ("libaom-av1", VideoEncoder::AomAv1),
         ("libvpx-vp9", VideoEncoder::Vp9),
     ]
     .into_iter()
@@ -174,5 +195,46 @@ Encoders:
         assert!(parsed.contains("libsvtav1"));
         assert!(parsed.contains("libvpx-vp9"));
         assert!(!parsed.contains("aac"));
+    }
+}
+
+#[cfg(test)]
+mod fallback_tests {
+    use super::*;
+    #[test]
+    fn fallback_keeps_available_choice_and_prefers_same_family_software() {
+        let hardware = VideoEncoder::Hardware {
+            vendor: HwVendor::Nvenc,
+            codec: HwCodec::Av1,
+        };
+        let encoders = EncoderSet {
+            software: vec![VideoEncoder::X264, VideoEncoder::AomAv1],
+            hardware: vec![hardware.clone()],
+        };
+        assert_eq!(
+            encoders.resolve(&VideoEncoder::SvtAv1),
+            Ok(VideoEncoder::AomAv1)
+        );
+        assert_eq!(encoders.resolve(&hardware), Ok(hardware.clone()));
+        assert_eq!(
+            EncoderSet {
+                software: vec![],
+                hardware: vec![hardware.clone()]
+            }
+            .resolve(&VideoEncoder::SvtAv1),
+            Ok(hardware)
+        );
+    }
+    #[test]
+    fn fallback_rejects_other_codec_families_and_names_missing_encoder() {
+        let encoders = EncoderSet {
+            software: vec![VideoEncoder::X264],
+            hardware: vec![],
+        };
+        assert_eq!(
+            encoders.resolve(&VideoEncoder::SvtAv1).unwrap_err(),
+            "Video encoder libsvtav1 is unavailable; no available AV1 encoder can replace it"
+        );
+        assert!(EncoderSet::default().resolve(&VideoEncoder::X264).is_err());
     }
 }

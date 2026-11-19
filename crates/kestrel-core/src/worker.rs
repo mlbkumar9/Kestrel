@@ -520,6 +520,16 @@ fn run_queue(
         while control.paused.load(Ordering::SeqCst) && !control.is_cancelled() {
             std::thread::sleep(std::time::Duration::from_millis(80));
         }
+        let mut resolved_job = job.clone();
+        resolved_job.settings =
+            match crate::transcode::resolve_job_settings(&job.settings, &spec.encoders) {
+                Ok(settings) => settings,
+                Err(error) => {
+                    queue_update(&sender, &ctx, job.id, FileStatus::Error, 0, Some(error));
+                    continue;
+                }
+            };
+        let job = &resolved_job;
         if !spec.dry_run
             && let Some(parent) = job.output.parent()
             && let Err(error) = std::fs::create_dir_all(parent)
