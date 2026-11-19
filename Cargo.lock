@@ -3414,6 +3414,9 @@ name = "kestrel-gpui"
 version = "4.0.0-alpha.0"
 dependencies = [
  "gpui",
+ "kestrel-core",
+ "rfd",
+ "serde_json",
 ]
 
 [[package]]
