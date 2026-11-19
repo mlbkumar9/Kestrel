@@ -1,80 +1,62 @@
-# Installation Instructions
+# Installation
 
-## System Requirements
-- **Windows:**
-  - OS: Windows 10 or later
-  - RAM: Minimum 4 GB (8 GB recommended)
-  - Disk Space: 500 MB free space
+Kestrel's working desktop application uses egui. The GPUI application in this
+repository is a shell under development, not a replacement for the media workflow yet.
 
-- **macOS:**
-  - OS: macOS Mojave (10.14) or later
-  - RAM: Minimum 4 GB (8 GB recommended)
-  - Disk Space: 500 MB free space
+## Windows x64
 
-- **Linux:**
-  - OS: Ubuntu 18.04 or later, or Fedora 30 or later
-  - RAM: Minimum 4 GB (8 GB recommended)
-  - Disk Space: 500 MB free space
+Download a release from [GitHub Releases](https://github.com/mlbkumar9/Kestrel/releases):
 
-## Installation Steps
+- **MSI:** installs Kestrel and bundled FFmpeg/FFprobe and MKVToolNix for all users.
+  Installation may request administrator approval.
+- **Portable ZIP:** extract the entire archive, keeping the `tools` directory
+  next to `kestrel.exe`, then run the executable.
+- **Standalone EXE:** install FFmpeg/FFprobe and MKVToolNix separately and make
+  their executables discoverable on `PATH` or in the supported installation paths.
 
-### Windows
-1. **Install Python:**
-   - Download Python from [python.org](https://www.python.org/downloads/)
-   - Run the installer and check "Add Python to PATH".
-   - Verify installation by running `python --version` in Command Prompt.
+## Linux and macOS
 
-2. **Install MKVToolNix:**
-   - Download MKVToolNix from [MKVToolNix official site](https://mkvtoolnix.download/downloads.html).
-   - Run the installer and follow the instructions.
+Download and extract the binary for your platform and architecture, or build
+from source below. Install the external tools using your system package manager.
 
-### macOS
-1. **Install Python:**
-   - Open Terminal and run: 
-     ```bash
-     brew install python
-     ```
-   - Verify installation by running `python3 --version`.
+Ubuntu/Debian:
+```sh
+sudo apt install ffmpeg mkvtoolnix
+```
 
-2. **Install MKVToolNix:**
-   - Download MKVToolNix from [MKVToolNix official site](https://mkvtoolnix.download/downloads.html).
-   - Open the downloaded `.dmg` file and drag MKVToolNix to Applications.
+macOS with Homebrew:
+```sh
+brew install ffmpeg mkvtoolnix
+```
 
-### Linux
-1. **Install Python:**
-   - For Ubuntu:
-     ```bash
-     sudo apt update
-     sudo apt install python3
-     ```
-   - For Fedora:
-     ```bash
-     sudo dnf install python3
-     ```
-   - Verify installation by running `python3 --version`.
+Launch `kestrel` from the extracted directory. On Linux you may need to mark it
+executable with `chmod +x kestrel`. A graphical desktop session is required.
 
-2. **Install MKVToolNix:**
-   - For Ubuntu:
-     ```bash
-     sudo add-apt-repository ppa:abogdan
-     sudo apt update
-     sudo apt install mkvtoolnix mkvtoolnix-gui
-     ```
-   - For Fedora:
-     ```bash
-     sudo dnf install mkvtoolnix mkvtoolnix-gui
-     ```
+## Build from source
 
-## Verification Procedures
-- For Python, run `python --version` or `python3 --version` in the terminal/command prompt.
-- For MKVToolNix, open the application and check the version in the Help menu.
+Install Rust with rustup (Rust 1.92 or newer), Git and your platform's native
+compiler/linker. Linux GUI development packages are listed in the CI workflow;
+the GPUI shell's additional requirements are documented in `AGENTS.md`.
 
-## Troubleshooting
-- **Python not recognized:**
-  - Ensure Python is added to the PATH during installation.
-  
-- **MKVToolNix fails to open:**
-  - Check if the installation was completed successfully and if your system meets the requirements.
+```sh
+git clone https://github.com/mlbkumar9/Kestrel.git
+cd Kestrel
+cargo build --release -p kestrel-media
+cargo run --release -p kestrel-media
+```
 
-- **Common installation errors:**
-  - Refer to the official documentation for Python and MKVToolNix for troubleshooting guides.
+The binary is `target/release/kestrel` (`kestrel.exe` on Windows).
+Source builds do not bundle external media tools. Building the egui app does
+not require building the separate GPUI shell.
+
+## Verify tools
+
+```sh
+mkvmerge --version
+ffmpeg -version
+ffprobe -version
+```
+
+Kestrel searches executable-adjacent bundled tools, then `PATH`, then platform
+defaults. Restart the app after installing tools. FFmpeg builds need the
+encoders used by your jobs; see [FAQ](FAQ.md) for fallback behavior.
