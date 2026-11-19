@@ -1,232 +1,185 @@
+<div align="center">
+
+<img src="docs/images/kestrel-icon.png" alt="Kestrel icon" width="96" height="96">
+
 # Kestrel
 
-**Selective MKV language remuxer** — batch remux Matroska (`.mkv`) files with chosen audio and subtitle tracks by ISO 639-2 language code. The native Rust desktop app is the recommended daily-use interface; the existing Tauri, Python GUI, CLI, and Flask API remain available.
+**Remux, add tracks and transcode video. Native, local, no upload.**
 
-The native app supports both [MKVToolNix](https://mkvtoolnix.download/) and FFmpeg/FFprobe. Windows downloads bundle the command-line tools; macOS and Linux use tools installed on the system. The existing Tauri and Python entrypoints continue to use MKVToolNix.
+[![CI](https://github.com/mlbkumar9/Kestrel/actions/workflows/ci.yml/badge.svg)](https://github.com/mlbkumar9/Kestrel/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/mlbkumar9/Kestrel)](https://github.com/mlbkumar9/Kestrel/releases)
+[![Licence: MIT](https://img.shields.io/github/license/mlbkumar9/Kestrel)](LICENSE)
 
----
+</div>
 
-## Features
+![Kestrel Library page in the dark theme](docs/images/hero-library-dark.png)
 
-- Batch-process every `.mkv` in a folder
-- Select audio/subtitle tracks by ISO 639-2 language code (e.g. `eng`, `jpn`)
-- Auto-scan folders for available languages
-- Skip files that already exist in the output directory
-- Dry-run mode to preview matching tracks without writing files
-- Live per-file progress from MKVToolNix or FFmpeg
-- Choose MKVToolNix or FFmpeg for stream-copy remuxing
-- Use FFprobe metadata when MKVToolNix identification is unavailable
-- Cancel / stop support — the native app stops its active remux engine and removes partial output; Tauri and Python retain their existing `mkvmerge` behavior
+Kestrel 4.0 is a desktop app written in Rust with the GPUI toolkit. It drives FFmpeg and MKVToolNix on your machine. Files never leave your disk.
 
----
+Kestrel 4.0 has not been tagged yet. The latest GitHub release is v3.0.2, an earlier egui build. To run 4.0, [build it from source](#build-from-source).
 
-## Prerequisites
+## What it does
 
-| Requirement | Used by |
-|-------------|---------|
-| **MKVToolNix** (`mkvmerge`) or **FFmpeg/FFprobe** | Native app (Windows release bundles both engines) |
-| **MKVToolNix** (`mkvmerge`) | Tauri and Python entrypoints |
-| **Rust toolchain** (`rustup`) | Native and Tauri desktop apps |
-| **Python 3.7+** | Python GUI, CLI, and API |
-| **Node.js 18+** | Tauri desktop app |
+- **Remux without re-encoding.** Keep or drop audio and subtitle tracks by language, then edit each track: language, title, default and forced flags. Video is copied bit for bit.
+- **Add subtitles and audio.** Mux external SRT, ASS, SSA, VTT and SUP files, or audio files, into a container as new tracks.
+- **Change containers.** Write MKV, MP4, MOV or WebM. Kestrel checks every track against the target container and tells you what will be dropped before you start.
+- **Transcode with HandBrake-level controls.** Eight tabs (Summary, Dimensions, Filters, Video, Audio, Subtitles, Chapters, Tags) cover encoders, quality, crop, scaling, filters, HDR, per-track audio, burned-in subtitles and chapter names. FFmpeg does the work.
+- **Queue and presets.** Add jobs to a queue, start, pause or stop it, and read every command in the Activity log. Five built-in presets plus your own.
+- **Batch.** Add files or whole folders. Folder inputs keep their subfolder layout in the output.
 
-Optional Python packages are listed in `requirements.txt` (Rich, CustomTkinter, Pillow, Flask).
+## A closer look
 
----
+| | |
+|---|---|
+| ![Library in the light theme](docs/images/library-light.png) | ![Remux track editor](docs/images/remux-tracks.png) |
+| **Library.** Drop files or folders, see containers, codecs, languages, duration and size at a glance. | **Remux.** Edit tracks in a table: keep, language, title, default, forced. |
+| ![Transcode Video tab](docs/images/transcode-video.png) | |
+| **Transcode.** Encoder, quality slider, speed preset, tune, profile and level. | |
 
-## Installation
+Every page is covered in the [guides](#guides).
 
-```bash
+## Supported formats
+
+**Input.** Kestrel accepts these extensions: `mkv`, `mk3d`, `webm`, `mp4`, `m4v`, `mov`, `avi`, `ts`, `m2ts`, `mts`, `wmv`, `flv`, `mpg`, `mpeg`, `vob`, `3gp`, `ogv`. FFprobe reads every file, so FFmpeg must be installed for anything that is not Matroska.
+
+**Output.** What each container can hold without conversion, as encoded in `crates/kestrel-core/src/compat.rs`:
+
+| Container | Video (copy) | Audio (copy) | Subtitles |
+|---|---|---|---|
+| MKV | any codec | any codec | text and picture subtitles |
+| MP4 | H.264, HEVC, AV1, MPEG-4, VP9 | AAC, AC3, E-AC3, MP3, Opus, FLAC, ALAC | text only, stored as `mov_text` |
+| MOV | H.264, HEVC, AV1, MPEG-4, MPEG-2 | AAC, AC3, E-AC3, MP3, ALAC, PCM | text only, stored as `mov_text` |
+| WebM | VP8, VP9, AV1 | Opus, Vorbis | text only, stored as WebVTT |
+
+Rules that follow from the table:
+
+- A remux never converts audio. A track the container cannot hold is dropped, and Kestrel warns you first. If that removes every audio track, the job fails with a message.
+- Picture subtitles (PGS, VobSub, DVB, XSUB) go into MKV only. For other containers, burn them into the video with Transcode.
+- Text subtitles convert to the container's text format during a remux.
+- Video that the container cannot hold needs Transcode. Remux refuses it.
+- When you transcode, audio that the container cannot hold is converted instead of dropped: to AAC, or to Opus for WebM.
+
+## Install
+
+Kestrel needs **FFmpeg and FFprobe**. It uses **MKVToolNix** (`mkvmerge`) as an optional second engine for MKV to MKV remuxes.
+
+Kestrel looks for each tool in this order:
+
+1. Next to the Kestrel executable, then in a `tools` folder beside it (up to two folder levels deep).
+2. Your `PATH`.
+3. A platform default: on Windows `C:\Program Files\MKVToolNix` (mkvmerge only); on macOS `/Applications/MKVToolNix-*.app`, `/opt/homebrew/bin` and `/usr/local/bin`; on Linux `/usr/bin` and `/usr/local/bin`.
+
+Settings shows what was found. The tool paths are read-only in 4.0, so fix a missing tool by putting it on `PATH`.
+
+| Platform | Steps |
+|---|---|
+| Windows 11 | Install FFmpeg (for example a build from gyan.dev) and MKVToolNix, put them on `PATH`, then [build from source](#build-from-source). |
+| macOS | `brew install ffmpeg mkvtoolnix`, then build from source. macOS builds are untested for 4.0. |
+| Linux | `sudo apt install ffmpeg mkvtoolnix`, then build from source (extra packages listed below). Linux builds are untested for 4.0. |
+
+Full steps, including the legacy 3.x releases, are in [docs/INSTALLATION.md](docs/INSTALLATION.md).
+
+## Quick start
+
+1. Run Kestrel. On the **Library** page, drop files or folders on the window, or press `Ctrl O`.
+2. Wait for the rows to fill in. Kestrel probes each file in the background.
+3. To change tracks, press `Ctrl 2` for **Remux**. Pick languages, edit the track table, choose a container and press **Remux**.
+4. To re-encode, press `Ctrl 3` for **Transcode**. Pick a preset, adjust the tabs, press **Start encode** or `Ctrl Enter` to queue.
+5. Watch progress on **Queue** (`Ctrl 4`) and read commands and results on **Activity** (`Ctrl 5`).
+
+The [Getting started guide](docs/guides/getting-started.md) walks through this with screenshots.
+
+## Guides
+
+- [Getting started](docs/guides/getting-started.md)
+- [Remux and the track editor](docs/guides/remux.md)
+- [Adding subtitles and audio](docs/guides/adding-subtitles.md)
+- [Transcode, tab by tab](docs/guides/transcode.md)
+- [Presets](docs/guides/presets.md)
+- [Queue and Activity](docs/guides/queue-and-activity.md)
+- [Settings](docs/guides/settings.md)
+- [Troubleshooting](docs/guides/troubleshooting.md)
+
+Reference pages: [Installation](docs/INSTALLATION.md), [Usage](docs/USAGE.md), [FAQ](docs/FAQ.md), [Roadmap](docs/ROADMAP.md), [Changelog](CHANGELOG.md).
+
+## Keyboard shortcuts
+
+| Keys | Action |
+|---|---|
+| `Ctrl K` | Open the command palette |
+| `Ctrl O` | Add media files |
+| `Ctrl Enter` | Queue the current job (Remux, Library or Transcode page) |
+| `Esc` | Close the palette or any open overlay |
+| `Ctrl 1` | Library |
+| `Ctrl 2` | Remux |
+| `Ctrl 3` | Transcode |
+| `Ctrl 4` | Queue |
+| `Ctrl 5` | Activity |
+| `Ctrl 6` | Metrics (disabled placeholder until 4.1) |
+| `Up`, `Down` | Move in the palette list |
+
+Settings has no shortcut. Open it from the sidebar or the palette.
+
+## Build from source
+
+Kestrel needs Rust 1.92 or newer (edition 2024), installed with rustup.
+
+**Windows.** Use the MSVC toolchain with the Visual Studio C++ build tools and the Windows SDK. GPUI's build script needs the SDK's `fxc.exe` for release shaders and `rc.exe` for the default Windows manifest.
+
+```sh
 git clone https://github.com/mlbkumar9/Kestrel.git
 cd Kestrel
-pip install -r requirements.txt
+cargo build --release -p kestrel-gpui
+target\release\kestrel-gpui.exe
 ```
 
-For the Tauri desktop app:
+**Linux.** Install `libxkbcommon-dev`, `libwayland-dev`, `libxkbcommon-x11-dev`, `libfontconfig1-dev` and `mesa-vulkan-drivers`, then run `cargo run --release -p kestrel-gpui` in a graphical session. Without a GPU, set `VK_ICD_FILENAMES` to the lavapipe ICD (see `AGENTS.md`). A Linux cross-build of the Windows binary does not work, because GPUI needs the Windows shader compiler.
 
-```bash
-cd REMUX_Tauri
-npm install
+**macOS.** Untested for 4.0.
+
+You can pass media files on the command line: `kestrel-gpui movie.mkv other.mp4`.
+
+Checks used in CI:
+
+```sh
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
 ```
 
-## Downloads
-
-Download the latest Kestrel native build from [GitHub Releases](https://github.com/mlbkumar9/Kestrel/releases):
-
-- **Windows x64:** `kestrel.exe` plus bundled FFmpeg/FFprobe and MKVToolNix tools.
-- The standalone Windows executable requires FFmpeg/FFprobe and MKVToolNix to be installed separately.
-- **Windows installer (MSI):** Per-machine x64 installer available from [GitHub Releases](https://github.com/mlbkumar9/Kestrel/releases).
-
-- **macOS Apple Silicon and Intel:** app binary, README, and license; install MKVToolNix or FFmpeg/FFprobe separately.
-- **Linux x64:** app binary, README, and license; install MKVToolNix or FFmpeg/FFprobe separately.
-
-See the [project roadmap](docs/ROADMAP.md) for planned work.
-
----
-
-## Usage
-
-### 1. Native desktop app (recommended)
-
-Fast native Rust application with a dark egui interface, language chips, batch controls, and logs.
-
-```bash
-cargo run -p kestrel-media --release
-```
-
-Build a platform-specific release binary with `cargo build -p kestrel-media --release`. Choose MKVToolNix or FFmpeg in the sidebar; Windows release builds include both engines' tools, while macOS and Linux use tools available on `PATH` or the platform defaults.
-
-### GPUI shell builds
-
-The new GPUI shell runs with `cargo run -p kestrel-gpui`. Build its Windows binary
-on Windows with `cargo build --release -p kestrel-gpui`, using the MSVC Rust
-toolchain, Visual Studio C++ build tools, and Windows SDK. GPUI's build script
-requires the SDK's `fxc.exe` for release shaders and `rc.exe` for its default
-Windows manifest. Linux cross-builds fail with missing `shaders_bytes.rs`;
-we use upstream GPUI, not a fork.
-
-Linux builds, the existing egui app's Windows cross-build, and MSI packaging
-stay on Linux. The egui cross-build remains supported until phase 4 removes egui.
-CI and release workflows build the GPUI executable on `windows-latest`.
-
-### 2. Tauri desktop app
-
-Modern React desktop app with drag-and-drop, pause/stop, logs, and batch stats.
-
-```bash
-cd REMUX_Tauri
-npm run tauri dev      # development (Vite on http://localhost:1420)
-npm run tauri build    # production installer
-```
-
-1. Choose an **input folder** (or drag-and-drop onto the window).
-2. Set **output folder** (defaults to `<input>/remuxed` when empty).
-3. Under **Settings**, set **audio/subtitle languages** (comma-separated ISO codes).
-4. Click **Start Batch** (Space). **Esc** stops after killing the current file’s `mkvmerge` process.
-
-### 3. Classic GUI — `remux_gui.py`
-
-Dark-themed Tkinter interface with progress table and log export.
-
-```bash
-python "REMUX Python Scripts/remux_gui.py"
-```
-
-Shortcuts: `Ctrl+O` browse input, `Ctrl+S` start, `Esc` cancel (with confirmation).
-
-### 4. Modern GUI — `REMUX_ModernGUI.py`
-
-CustomTkinter UI with sidebar and per-file progress bars.
-
-```bash
-python "REMUX Python Scripts/REMUX_ModernGUI.py"
-```
-
-CustomTkinter and Pillow are included in `requirements.txt`.
-
-### 5. CLI — `REMUX_Script.py`
-
-Interactive terminal workflow with a Rich live progress table. Writes `remux_log.txt` to the output folder.
-
-```bash
-python "REMUX Python Scripts/REMUX_Script.py"
-```
-
-Prompts for input/output folders, language selection, skip-existing, and dry-run options.
-
-### 6. Flask API — `backend.py`
-
-JSON REST API for integration or a custom web front-end. Listens on **port 5000** by default.
-
-```bash
-python "REMUX Python Scripts/backend.py"
-```
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/` | GET | API name, `mkvmerge` availability, endpoint list |
-| `/api/scan` | POST | `{"path": "..."}` → file list + detected languages |
-| `/api/remux` | POST | Start batch: `files`, `outputDir`, `audioLangs`, `subLangs`, optional `skipExists`, `dryRun` |
-| `/api/cancel` | POST | Cancel running batch (terminates current `mkvmerge`) |
-| `/api/status` | GET | Current batch status and per-file progress |
-| `/api/stream` | GET | SSE progress stream (JSON state every 0.5s) |
-
-`dryRun: true` identifies matching tracks and reports success without writing output files.
-
-Example scan:
-
-```bash
-curl -s -X POST http://127.0.0.1:5000/api/scan -H "Content-Type: application/json" -d "{\"path\": \"C:\\\\Videos\\\\mkv\"}"
-```
-
----
-
-## Project structure
+## Project layout
 
 ```
 Kestrel/
-├── Cargo.toml                # Cargo workspace manifest
-├── Cargo.lock                # Shared workspace lockfile
-├── crates/
-│   ├── kestrel-app/           # Kestrel native Rust + egui desktop app
-│   │   ├── src/              # UI, theme, remux logic, and worker
-│   │   ├── tests/fixtures/   # mkvmerge and ffprobe JSON fixtures
-│   │   └── assets/           # Embedded fonts and licenses
-│   └── kestrel-core/         # UI-independent engine (phase 1)
-├── REMUX Python Scripts/
-│   ├── remux_gui.py          # Tkinter GUI (classic)
-│   ├── REMUX_ModernGUI.py    # CustomTkinter GUI
-│   ├── REMUX_Script.py       # Rich CLI
-│   └── backend.py            # Flask API
-├── REMUX_Tauri/              # Earlier Tauri + React desktop app
-│   ├── src/                  # React frontend
-│   ├── src-tauri/            # Rust backend
-│   └── public/               # Static assets (app-icon.png)
-├── requirements.txt
-├── scripts/                  # Release packaging helpers
-├── THIRD_PARTY_NOTICES.md    # Bundled tool licenses and source versions
-├── docs/ROADMAP.md
-├── README.md
-└── LICENSE
+  crates/
+    kestrel-core/    UI-independent engine: probing, remux, transcode, presets, queue worker
+    kestrel-gpui/    Kestrel 4.0 desktop app (GPUI)
+    kestrel-app/     Earlier egui app (package kestrel-media), kept as a legacy entry point
+  REMUX Python Scripts/   Tkinter, CustomTkinter, CLI and Flask tools (legacy)
+  REMUX_Tauri/            Tauri + React app (legacy)
+  docs/                   Guides and reference pages
+  scripts/                Release packaging helpers
+  vendor/xattr/           Patched dependency for GPUI on Linux
 ```
 
----
+## Legacy tools
 
-## Language codes
+The egui app (`cargo run -p kestrel-media --release`), the Tauri app and the Python scripts still live in the repository and still work as before. They are not part of 4.0. See [docs/LEGACY.md](docs/LEGACY.md).
 
-Use three-letter **ISO 639-2** codes: `eng` (English), `jpn` (Japanese), `spa` (Spanish), `fre`/`fra` (French), `ger`/`deu` (German), `und` (undefined/unknown).
+## Roadmap
 
-If a track has no language tag, it is treated as `und`. Language matching is case-insensitive.
+Kestrel 4.1 adds quality metrics: VMAF, PSNR, SSIM and XPSNR for an encode against its source. The 4.0 app shows the Metrics page as a disabled placeholder. See [docs/ROADMAP.md](docs/ROADMAP.md).
 
----
+## Credits
 
-## Troubleshooting
+- [FFmpeg](https://ffmpeg.org) does all encoding, decoding and probing for transcodes.
+- [MKVToolNix](https://mkvtoolnix.download) provides `mkvmerge` for Matroska remuxes.
+- [GPUI](https://www.gpui.rs) from the [Zed](https://zed.dev) project is the UI toolkit.
+- [HandBrake](https://handbrake.fr) is the reference for control names and preset values in the Transcode tabs. Kestrel uses no HandBrake code (HandBrake is GPL; Kestrel is MIT).
+- [Inter](https://rsms.me/inter/) and [JetBrains Mono](https://www.jetbrains.com/lp/mono/) are the bundled fonts.
 
-| Problem | Fix |
-|---------|-----|
-| Native remux engine unavailable | Install MKVToolNix or FFmpeg/FFprobe; Windows release downloads bundle these tools |
-| `mkvmerge not found` in Tauri/Python | Install MKVToolNix; add to PATH or use default `C:\Program Files\MKVToolNix\` on Windows |
-| No matching audio | Verify language codes match tags shown after scanning |
-| Native app build fails | Run `cargo build -p kestrel-media --release` from the repository root; ensure Rust is installed |
-| Tauri dev fails | Run `npm install` in `REMUX_Tauri`; ensure Node.js and Rust are installed |
-| Tauri blank window | Confirm Vite is on port 1420 (`npm run tauri dev` starts both) |
-| Empty output file | Check disk space and write permissions on the output folder |
-| Flask cancel seems stuck | Cancel sets a flag and kills the active `mkvmerge`; wait for the current file to finish aborting |
+Windows packages of the 3.x line bundle FFmpeg and MKVToolNix. Their licences and sources are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
----
+## Licence
 
-## License
-
-MIT — see [LICENSE](LICENSE).
-
-## Acknowledgments
-
-- [MKVToolNix](https://mkvtoolnix.download/)
-- [Rich](https://github.com/Textualize/rich)
-- [Tauri](https://tauri.app/)
-- [egui](https://www.egui.rs/)
-
-## Contributors
-
-- [mlbkumar9](https://github.com/mlbkumar9) — author and maintainer
-- [Devin](https://devin.ai) — AI software engineer by Cognition
+MIT. See [LICENSE](LICENSE).
