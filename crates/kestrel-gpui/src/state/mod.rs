@@ -264,11 +264,16 @@ impl AppState {
             selected.push(source);
         }
         let prefs = &self.data.preferences;
+        let target_paths = if matches!(prefs.input_items.as_slice(), [InputItem::File(_)]) {
+            paths
+        } else {
+            &[]
+        };
         let target = target.unwrap_or_else(|| {
             settings::effective_output_target(
                 prefs.output_target.as_ref(),
                 prefs.output_target_explicit,
-                paths,
+                target_paths,
                 &prefs.input_items,
                 prefs.current_settings.container,
             )
@@ -282,6 +287,12 @@ impl AppState {
             .into_iter()
             .zip(plans)
             .map(|(s, p)| JobSpec {
+                execution: Some(worker::JobExecution {
+                    remux_engine: prefs.remux_engine,
+                    existing: prefs.existing,
+                    dry_run: prefs.dry_run,
+                    output_target: target.clone(),
+                }),
                 id: 0,
                 input: p.input,
                 output: p.output,

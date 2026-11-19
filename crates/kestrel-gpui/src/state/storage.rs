@@ -128,12 +128,14 @@ mod tests {
         let (mut storage, mut prefs) = FileStorage::open(&paths).unwrap();
         prefs.audio_languages = "fra, jpn".into();
         prefs.dry_run = true;
+        prefs.light_theme = true;
         storage.save(&prefs).unwrap();
         prefs.subtitle_languages = "deu".into();
         storage.save(&prefs).unwrap();
         let (_, loaded) = FileStorage::open(&paths).unwrap();
         assert_eq!(loaded.audio_languages, "fra, jpn");
         assert!(loaded.dry_run);
+        assert!(loaded.light_theme);
         assert_eq!(loaded.current_settings.subtitles.languages, vec!["deu"]);
         assert_eq!(
             fs::read_dir(paths.gpui.parent().unwrap()).unwrap().count(),

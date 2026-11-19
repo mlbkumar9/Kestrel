@@ -16,6 +16,8 @@ impl Column {
 #[derive(Clone, Copy, Debug)]
 pub struct RowSelected(pub usize);
 pub struct Table {
+    selected_rows: std::collections::BTreeSet<usize>,
+    progress_column: Option<usize>,
     columns: Vec<Column>,
     rows: Vec<Vec<SharedString>>,
     selected: Option<usize>,
@@ -25,6 +27,8 @@ impl EventEmitter<RowSelected> for Table {}
 impl Table {
     pub fn new(columns: Vec<Column>, rows: Vec<Vec<SharedString>>, theme: Theme) -> Self {
         Self {
+            selected_rows: Default::default(),
+            progress_column: None,
             columns,
             rows,
             selected: None,
@@ -37,6 +41,18 @@ impl Table {
     }
     pub fn selection(&self) -> Option<usize> {
         self.selected
+    }
+    pub fn progress_column(mut self, index: usize) -> Self {
+        self.progress_column = Some(index);
+        self
+    }
+    pub fn set_selected_rows(
+        &mut self,
+        rows: std::collections::BTreeSet<usize>,
+        cx: &mut Context<Self>,
+    ) {
+        self.selected_rows = rows;
+        cx.notify();
     }
     pub fn set_rows(&mut self, rows: Vec<Vec<SharedString>>, cx: &mut Context<Self>) {
         self.rows = rows;
@@ -62,7 +78,7 @@ impl Render for Table {
                 div()
                     .flex()
                     .flex_shrink_0()
-                    .h_10()
+                    .h_8()
                     .bg(t.card)
                     .text_color(t.muted_text)
                     .children(self.columns.iter().map(|c| {
@@ -86,24 +102,43 @@ impl Render for Table {
                                 div()
                                     .id(i)
                                     .flex()
-                                    .h_10()
+                                    .h_8()
                                     .cursor_pointer()
                                     .border_b_1()
                                     .border_color(t.border)
-                                    .bg(if s.selected == Some(i) {
+                                    .bg(if s.selected_rows.contains(&i) || s.selected == Some(i) {
                                         t.selected
                                     } else {
                                         t.background
                                     })
                                     .hover(move |d| d.bg(t.hover))
                                     .children(s.columns.iter().enumerate().map(|(j, c)| {
+                                        let text = s.rows[i].get(j).cloned().unwrap_or_default();
                                         div()
                                             .w(c.width)
                                             .flex_shrink_0()
                                             .px_3()
                                             .py_2()
                                             .overflow_hidden()
-                                            .child(s.rows[i].get(j).cloned().unwrap_or_default())
+                                            .when(s.progress_column != Some(j), |d| {
+                                                d.child(text.clone())
+                                            })
+                                            .when(s.progress_column == Some(j), |d| {
+                                                d.flex()
+                                                    .items_center()
+                                                    .gap_2()
+                                                    .child(text.clone())
+                                                    .child(
+                                                        super::progress::progress(
+                                                            text.trim_end_matches('%')
+                                                                .parse::<f32>()
+                                                                .unwrap_or(0.)
+                                                                / 100.,
+                                                            t,
+                                                        )
+                                                        .flex_1(),
+                                                    )
+                                            })
                                     }))
                                     .on_click(cx.listener(move |s, _, _, cx| {
                                         s.selected = Some(i);

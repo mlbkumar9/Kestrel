@@ -36,6 +36,7 @@ pub fn save_preferences(storage: &mut dyn Storage, preferences: &Preferences) {
 #[serde(default)]
 /// Persisted settings, including fields retained for legacy-record migration.
 pub struct Preferences {
+    pub light_theme: bool,
     pub input_items: Vec<InputItem>,
     #[serde(default)]
     pub removed_sources: Vec<PathBuf>,
@@ -63,6 +64,7 @@ pub struct Preferences {
 impl Default for Preferences {
     fn default() -> Self {
         Self {
+            light_theme: false,
             input_items: Vec::new(),
             removed_sources: Vec::new(),
             output_directory: String::new(),

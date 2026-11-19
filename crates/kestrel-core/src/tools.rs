@@ -202,3 +202,54 @@ pub fn command(executable: &Path) -> Command {
         Command::new(executable)
     }
 }
+
+pub fn display_command(executable: &Path, arguments: &[OsString]) -> String {
+    display_command_for(executable, arguments, cfg!(windows))
+}
+
+fn display_command_for(executable: &Path, arguments: &[OsString], windows: bool) -> String {
+    let quote = |value: &str| {
+        if !value.is_empty()
+            && value
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "_-./:=".contains(c))
+        {
+            value.to_owned()
+        } else if windows {
+            format!("'{}'", value.replace('\'', "''"))
+        } else {
+            format!("'{}'", value.replace('\'', "'\\''"))
+        }
+    };
+    let parts = std::iter::once(executable.as_os_str())
+        .chain(arguments.iter().map(|a| a.as_os_str()))
+        .map(|s| quote(&s.to_string_lossy()))
+        .collect::<Vec<_>>()
+        .join(" ");
+    if windows { format!("& {parts}") } else { parts }
+}
+
+#[cfg(test)]
+mod command_display_tests {
+    use super::*;
+    #[test]
+    fn quotes_spaces_quotes_and_empty_arguments_for_each_shell() {
+        let args = vec![
+            OsString::from("a b"),
+            OsString::from("it's \"quoted\""),
+            OsString::from(""),
+        ];
+        assert_eq!(
+            display_command_for(Path::new("/tool path/ffmpeg"), &args, false),
+            "'/tool path/ffmpeg' 'a b' 'it'\\''s \"quoted\"' ''"
+        );
+        assert_eq!(
+            display_command_for(Path::new(r"C:\Program Files\ffmpeg.exe"), &args, true),
+            "& 'C:\\Program Files\\ffmpeg.exe' 'a b' 'it''s \"quoted\"' ''"
+        );
+        assert_eq!(
+            display_command_for(Path::new("ffmpeg"), &[], false),
+            "ffmpeg"
+        );
+    }
+}

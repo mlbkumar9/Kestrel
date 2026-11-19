@@ -325,14 +325,15 @@ pub fn apply(data: &mut StateData, event: WorkerEvent, now: SystemTime) {
                 job.eta_seconds = eta_seconds;
             }
         }
+        WorkerEvent::Command {
+            job_id, display, ..
+        } => {
+            if let Some(job) = data.queue.iter_mut().find(|j| j.spec.id == job_id) {
+                job.command_line = Some(display);
+            }
+        }
         WorkerEvent::Log(text) => {
             let job_id = data.active_job;
-            if let Some(job) = data.queue.iter_mut().find(|j| Some(j.spec.id) == job_id) {
-                let prefix = format!("{}: ", job.spec.input.display());
-                if let Some(command) = text.strip_prefix(&prefix) {
-                    job.command_line = Some(command.to_owned());
-                }
-            }
             data.log(job_id, text, now);
         }
         WorkerEvent::BatchFinished {
@@ -409,6 +410,7 @@ mod tests {
     use kestrel_core::transcode::JobSettings;
     fn job() -> JobSpec {
         JobSpec {
+            execution: None,
             id: 99,
             input: "input.mkv".into(),
             output: "output.mkv".into(),
@@ -465,6 +467,16 @@ mod tests {
                 status: FileStatus::Processing,
                 percent: 0,
                 detail: None,
+            },
+            NOW,
+        );
+        apply(
+            &mut d,
+            WorkerEvent::Command {
+                job_id: id,
+                executable: "ffmpeg".into(),
+                arguments: vec![],
+                display: "ffmpeg -i input.mkv output.mkv".into(),
             },
             NOW,
         );
@@ -529,9 +541,35 @@ mod tests {
     #[test]
     fn settings_snapshots_and_unknown_events() {
         let mut d = data();
-        let id = d.enqueue(job());
+        let mut snapshot = job();
+        snapshot.execution = Some(kestrel_core::worker::JobExecution {
+            remux_engine: kestrel_core::worker::RemuxEngine::Ffmpeg,
+            existing: kestrel_core::inputs::ExistingPolicy::Rename,
+            dry_run: true,
+            output_target: kestrel_core::inputs::OutputTarget::File("original.mkv".into()),
+        });
+        let id = d.enqueue(snapshot);
+        d.preferences.remux_engine = kestrel_core::worker::RemuxEngine::MkvToolNix;
+        d.preferences.existing = kestrel_core::inputs::ExistingPolicy::Overwrite;
+        d.preferences.dry_run = false;
+        d.preferences.output_target =
+            Some(kestrel_core::inputs::OutputTarget::Folder("changed".into()));
         d.preferences.current_settings.title = Some("Changed".into());
         assert_eq!(d.queue[0].spec.settings.title, None);
+        let execution = d.queue[0].spec.execution.as_ref().unwrap();
+        assert_eq!(
+            execution.remux_engine,
+            kestrel_core::worker::RemuxEngine::Ffmpeg
+        );
+        assert_eq!(
+            execution.existing,
+            kestrel_core::inputs::ExistingPolicy::Rename
+        );
+        assert!(execution.dry_run);
+        assert_eq!(
+            execution.output_target,
+            kestrel_core::inputs::OutputTarget::File("original.mkv".into())
+        );
         apply(
             &mut d,
             WorkerEvent::JobUpdated {
