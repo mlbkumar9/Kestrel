@@ -30,7 +30,7 @@ use std::{
 };
 #[path = "pages.rs"]
 mod pages;
-use pages::engine_status;
+use pages::{engine_status, progress_text};
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 enum Page {
@@ -372,7 +372,9 @@ impl Kestrel {
                         .unwrap_or_else(|| "Reading tracks".into())
                         .into(),
                     status.into(),
-                    format!("{}%", job.map_or(0, |j| j.percent)).into(),
+                    job.map(|j| progress_text(j.status, j.percent))
+                        .unwrap_or_else(|| "0%".into())
+                        .into(),
                 ]
             })
             .collect();

@@ -23,7 +23,7 @@ impl Kestrel {
                 vec![
                     file_name(&job.spec.input).into(),
                     status_text(job.status).into(),
-                    format!("{}%", job.percent).into(),
+                    progress_text(job.status, job.percent).into(),
                     job.speed
                         .map(|s| format!("{s:.1}×"))
                         .unwrap_or_else(|| "—".into())
@@ -321,6 +321,13 @@ pub(super) fn engine_status(name: &str, tool: Option<&kestrel_core::tools::Tool>
         }
     }
 }
+pub(super) fn progress_text(status: FileStatus, percent: u32) -> String {
+    if status == FileStatus::Skipped {
+        "—".into()
+    } else {
+        format!("{percent}%")
+    }
+}
 fn languages(codes: &[String]) -> String {
     if codes.is_empty() {
         "All".into()
@@ -360,6 +367,14 @@ fn log_lines(data: &StateData, filter: Option<u64>) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn skipped_progress_is_neutral() {
+        use super::*;
+        assert_eq!(progress_text(FileStatus::Skipped, 100), "—");
+        assert_eq!(progress_text(FileStatus::Success, 100), "100%");
+        assert_eq!(progress_text(FileStatus::Pending, 0), "0%");
+        assert_eq!(progress_text(FileStatus::Error, 25), "25%");
+    }
     use super::{engine_status, languages, log_lines, missing_tools};
     use kestrel_core::{
         settings::Preferences,
