@@ -76,7 +76,7 @@ impl TrackEdits {
         self.tracks.is_empty() && self.order.is_empty() && self.external.is_empty()
     }
 
-    fn edit_for(&self, id: u64) -> Option<&TrackEdit> {
+    pub(crate) fn edit_for(&self, id: u64) -> Option<&TrackEdit> {
         self.tracks.iter().find(|edit| edit.id == id)
     }
 
@@ -138,6 +138,9 @@ pub struct PlannedTrack<'a> {
 pub struct RemuxPlan<'a> {
     pub tracks: Vec<PlannedTrack<'a>>,
     pub warnings: Vec<String>,
+    /// Reasons (`compat::remux_audio_drop_reason`) for source audio tracks the container cannot
+    /// hold; they are left out of `tracks`.
+    pub dropped_source_audio: Vec<String>,
 }
 
 /// Validates and lowercases an ISO 639-2 language code.
@@ -282,11 +285,15 @@ pub fn plan<'a>(
     }
 
     let mut warnings = Vec::new();
+    let mut dropped_source_audio = Vec::new();
     let mut kept = Vec::with_capacity(tracks.len());
     for (track, explicit) in tracks.into_iter().zip(explicit_default) {
         if engine == Engine::Ffmpeg
             && let Some(reason) = skip_reason(&track, container)
         {
+            if track.kind == TrackKind::Audio && matches!(track.origin, Origin::Source(_)) {
+                dropped_source_audio.push(reason.clone());
+            }
             warnings.push(format!("Skipped {}: {reason}", describe(&track)));
             continue;
         }
@@ -310,10 +317,19 @@ pub fn plan<'a>(
     Ok(RemuxPlan {
         tracks: kept.into_iter().map(|(track, _)| track).collect(),
         warnings,
+        dropped_source_audio,
     })
 }
 
 fn skip_reason(track: &PlannedTrack<'_>, container: Container) -> Option<String> {
+    if track.kind == TrackKind::Audio {
+        let codec = if track.codec_id.is_empty() {
+            "unknown"
+        } else {
+            track.codec_id.as_str()
+        };
+        return compat::remux_audio_drop_reason(codec, container);
+    }
     if track.kind == TrackKind::Subtitle {
         if track.codec_id.is_empty() {
             return Some("unsupported subtitle file type".to_owned());
@@ -502,7 +518,7 @@ fn seconds(offset_ms: i64) -> String {
 }
 
 /// Target codec that makes FFmpeg decode and re-encode a text subtitle so `-sub_charenc` applies.
-fn recode_target(codec_id: &str) -> Option<&'static str> {
+pub(crate) fn recode_target(codec_id: &str) -> Option<&'static str> {
     match codec_id {
         "subrip" => Some("subrip"),
         "ass" | "ssa" => Some("ass"),
@@ -511,7 +527,7 @@ fn recode_target(codec_id: &str) -> Option<&'static str> {
     }
 }
 
-fn is_utf8(charset: &str) -> bool {
+pub(crate) fn is_utf8(charset: &str) -> bool {
     matches!(
         charset
             .trim()
@@ -533,8 +549,16 @@ fn disposition(default: bool, forced: bool) -> &'static str {
 
 /// FFmpeg stream-copy arguments for an edited remux, plus warnings for skipped tracks.
 ///
-/// Stream copy applies; a subtitle or audio track the container cannot hold as is converts
-/// (text subtitles, audio) or is skipped with a warning (picture subtitles).
+/// Nothing is re-encoded except text subtitles, which convert to the container's text format
+/// (and recode when an external file has a non-UTF-8 charset). An audio track the container
+/// cannot hold (for example DTS in MP4) or a picture subtitle is skipped with a warning; when
+/// that removes every source audio track and none remains, the job fails.
+///
+/// Honoured from `settings`: container, language selection, `track_edits`, `keep_metadata`,
+/// `keep_chapters`, `keep_attachments`, `title`, `tags` and `web_optimized`. Not applied here:
+/// chapter names, `align_av_start`, the track-selection behaviours (`selection`,
+/// `forced_only`, `default_track`) and per-track audio settings; those need the transcode
+/// argument builder (`JobSettings::needs_ffmpeg_muxing`).
 pub fn build_ffmpeg_remux_arguments(
     input: &Path,
     output: &Path,
@@ -563,6 +587,17 @@ pub fn build_ffmpeg_remux_arguments(
         Engine::Ffmpeg,
         container,
     )?;
+    if !plan.dropped_source_audio.is_empty()
+        && !plan
+            .tracks
+            .iter()
+            .any(|track| track.kind == TrackKind::Audio)
+    {
+        return Err(compat::remux_audio_failure(
+            &plan.dropped_source_audio,
+            container,
+        ));
+    }
 
     let mut arguments: Vec<OsString> = vec!["-i".into(), input.into()];
     let mut maps: Vec<OsString> = vec!["-map".into(), "0:v?".into()];
@@ -573,15 +608,9 @@ pub fn build_ffmpeg_remux_arguments(
             TrackKind::Audio => ("a", "a", &mut audio_index),
             TrackKind::Subtitle => ("s", "s", &mut subtitle_index),
         };
+        // Audio never converts here: tracks the container cannot hold were skipped by the plan.
         let stream_plan = match track.kind {
-            TrackKind::Audio => {
-                let codec = if track.codec_id.is_empty() {
-                    "unknown"
-                } else {
-                    track.codec_id.as_str()
-                };
-                compat::audio_copy_plan(codec, container)
-            }
+            TrackKind::Audio => StreamPlan::Copy,
             TrackKind::Subtitle => compat::subtitle_plan(&track.codec_id, container),
         };
         let mut codec = match stream_plan {
@@ -629,16 +658,22 @@ pub fn build_ffmpeg_remux_arguments(
             ]);
         }
         if let Some(title) = &track.title {
+            // MP4/MOV have no stream title tag; the muxer stores the handler name instead.
+            let key = if matches!(container, Container::Mp4 | Container::Mov) {
+                "handler_name"
+            } else {
+                "title"
+            };
             per_stream.extend([
                 format!("-metadata:s:{selector}:{index}").into(),
-                format!("title={title}").into(),
+                format!("{key}={title}").into(),
             ]);
         }
         *index += 1;
     }
 
     arguments.extend(maps);
-    if container == Container::Mkv {
+    if container == Container::Mkv && settings.keep_attachments {
         arguments.extend(["-map".into(), "0:t?".into()]);
     }
     arguments.extend(["-c".into(), "copy".into()]);
@@ -652,6 +687,9 @@ pub fn build_ffmpeg_remux_arguments(
     if let Some(title) = settings.title.as_deref().filter(|title| !title.is_empty()) {
         arguments.extend(["-metadata".into(), format!("title={title}").into()]);
     }
+    for (key, value) in settings.tags.entries() {
+        arguments.extend(["-metadata".into(), format!("{key}={value}").into()]);
+    }
     arguments.extend([
         "-max_muxing_queue_size".into(),
         "4096".into(),
@@ -662,7 +700,7 @@ pub fn build_ffmpeg_remux_arguments(
         "-f".into(),
         container.ffmpeg_muxer().into(),
     ]);
-    if matches!(container, Container::Mp4 | Container::Mov) {
+    if settings.web_optimized && matches!(container, Container::Mp4 | Container::Mov) {
         arguments.extend(["-movflags".into(), "+faststart".into()]);
     }
     arguments.push(output.into());
@@ -1076,12 +1114,117 @@ mod tests {
         assert!(warnings[0].contains("b.sup") && warnings[0].contains("Picture-based"));
         assert!(warnings[1].contains("c.xyz"));
         assert!(!mp4.contains(&"b.sup".to_owned()));
-        let (webm, _) = ffmpeg(edits.clone(), Container::WebM);
+        let webm_settings = JobSettings {
+            container: Container::WebM,
+            track_edits: edits.clone(),
+            ..JobSettings::default()
+        };
+        let mut opus = metadata();
+        opus.audio_tracks = vec![track(1, "jpn", "opus", true)];
+        let (webm, _) = build_ffmpeg_remux_arguments(
+            Path::new("in.mkv"),
+            Path::new("out"),
+            &opus,
+            &webm_settings,
+        )
+        .unwrap();
+        let webm = text(&webm);
         assert!(has_pair(&webm, "-c:s:2", "webvtt"));
         let (mkv, warnings) = ffmpeg(edits, Container::Mkv);
         assert!(mkv.contains(&"b.sup".to_owned()));
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("c.xyz"));
+    }
+
+    #[test]
+    fn unstorable_audio_is_dropped_with_a_warning_never_converted() {
+        let mut dts = metadata();
+        dts.audio_tracks = vec![track(1, "eng", "dts", true), track(2, "jpn", "aac", false)];
+        let settings = JobSettings {
+            container: Container::Mp4,
+            track_edits: TrackEdits {
+                tracks: vec![TrackEdit {
+                    id: 2,
+                    title: Some("Main".to_owned()),
+                    ..TrackEdit::default()
+                }],
+                ..TrackEdits::default()
+            },
+            ..JobSettings::default()
+        };
+        let (arguments, warnings) = build_ffmpeg_remux_arguments(
+            Path::new("in.mkv"),
+            Path::new("out.mp4"),
+            &dts,
+            &settings,
+        )
+        .unwrap();
+        let arguments = text(&arguments);
+        assert!(!arguments.contains(&"0:1".to_owned()), "{arguments:?}");
+        assert!(arguments.contains(&"0:2".to_owned()), "{arguments:?}");
+        assert!(!arguments.iter().any(|value| value.starts_with("-c:a:")));
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning.contains("DTS audio cannot be stored in MP4"))
+        );
+        // MP4 stores no stream title: the handler name carries it.
+        assert!(has_pair(&arguments, "-metadata:s:a:0", "handler_name=Main"));
+        // The compat warnings the UI shows list the same drop.
+        let shown = crate::compat::job_warnings(&dts, &settings);
+        assert!(
+            shown
+                .iter()
+                .any(|warning| warning.contains("Audio track 1 will be dropped")),
+            "{shown:?}"
+        );
+
+        // Only audio is DTS: the job fails before FFmpeg starts.
+        dts.audio_tracks.truncate(1);
+        let error = build_ffmpeg_remux_arguments(
+            Path::new("in.mkv"),
+            Path::new("out.mp4"),
+            &dts,
+            &settings,
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            "DTS audio cannot be stored in MP4; choose MKV or use Transcode"
+        );
+    }
+
+    #[test]
+    fn faststart_follows_web_optimized_and_mkv_keeps_title_tag() {
+        let mut settings = JobSettings {
+            container: Container::Mp4,
+            track_edits: TrackEdits {
+                tracks: vec![TrackEdit {
+                    id: 1,
+                    title: Some("Main".to_owned()),
+                    ..TrackEdit::default()
+                }],
+                ..TrackEdits::default()
+            },
+            ..JobSettings::default()
+        };
+        let build = |settings: &JobSettings| {
+            text(
+                &build_ffmpeg_remux_arguments(
+                    Path::new("in.mkv"),
+                    Path::new("out"),
+                    &metadata(),
+                    settings,
+                )
+                .unwrap()
+                .0,
+            )
+        };
+        assert!(has_pair(&build(&settings), "-movflags", "+faststart"));
+        settings.web_optimized = false;
+        assert!(!build(&settings).contains(&"-movflags".to_owned()));
+        settings.container = Container::Mkv;
+        assert!(has_pair(&build(&settings), "-metadata:s:a:0", "title=Main"));
     }
 
     #[test]

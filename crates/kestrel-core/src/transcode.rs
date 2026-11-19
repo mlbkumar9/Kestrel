@@ -69,14 +69,22 @@ impl Default for JobSettings {
 
 impl JobSettings {
     /// True when no stream is re-encoded or burned into the video.
+    ///
+    /// Audio counts as copy-only when every codec may pass through and every explicit track uses
+    /// the generic auto-passthru. A restricted `allowed_passthru` list or a track pinned to one
+    /// codec (`Passthru(codec)`) can send a source codec to the fallback encoder, so those jobs
+    /// are not remux-only.
     pub fn is_remux_only(&self) -> bool {
         matches!(&self.video, VideoSettings::Copy)
             && self.audio.codec == AudioChoice::Passthrough
+            && PassthruCodec::ALL
+                .iter()
+                .all(|codec| self.audio.allowed_passthru.contains(codec))
             && self
                 .audio
                 .tracks
                 .iter()
-                .all(|track| track.encoder.is_passthru())
+                .all(|track| track.encoder == AudioEncoder::AutoPassthru)
             && self.subtitles.burn_in == BurnIn::None
             && !self.subtitles.external.iter().any(|track| track.burn_in)
     }
@@ -120,7 +128,7 @@ impl MediaTags {
         self.entries().is_empty()
     }
 
-    fn entries(&self) -> Vec<(&'static str, &str)> {
+    pub(crate) fn entries(&self) -> Vec<(&'static str, &str)> {
         [
             ("artist", &self.actors),
             ("director", &self.director),
@@ -560,10 +568,22 @@ fn scale_filter(encode: &VideoEncode) -> Result<Option<String>, String> {
             (None, None, _) => (modulus != 2).then(|| {
                 format!("scale=trunc(iw/{modulus})*{modulus}:trunc(ih/{modulus})*{modulus}")
             }),
-            (None, Some(height), false) => Some(format!("scale=-{modulus}:'min(ih,{height})'")),
-            (None, Some(height), true) => Some(format!("scale=-{modulus}:{height}")),
-            (Some(width), None, false) => Some(format!("scale='min(iw,{width})':-{modulus}")),
-            (Some(width), None, true) => Some(format!("scale={width}:-{modulus}")),
+            // A single-axis limit must land on the modulus too: the free axis follows the
+            // aspect ratio, but the limited one is only as even as the limit itself.
+            (None, Some(height), false) => Some(format!(
+                "scale=-{modulus}:'trunc(min(ih,{height})/{modulus})*{modulus}'"
+            )),
+            (None, Some(height), true) => Some(format!(
+                "scale=-{modulus}:{}",
+                round_to_modulus(height, modulus)
+            )),
+            (Some(width), None, false) => Some(format!(
+                "scale='trunc(min(iw,{width})/{modulus})*{modulus}':-{modulus}"
+            )),
+            (Some(width), None, true) => Some(format!(
+                "scale={}:-{modulus}",
+                round_to_modulus(width, modulus)
+            )),
             (Some(width), Some(height), false) => Some(format!(
                 "scale=w='min(iw,{width})':h='min(ih,{height})':force_original_aspect_ratio=decrease:force_divisible_by={modulus}"
             )),
@@ -572,6 +592,11 @@ fn scale_filter(encode: &VideoEncode) -> Result<Option<String>, String> {
             )),
         },
     )
+}
+
+/// Largest multiple of `modulus` not above `value`, and at least `modulus`.
+fn round_to_modulus(value: u32, modulus: u32) -> u32 {
+    (value / modulus * modulus).max(modulus)
 }
 
 fn pad_filter(encode: &VideoEncode) -> Result<Option<String>, String> {
@@ -1104,9 +1129,20 @@ fn build_pass(
             if first_pass {
                 continue;
             }
-            let plan = compat::subtitle_plan(codec, settings.container);
+            let mut plan = compat::subtitle_plan(codec, settings.container);
             if matches!(plan, StreamPlan::Drop(_)) {
                 continue;
+            }
+            // `-sub_charenc` only applies when FFmpeg decodes the text, so a stream copy would
+            // keep the raw bytes. Recode to the same text format instead.
+            if plan == StreamPlan::Copy
+                && track
+                    .charset
+                    .as_deref()
+                    .is_some_and(|charset| !crate::remux_edit::is_utf8(charset))
+                && let Some(target) = crate::remux_edit::recode_target(codec)
+            {
+                plan = StreamPlan::Convert(target);
             }
             external_soft.push((extra_inputs + 1, track, plan));
             push_external_input(&mut arguments, track);
@@ -2066,7 +2102,7 @@ mod tests {
             filters,
             [
                 "crop=iw-6-8:ih-2-4:6:2",
-                "scale=-2:'min(ih,720)'",
+                "scale=-2:'trunc(min(ih,720)/2)*2'",
                 "fps=24",
                 "hqdn3d=2:1.5:3:2.25"
             ]
@@ -2257,7 +2293,7 @@ mod tests {
             .clone();
         assert!(complex.contains("[0:s:1]"));
         assert!(
-            complex.starts_with("[0:v:0][0:s:1]overlay=eof_action=pass[ov];[ov]crop=iw-4-4:ih-2-2:4:2,scale=-2:'min(ih,120)'"),
+            complex.starts_with("[0:v:0][0:s:1]overlay=eof_action=pass[ov];[ov]crop=iw-4-4:ih-2-2:4:2,scale=-2:'trunc(min(ih,120)/2)*2'"),
             "unexpected image-subtitle filtergraph: {complex}"
         );
         assert!(args.windows(2).any(|pair| pair == ["-map", "0:3"]));
@@ -2363,6 +2399,70 @@ mod tests {
         }];
         assert!(!settings.is_remux_only());
         assert!(settings.needs_ffmpeg_muxing());
+    }
+
+    #[test]
+    fn is_remux_only_is_false_when_settings_force_audio_conversion() {
+        // Case A: a restricted passthru list can send a codec to the fallback encoder.
+        let mut settings = JobSettings::default();
+        settings.audio.allowed_passthru = vec![PassthruCodec::Ac3];
+        assert!(!settings.is_remux_only());
+        // The order of the full list does not matter.
+        let mut reversed = JobSettings::default();
+        reversed.audio.allowed_passthru.reverse();
+        assert!(reversed.is_remux_only());
+        // Case B: a track pinned to one codec re-encodes any other source codec.
+        let mut settings = JobSettings::default();
+        settings.audio.tracks = vec![AudioTrackSetting {
+            encoder: AudioEncoder::Passthru(PassthruCodec::Ac3),
+            ..AudioTrackSetting::default()
+        }];
+        assert!(!settings.is_remux_only());
+    }
+
+    #[test]
+    fn single_axis_limits_land_on_the_modulus() {
+        let filter = |encode: VideoEncode| {
+            let encode = VideoEncode {
+                encoder: VideoEncoder::X265,
+                deinterlace: Deinterlace::Off,
+                ten_bit: TenBit::MatchSource,
+                ..encode
+            };
+            vf(&encode_settings(encode))
+        };
+        assert_eq!(
+            filter(VideoEncode {
+                max_height: Some(333),
+                ..VideoEncode::default()
+            }),
+            "scale=-2:'trunc(min(ih,333)/2)*2'"
+        );
+        assert_eq!(
+            filter(VideoEncode {
+                max_width: Some(333),
+                modulus: 8,
+                ..VideoEncode::default()
+            }),
+            "scale='trunc(min(iw,333)/8)*8':-8"
+        );
+        assert_eq!(
+            filter(VideoEncode {
+                max_height: Some(333),
+                allow_upscaling: true,
+                ..VideoEncode::default()
+            }),
+            "scale=-2:332"
+        );
+        assert_eq!(
+            filter(VideoEncode {
+                max_width: Some(3),
+                modulus: 8,
+                allow_upscaling: true,
+                ..VideoEncode::default()
+            }),
+            "scale=8:-8"
+        );
     }
 
     #[test]
@@ -2484,7 +2584,7 @@ mod tests {
                 max_height: Some(720),
                 ..VideoEncode::default()
             }),
-            "scale=-2:'min(ih,720)'"
+            "scale=-2:'trunc(min(ih,720)/2)*2'"
         );
         assert_eq!(
             filter(VideoEncode {
@@ -2926,6 +3026,24 @@ mod tests {
         assert!(has(&arguments, ["-metadata:s:s:0", "language=eng"]));
         assert!(has(&arguments, ["-metadata:s:s:0", "title=English"]));
         assert!(has(&arguments, ["-disposition:s:0", "default"]));
+    }
+
+    #[test]
+    fn non_utf8_charset_recodes_a_stream_copied_imported_subtitle() {
+        let track = |charset: Option<&str>| ExternalTrack {
+            path: "en.srt".into(),
+            charset: charset.map(str::to_owned),
+            ..ExternalTrack::default()
+        };
+        let mut settings = JobSettings::default();
+        settings.subtitles.languages = vec!["xxx".to_owned()];
+        settings.subtitles.external = vec![track(Some("ISO-8859-1"))];
+        // MKV would stream-copy SRT; the decoder only recodes when the subtitle is re-encoded.
+        assert!(has(&args(&settings), ["-c:s:0", "subrip"]));
+        settings.subtitles.external = vec![track(Some("UTF-8"))];
+        assert!(has(&args(&settings), ["-c:s:0", "copy"]));
+        settings.subtitles.external = vec![track(None)];
+        assert!(has(&args(&settings), ["-c:s:0", "copy"]));
     }
 
     #[test]

@@ -332,11 +332,15 @@ fn resolve_encoder(
         Ok((false, name))
     };
     let wanted = match encoder {
-        AudioEncoder::AutoPassthru => settings
-            .audio
-            .allowed_passthru
-            .iter()
-            .any(|codec| codec.matches(source)),
+        // A remux-only job copies whatever the container can hold, whatever the codec.
+        AudioEncoder::AutoPassthru => {
+            settings.is_remux_only()
+                || settings
+                    .audio
+                    .allowed_passthru
+                    .iter()
+                    .any(|codec| codec.matches(source))
+        }
         AudioEncoder::Passthru(codec) => codec.matches(source),
         other => return explicit(other),
     };
@@ -359,8 +363,27 @@ pub fn plan_audio<'a>(
     settings: &'a JobSettings,
 ) -> Result<Vec<AudioOutput<'a>>, String> {
     let tracks = selected_audio_tracks(metadata, settings)?;
+    // Remux-only jobs never re-encode: a track the container cannot hold is dropped, and the job
+    // fails when that leaves no audio.
+    let remux_only = settings.is_remux_only();
     let mut outputs = Vec::with_capacity(tracks.len());
+    let mut dropped = Vec::new();
     for (index, track) in tracks.into_iter().enumerate() {
+        if remux_only
+            && settings
+                .track_edits
+                .edit_for(track.id)
+                .is_some_and(|edit| !edit.keep)
+        {
+            continue;
+        }
+        if remux_only
+            && let Some(reason) =
+                compat::remux_audio_drop_reason(source_codec(track), settings.container)
+        {
+            dropped.push(reason);
+            continue;
+        }
         let explicit = settings.audio.tracks.get(index);
         let (encoder, mixdown, sample_rate, bitrate, gain_db, drc, name) = match explicit {
             Some(setting) => (
@@ -395,6 +418,9 @@ pub fn plan_audio<'a>(
             drc,
             name,
         });
+    }
+    if outputs.is_empty() && !dropped.is_empty() {
+        return Err(compat::remux_audio_failure(&dropped, settings.container));
     }
     Ok(outputs)
 }
@@ -544,10 +570,41 @@ mod tests {
     }
 
     #[test]
+    fn remux_only_drops_unstorable_audio_and_fails_when_none_is_left() {
+        // Tracks: 0 dts (eng), 1 aac (jpn), 2 truehd (eng).
+        let metadata = metadata();
+        let mut settings = JobSettings {
+            container: Container::Mp4,
+            ..JobSettings::default()
+        };
+        assert!(settings.is_remux_only());
+        let plan = plan_audio(&metadata, &settings).unwrap();
+        assert_eq!(plan.len(), 1);
+        assert_eq!((plan[0].track.id, plan[0].copy), (2, true));
+
+        let dts_only = MediaMetadata {
+            audio_tracks: vec![metadata.audio_tracks[0].clone()],
+            ..MediaMetadata::default()
+        };
+        assert_eq!(
+            plan_audio(&dts_only, &settings).unwrap_err(),
+            "DTS audio cannot be stored in MP4; choose MKV or use Transcode"
+        );
+        // MKV holds everything, including codecs outside the passthru list.
+        settings.container = Container::Mkv;
+        let mut pcm = dts_only;
+        pcm.audio_tracks[0].codec = "pcm_s16le".to_owned();
+        pcm.audio_tracks[0].codec_id = "pcm_s16le".to_owned();
+        let plan = plan_audio(&pcm, &settings).unwrap();
+        assert_eq!((plan[0].copy, plan[0].encoder), (true, "copy"));
+    }
+
+    #[test]
     fn passthru_falls_back_when_not_allowed_or_not_storable() {
         let metadata = metadata();
         let mut settings = JobSettings {
             container: Container::Mp4,
+            video: crate::transcode::VideoSettings::Encode(Default::default()),
             ..JobSettings::default()
         };
         settings.audio.tracks = vec![

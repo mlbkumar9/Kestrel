@@ -55,6 +55,66 @@ pub fn audio_copy_plan(codec_id: &str, container: Container) -> StreamPlan {
     }
 }
 
+/// Reason a remux-only job cannot keep an audio track in `container`; `None` when it can.
+/// A remux never converts audio, so such a track is dropped.
+pub fn remux_audio_drop_reason(codec_id: &str, container: Container) -> Option<String> {
+    match audio_copy_plan(codec_id, container) {
+        StreamPlan::Convert(_) => Some(format!(
+            "{} audio cannot be stored in {}",
+            codec_id.trim().to_ascii_uppercase(),
+            container.label()
+        )),
+        StreamPlan::Copy | StreamPlan::Drop(_) => None,
+    }
+}
+
+/// Error for a remux-only job whose every audio track was dropped (`reasons` come from
+/// [`remux_audio_drop_reason`]).
+pub fn remux_audio_failure(reasons: &[String], container: Container) -> String {
+    let mut codecs: Vec<&str> = Vec::new();
+    for reason in reasons {
+        let codec = reason.split(" audio").next().unwrap_or(reason);
+        if !codecs.contains(&codec) {
+            codecs.push(codec);
+        }
+    }
+    format!(
+        "{} audio cannot be stored in {}; choose MKV or use Transcode",
+        codecs.join(", "),
+        container.label()
+    )
+}
+
+/// Selected audio tracks that a remux-only job drops, as `(number, reason)` warnings.
+pub fn remux_audio_warnings(metadata: &MediaMetadata, settings: &JobSettings) -> Vec<String> {
+    let Ok(tracks) = crate::transcode::audio::selected_audio_tracks(metadata, settings) else {
+        return Vec::new();
+    };
+    tracks
+        .into_iter()
+        .filter(|track| {
+            settings
+                .track_edits
+                .edit_for(track.id)
+                .is_none_or(|edit| edit.keep)
+        })
+        .filter_map(|track| {
+            let number = metadata
+                .audio_tracks
+                .iter()
+                .position(|candidate| std::ptr::eq(candidate, track))
+                .map_or(0, |position| position + 1);
+            let codec = if track.codec_id.is_empty() {
+                track.codec.as_str()
+            } else {
+                track.codec_id.as_str()
+            };
+            remux_audio_drop_reason(codec, settings.container)
+                .map(|reason| format!("Audio track {number} will be dropped: {reason}"))
+        })
+        .collect()
+}
+
 pub fn subtitle_plan(codec_id: &str, container: Container) -> StreamPlan {
     let codec = normalize(codec_id);
     if is_image_subtitle(&codec) {
@@ -115,20 +175,12 @@ pub fn job_warnings(metadata: &MediaMetadata, settings: &JobSettings) -> Vec<Str
         {
             warnings.push("No matching audio languages found; keeping all audio tracks".to_owned());
         }
-        match crate::transcode::audio::selected_audio_tracks(metadata, settings) {
-            Ok(tracks) => {
-                for track in tracks {
-                    if let StreamPlan::Drop(reason) =
-                        audio_copy_plan(&track.codec_id, settings.container)
-                    {
-                        warnings.push(reason);
-                    }
-                }
-            }
-            Err(error) => warnings.push(error),
-        }
-    } else if let Err(error) = crate::transcode::audio::plan_audio(metadata, settings) {
+    }
+    if let Err(error) = crate::transcode::audio::plan_audio(metadata, settings) {
         warnings.push(error);
+    }
+    if settings.is_remux_only() {
+        warnings.extend(remux_audio_warnings(metadata, settings));
     }
 
     if settings.subtitles.include {

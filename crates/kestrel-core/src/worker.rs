@@ -945,7 +945,7 @@ fn process_queue_job(
                 return Err(format!(
                     "{} analysis pass failed: {}",
                     engine.label(),
-                    result.1.trim()
+                    trim_diagnostic(&result.1)
                 ));
             }
         } else {
@@ -964,14 +964,15 @@ fn process_queue_job(
         output_exists,
     );
     if outcome == mkv::RemuxExitOutcome::Failure {
-        return Err(if diagnostic.trim().is_empty() {
+        let diagnostic = trim_diagnostic(&diagnostic);
+        return Err(if diagnostic.is_empty() {
             format!(
                 "{} failed with exit code {:?}",
                 engine.label(),
                 status.code()
             )
         } else {
-            format!("{} failed: {}", engine.label(), diagnostic.trim())
+            format!("{} failed: {diagnostic}", engine.label())
         });
     }
     finalize_output(partial, output)?;
@@ -1145,12 +1146,15 @@ fn queue_ffmpeg_arguments(
             "FFmpeg is unavailable".to_owned()
         }
     })?;
-    if job.settings.is_remux_only()
-        && !job.settings.track_edits.is_empty()
+    // FFmpeg may run with the temp directory as its working directory (text burn-in), so
+    // relative imported-file paths are resolved here, against this process's directory.
+    let settings = with_absolute_external_paths(&job.settings)?;
+    if settings.is_remux_only()
+        && !settings.track_edits.is_empty()
         && resources.text_burn_in_file.is_none()
     {
         let (arguments, warnings) =
-            mkv::build_ffmpeg_edit_arguments(&job.input, output, &job.metadata, &job.settings)?;
+            mkv::build_ffmpeg_edit_arguments(&job.input, output, &job.metadata, &settings)?;
         edit_warnings.extend(warnings);
         return Ok((ffmpeg.path.clone(), vec![arguments], RemuxEngine::Ffmpeg));
     }
@@ -1167,11 +1171,45 @@ fn queue_ffmpeg_arguments(
             output.to_path_buf()
         },
         &job.metadata,
-        &job.settings,
+        &settings,
         &spec.encoders,
         resources,
     )?;
     Ok((ffmpeg.path.clone(), passes, RemuxEngine::Ffmpeg))
+}
+
+/// Copy of `settings` with every imported subtitle/audio file path made absolute.
+fn with_absolute_external_paths(settings: &JobSettings) -> Result<JobSettings, String> {
+    let mut settings = settings.clone();
+    for track in settings
+        .subtitles
+        .external
+        .iter_mut()
+        .chain(settings.track_edits.external.iter_mut())
+    {
+        track.path = absolute_path(&track.path)?;
+    }
+    Ok(settings)
+}
+
+/// Keeps the useful end of a tool's stderr: drops the FFmpeg version/build banner and keeps the
+/// last few lines, where the actual error is.
+fn trim_diagnostic(text: &str) -> String {
+    const KEEP: usize = 6;
+    let lines: Vec<&str> = text
+        .lines()
+        .map(str::trim_end)
+        .filter(|line| !line.trim().is_empty() && !is_ffmpeg_banner_line(line))
+        .collect();
+    lines[lines.len().saturating_sub(KEEP)..].join("\n")
+}
+
+fn is_ffmpeg_banner_line(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    trimmed.starts_with("ffmpeg version")
+        || trimmed.starts_with("built with")
+        || trimmed.starts_with("configuration:")
+        || (trimmed.starts_with("lib") && trimmed.contains(" / "))
 }
 
 /// Writes the renamed-chapter metadata file when the job overrides chapter names.
@@ -1483,7 +1521,7 @@ fn process_file(
             return Err(format!(
                 "{} failed: {}",
                 engine.label(),
-                stderr_output.diagnostic_tail.trim()
+                trim_diagnostic(&stderr_output.diagnostic_tail)
             ));
         }
         return Err(format!(
@@ -1503,7 +1541,7 @@ fn process_file(
                 Err(format!(
                     "{} failed: {}",
                     engine.label(),
-                    stderr_output.diagnostic_tail.trim()
+                    trim_diagnostic(&stderr_output.diagnostic_tail)
                 ))
             } else {
                 Err(format!(
@@ -1695,6 +1733,36 @@ fn execution_spec(batch: &QueueSpec, job: &JobSpec) -> QueueSpec {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn external_paths_are_made_absolute_and_banner_is_trimmed_from_errors() {
+        use super::*;
+        use crate::external::ExternalTrack;
+        let mut settings = JobSettings::default();
+        let relative = ExternalTrack {
+            path: "subs/en.srt".into(),
+            ..ExternalTrack::default()
+        };
+        settings.subtitles.external = vec![relative.clone()];
+        settings.track_edits.external = vec![relative];
+        let absolute = with_absolute_external_paths(&settings).unwrap();
+        assert!(absolute.subtitles.external[0].path.is_absolute());
+        assert!(absolute.track_edits.external[0].path.is_absolute());
+        assert!(absolute.subtitles.external[0].path.ends_with("subs/en.srt"));
+
+        let stderr = "ffmpeg version 9.0.1 Copyright (c) 2000-2025
+  built with gcc 14
+  configuration: --enable-gpl
+  libavutil      60.  8.100 / 60.  8.100
+Input #0, matroska
+subs/en.srt: No such file or directory
+Error opening input files";
+        let trimmed = trim_diagnostic(stderr);
+        assert!(!trimmed.contains("ffmpeg version") && !trimmed.contains("libavutil"));
+        assert!(!trimmed.contains("configuration"));
+        assert!(trimmed.ends_with("Error opening input files"));
+        assert!(trimmed.contains("No such file or directory"));
+    }
+
     #[test]
     fn queue_start_logs_distinguish_remux_transcode_and_dry_run() {
         use super::*;
