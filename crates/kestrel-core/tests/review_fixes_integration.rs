@@ -146,6 +146,8 @@ fn run(env: &Env, input: &Path, output: &Path, settings: JobSettings) -> Outcome
         remux_engine: RemuxEngine::Ffmpeg,
         existing: ExistingPolicy::Overwrite,
         dry_run: false,
+        parallel_jobs: 1,
+        keep_source_dates: false,
     });
     let success = events.iter().any(|event| {
         matches!(

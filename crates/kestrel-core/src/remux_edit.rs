@@ -156,8 +156,16 @@ pub fn normalize_language_code(value: &str) -> Result<String, String> {
     }
 }
 
-/// Codec id of an external file from its extension; `None` for unsupported text/image subtitles.
-fn external_codec_id(track: &ExternalTrack) -> Option<&'static str> {
+/// Codec id of an external file: the probed codec when there is one, else the one its extension
+/// implies; `None` for unsupported text/image subtitles.
+fn external_codec_id(track: &ExternalTrack) -> Option<String> {
+    if let Some(codec) = track.codec.as_deref().filter(|codec| !codec.is_empty()) {
+        return Some(codec.to_owned());
+    }
+    extension_codec_id(track).map(str::to_owned)
+}
+
+fn extension_codec_id(track: &ExternalTrack) -> Option<&'static str> {
     let extension = track
         .path
         .extension()
@@ -276,7 +284,7 @@ pub fn plan<'a>(
         tracks.push(PlannedTrack {
             kind: kind_of(external),
             origin: Origin::External(external),
-            codec_id: external_codec_id(external).unwrap_or_default().to_owned(),
+            codec_id: external_codec_id(external).unwrap_or_default(),
             language,
             title: external.title.clone(),
             default: external.default,
@@ -1075,6 +1083,57 @@ mod tests {
         assert!(has_pair(&arguments, "-metadata:s:s:2", "language=spa"));
         assert!(has_pair(&arguments, "-metadata:s:s:2", "title=Spanish"));
         assert!(has_pair(&arguments, "-disposition:s:2", "0"));
+    }
+
+    #[test]
+    fn a_probed_codec_replaces_the_extension_guess_for_added_audio() {
+        let added = |codec: Option<&str>| TrackEdits {
+            external: vec![ExternalTrack {
+                codec: codec.map(str::to_owned),
+                ..external("dub.mka", ExternalKind::Audio)
+            }],
+            ..TrackEdits::default()
+        };
+        // Guessed from ".mka" the codec is "unknown", so MP4 would drop the track.
+        let (guessed, warnings) = ffmpeg(added(None), Container::Mp4);
+        assert!(
+            warnings.iter().any(|w| w.contains("UNKNOWN audio")),
+            "{warnings:?}"
+        );
+        assert!(!guessed.contains(&"dub.mka".to_owned()));
+        // Probed as Opus, MP4 keeps it as a stream copy.
+        let (probed, warnings) = ffmpeg(added(Some("opus")), Container::Mp4);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert!(has_pair(&probed, "-i", "dub.mka"));
+        assert!(!probed.iter().any(|value| value.starts_with("-c:a:")));
+        // Probed as TrueHD, MP4 still skips it, naming the real codec.
+        let (thd, warnings) = ffmpeg(added(Some("truehd")), Container::Mp4);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("TRUEHD audio cannot be stored in MP4")),
+            "{warnings:?}"
+        );
+        assert!(!thd.contains(&"dub.mka".to_owned()));
+        // A subtitle in an extension the table does not know is usable once probed.
+        let subtitle = |codec: Option<&str>| TrackEdits {
+            external: vec![ExternalTrack {
+                codec: codec.map(str::to_owned),
+                ..external("subs.mks", ExternalKind::Subtitle)
+            }],
+            ..TrackEdits::default()
+        };
+        let (_, warnings) = ffmpeg(subtitle(None), Container::Mp4);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("unsupported subtitle file type")),
+            "{warnings:?}"
+        );
+        let (arguments, warnings) = ffmpeg(subtitle(Some("subrip")), Container::Mp4);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert!(has_pair(&arguments, "-i", "subs.mks"));
+        assert!(arguments.iter().any(|value| value == "mov_text"));
     }
 
     #[test]

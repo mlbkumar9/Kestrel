@@ -4,7 +4,11 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$Tag,
     [Parameter(Mandatory = $true)]
-    [string]$OutputDirectory
+    [string]$OutputDirectory,
+    # File name of the executable inside the package (Kestrel.exe for the GPUI app).
+    [string]$ExeName = "Kestrel.exe",
+    # Archive file name; defaults to Kestrel-<Tag>-windows-x64.zip.
+    [string]$ArchiveName = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -12,12 +16,21 @@ $ErrorActionPreference = "Stop"
 if ($Tag -notmatch '^[A-Za-z0-9._-]+$') {
     throw "Tag must contain only letters, numbers, dots, underscores, or hyphens."
 }
+if ($ExeName -notmatch '^[A-Za-z0-9._-]+\.exe$') {
+    throw "ExeName must be a plain file name ending in .exe."
+}
+if ([string]::IsNullOrWhiteSpace($ArchiveName)) {
+    $ArchiveName = "Kestrel-$Tag-windows-x64.zip"
+}
+if ($ArchiveName -notmatch '^[A-Za-z0-9._-]+\.zip$') {
+    throw "ArchiveName must be a plain file name ending in .zip."
+}
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $binary = (Resolve-Path -LiteralPath $BinaryPath).Path
 $output = [System.IO.Path]::GetFullPath($OutputDirectory)
-$ffmpegVersion = "n9.0.2-37-gae19868753"
-$ffmpegUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-29-19-17/ffmpeg-n9.0.2-37-gae19868753-win64-gpl-9.0.zip"
+$ffmpegVersion = "n9.0.2-39-g7adfbe40dc"
+$ffmpegUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-31-12-59/ffmpeg-n9.0.2-39-g7adfbe40dc-win64-gpl-9.0.zip"
 $mkvtoolnixVersion = "99.0"
 $mkvtoolnixUrl = "https://mkvtoolnix.download/windows/releases/99.0/mkvtoolnix-64-bit-99.0.7z"
 $work = Join-Path ([System.IO.Path]::GetTempPath()) "kestrel-package-$([guid]::NewGuid().ToString('N'))"
@@ -83,12 +96,12 @@ try {
     Get-ChildItem -LiteralPath $mkvmergeExe.Directory.FullName -Filter "*.dll" -File |
         Copy-Item -Destination $mkvtoolnixBin
 
-    Copy-Item -LiteralPath $binary -Destination (Join-Path $stage "kestrel.exe")
+    Copy-Item -LiteralPath $binary -Destination (Join-Path $stage $ExeName)
     Copy-Item -LiteralPath (Join-Path $repoRoot "README.md") -Destination $stage
     Copy-Item -LiteralPath (Join-Path $repoRoot "LICENSE") -Destination $stage
     Copy-Item -LiteralPath (Join-Path $repoRoot "THIRD_PARTY_NOTICES.md") -Destination $stage
 
-    $archive = Join-Path $output "Kestrel-$Tag-windows-x64.zip"
+    $archive = Join-Path $output $ArchiveName
     if (Test-Path -LiteralPath $archive) {
         Remove-Item -LiteralPath $archive -Force
     }

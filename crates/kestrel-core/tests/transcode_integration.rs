@@ -135,6 +135,8 @@ fn built_in_software_presets_transcode_supported_fixture_containers() {
                 },
                 existing: ExistingPolicy::Overwrite,
                 dry_run: false,
+                parallel_jobs: 1,
+                keep_source_dates: false,
             });
             assert!(
                 events.iter().any(|event| matches!(
@@ -334,6 +336,8 @@ fn real_ffmpeg_burn_in_handles_special_paths_and_image_subtitles() {
         remux_engine: RemuxEngine::Ffmpeg,
         existing: ExistingPolicy::Overwrite,
         dry_run: false,
+        parallel_jobs: 1,
+        keep_source_dates: false,
     });
     assert!(
         text_events.iter().any(|event| matches!(
@@ -527,6 +531,8 @@ mod parity {
             remux_engine: RemuxEngine::Ffmpeg,
             existing: ExistingPolicy::Overwrite,
             dry_run: false,
+            parallel_jobs: 1,
+            keep_source_dates: false,
         });
         if events.iter().any(|event| {
             matches!(

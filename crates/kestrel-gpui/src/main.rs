@@ -6,6 +6,8 @@ mod assets;
 mod ctl;
 mod pages;
 mod palette;
+mod preset_ui;
+mod preview_ui;
 mod shell;
 mod state;
 mod theme;
@@ -58,6 +60,13 @@ fn main() {
                 if cx.windows().is_empty() {
                     cx.quit();
                 }
+            })
+            .detach();
+            // Preview files belong to this process: remove them however the app quits. The
+            // window view is already gone by the time its own quit hook would run.
+            cx.on_app_quit(|_| {
+                kestrel_core::preview::remove_preview_directory();
+                async {}
             })
             .detach();
             cx.activate(true);

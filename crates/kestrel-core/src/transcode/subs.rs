@@ -78,6 +78,14 @@ pub fn external_codec_id(path: &Path) -> Result<&'static str, String> {
     }
 }
 
+/// Codec of an imported subtitle: the probed one when present, else from the extension.
+pub fn track_codec_id(track: &ExternalTrack) -> Result<String, String> {
+    match track.codec.as_deref().filter(|codec| !codec.is_empty()) {
+        Some(codec) => Ok(codec.to_owned()),
+        None => external_codec_id(&track.path).map(str::to_owned),
+    }
+}
+
 pub fn is_image_codec(codec_id: &str) -> bool {
     matches!(codec_id, "hdmv_pgs_subtitle" | "dvd_subtitle")
 }
@@ -92,7 +100,7 @@ pub fn validate_external(tracks: &[ExternalTrack]) -> Result<(), String> {
                 track.path.display()
             ));
         }
-        external_codec_id(&track.path)?;
+        track_codec_id(track)?;
         if let Some(charset) = &track.charset
             && !is_token(charset)
         {

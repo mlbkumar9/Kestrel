@@ -99,12 +99,12 @@ pub struct WorkerControl {
     jobs: Arc<Mutex<JobControl>>,
     paused: Arc<AtomicBool>,
     cancelled: Arc<AtomicBool>,
-    active_child: Arc<Mutex<Option<Child>>>,
+    /// Running tool processes by job id (a queue runs several jobs at once).
+    children: Arc<Mutex<std::collections::HashMap<u64, Child>>>,
 }
 
 #[derive(Default)]
 struct JobControl {
-    active: Option<u64>,
     cancelled: std::collections::HashSet<u64>,
 }
 
@@ -114,7 +114,7 @@ impl Default for WorkerControl {
             jobs: Default::default(),
             paused: Arc::new(AtomicBool::new(false)),
             cancelled: Arc::new(AtomicBool::new(false)),
-            active_child: Arc::new(Mutex::new(None)),
+            children: Default::default(),
         }
     }
 }
@@ -138,23 +138,30 @@ impl WorkerControl {
 
     pub fn stop(&self) {
         self.cancelled.store(true, Ordering::SeqCst);
-        if let Ok(mut guard) = self.active_child.lock()
-            && let Some(child) = guard.as_mut()
-        {
-            let _ = child.kill();
+        if let Ok(mut children) = self.children.lock() {
+            for child in children.values_mut() {
+                let _ = child.kill();
+            }
         }
     }
     pub fn stop_job(&self, id: u64) {
         if let Ok(mut jobs) = self.jobs.lock() {
             jobs.cancelled.insert(id);
-            if jobs.active == Some(id)
-                && let Ok(mut child) = self.active_child.lock()
-                && let Some(child) = child.as_mut()
+            if let Ok(mut children) = self.children.lock()
+                && let Some(child) = children.get_mut(&id)
             {
                 let _ = child.kill();
             }
         }
     }
+    /// Removes and returns the process registered for `id`.
+    fn take_child(&self, id: u64) -> Option<Child> {
+        self.children
+            .lock()
+            .ok()
+            .and_then(|mut children| children.remove(&id))
+    }
+
     fn job_stopped(&self, id: u64) -> bool {
         self.jobs
             .lock()
@@ -201,6 +208,11 @@ pub struct QueueSpec {
     pub remux_engine: RemuxEngine,
     pub existing: ExistingPolicy,
     pub dry_run: bool,
+    /// Jobs that may run at once; 1 runs the queue one job at a time (capped at
+    /// [`MAX_PARALLEL_JOBS`]).
+    pub parallel_jobs: usize,
+    /// Give each finished output its source file's modified and accessed times.
+    pub keep_source_dates: bool,
 }
 
 enum ProcessOutcome {
@@ -525,6 +537,14 @@ pub fn run_queue_blocking(spec: QueueSpec) -> Vec<WorkerEvent> {
     receiver.into_iter().collect()
 }
 
+/// Most queue jobs that may run at once; a larger request is lowered to this.
+pub const MAX_PARALLEL_JOBS: usize = 4;
+
+/// Hardware encoder jobs allowed at the same time. Consumer GPUs cap the number of concurrent
+/// encode sessions (NVENC historically allows two or three), and a refused session makes the
+/// job fail, so hardware jobs queue behind each other beyond this count.
+pub const HARDWARE_ENCODER_SESSIONS: usize = 2;
+
 fn run_queue(
     spec: QueueSpec,
     control: WorkerControl,
@@ -547,206 +567,48 @@ fn run_queue(
             spec.jobs.len()
         )),
     );
-    let mut cancelled = false;
-    for (index, job) in spec.jobs.iter().enumerate() {
-        if control.is_cancelled() {
-            cancelled = true;
-            for not_started in &spec.jobs[index..] {
-                send(
-                    &sender,
-                    &ctx,
-                    WorkerEvent::JobUpdated {
-                        job_id: not_started.id,
-                        status: FileStatus::Cancelled,
-                        percent: 0,
-                        detail: Some("Not started".to_owned()),
-                    },
-                );
-            }
-            break;
-        }
-        while control.paused.load(Ordering::SeqCst) && !control.is_cancelled() {
-            std::thread::sleep(std::time::Duration::from_millis(80));
-        }
-        if control.job_stopped(job.id) {
-            queue_update(
-                &sender,
-                &ctx,
-                job.id,
-                FileStatus::Cancelled,
-                0,
-                Some("Stopped by user".into()),
-            );
-            continue;
-        }
-        let policy = execution_spec(&spec, job);
-        let mut resolved_job = job.clone();
-        resolved_job.settings =
-            match crate::transcode::resolve_job_settings(&job.settings, &spec.encoders) {
-                Ok(settings) => settings,
-                Err(error) => {
-                    queue_update(&sender, &ctx, job.id, FileStatus::Error, 0, Some(error));
-                    continue;
+    let workers = spec
+        .parallel_jobs
+        .clamp(1, MAX_PARALLEL_JOBS)
+        .min(spec.jobs.len().max(1));
+    if workers > 1 {
+        send(
+            &sender,
+            &ctx,
+            WorkerEvent::Log(format!("Running up to {workers} jobs at a time")),
+        );
+    }
+    let scheduler = Scheduler::new(&spec);
+    let claims = OutputClaims::default();
+    let cancelled = AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| {
+                while let Some(index) = scheduler.next(&control) {
+                    let job = &spec.jobs[index];
+                    if run_job(job, &spec, &control, &sender, &ctx, &claims) {
+                        cancelled.store(true, Ordering::SeqCst);
+                    }
+                    scheduler.finish(index);
                 }
-            };
-        if let Some(ffmpeg) = &spec.tools.ffmpeg {
-            match crate::analysis::resolve_automatic_settings(
-                &ffmpeg.path,
-                &job.input,
-                &resolved_job.metadata,
-                &resolved_job.settings,
-            ) {
-                Ok((metadata, settings)) => {
-                    resolved_job.metadata = metadata;
-                    resolved_job.settings = settings;
-                }
-                Err(error) => {
-                    queue_update(&sender, &ctx, job.id, FileStatus::Error, 0, Some(error));
-                    continue;
-                }
-            }
+            });
         }
-        let job = &resolved_job;
-        if !policy.dry_run
-            && let Some(parent) = job.output.parent()
-            && let Err(error) = std::fs::create_dir_all(parent)
-        {
-            queue_update(
-                &sender,
-                &ctx,
-                job.id,
-                FileStatus::Error,
-                0,
-                Some(error.to_string()),
-            );
-            continue;
-        }
-        let output = match queue_output(&job.output, policy.existing, policy.dry_run) {
-            Ok(Some(output)) => output,
-            Ok(None) => {
-                queue_update(
-                    &sender,
-                    &ctx,
-                    job.id,
-                    FileStatus::Skipped,
-                    100,
-                    Some("Output already exists".to_owned()),
-                );
-                continue;
-            }
-            Err(error) => {
-                queue_update(&sender, &ctx, job.id, FileStatus::Error, 0, Some(error));
-                continue;
-            }
-        };
-        if !policy.dry_run
-            && let Err(error) = validate_output_paths(&job.input, &output)
-        {
-            queue_update(&sender, &ctx, job.id, FileStatus::Error, 0, Some(error));
-            continue;
-        }
-        queue_update(&sender, &ctx, job.id, FileStatus::Processing, 0, None);
-        for warning in crate::compat::job_warnings(&job.metadata, &job.settings) {
+    });
+    let mut cancelled = cancelled.load(Ordering::SeqCst);
+    let not_started = scheduler.take_pending();
+    if !not_started.is_empty() {
+        cancelled = true;
+        for index in not_started {
             send(
                 &sender,
                 &ctx,
-                WorkerEvent::Log(format!("{} — {warning}", job.input.display())),
+                WorkerEvent::JobUpdated {
+                    job_id: spec.jobs[index].id,
+                    status: FileStatus::Cancelled,
+                    percent: 0,
+                    detail: Some("Not started".to_owned()),
+                },
             );
-        }
-        if let Ok(mut jobs) = control.jobs.lock() {
-            jobs.active = Some(job.id);
-        }
-        let result = process_queue_job(job, &output, &policy, &control, &sender, &ctx);
-        if let Ok(mut jobs) = control.jobs.lock() {
-            jobs.active = None;
-        }
-        match result {
-            Ok(outcome) => {
-                let detail = match &outcome {
-                    ProcessOutcome::Success => None,
-                    ProcessOutcome::Warnings(_) => Some("Warnings".to_owned()),
-                };
-                queue_update(&sender, &ctx, job.id, FileStatus::Success, 100, detail);
-                if let ProcessOutcome::Warnings(warnings) = outcome {
-                    send(
-                        &sender,
-                        &ctx,
-                        WorkerEvent::Log(format!("{} finished with warnings", job.input.display())),
-                    );
-                    for warning in warnings.lines {
-                        send(
-                            &sender,
-                            &ctx,
-                            WorkerEvent::Log(format!("{} — {warning}", job.input.display())),
-                        );
-                    }
-                    if warnings.omitted > 0 {
-                        send(
-                            &sender,
-                            &ctx,
-                            WorkerEvent::Log(format!(
-                                "{} — ...and {} more warnings",
-                                job.input.display(),
-                                warnings.omitted
-                            )),
-                        );
-                    }
-                }
-            }
-            Err(error) if control.is_cancelled() => {
-                cancelled = true;
-                queue_update(
-                    &sender,
-                    &ctx,
-                    job.id,
-                    FileStatus::Cancelled,
-                    0,
-                    Some("Stopped by user".to_owned()),
-                );
-                send(
-                    &sender,
-                    &ctx,
-                    WorkerEvent::Log(format!("{} — {error}", job.input.display())),
-                );
-                for not_started in &spec.jobs[index + 1..] {
-                    send(
-                        &sender,
-                        &ctx,
-                        WorkerEvent::JobUpdated {
-                            job_id: not_started.id,
-                            status: FileStatus::Cancelled,
-                            percent: 0,
-                            detail: Some("Not started".to_owned()),
-                        },
-                    );
-                }
-                break;
-            }
-            Err(_) if control.job_stopped(job.id) => {
-                queue_update(
-                    &sender,
-                    &ctx,
-                    job.id,
-                    FileStatus::Cancelled,
-                    0,
-                    Some("Stopped by user".into()),
-                );
-            }
-            Err(error) => {
-                queue_update(
-                    &sender,
-                    &ctx,
-                    job.id,
-                    FileStatus::Error,
-                    0,
-                    Some(error.clone()),
-                );
-                send(
-                    &sender,
-                    &ctx,
-                    WorkerEvent::Log(format!("{} — {error}", job.input.display())),
-                );
-            }
         }
     }
     send(
@@ -757,6 +619,316 @@ fn run_queue(
             elapsed_seconds: started.elapsed().as_secs_f64(),
         },
     );
+}
+
+/// Hands queue jobs to the worker threads in order, holding back hardware encoder jobs beyond
+/// [`HARDWARE_ENCODER_SESSIONS`].
+struct Scheduler {
+    state: Mutex<SchedulerState>,
+    released: std::sync::Condvar,
+    hardware: Vec<bool>,
+}
+
+struct SchedulerState {
+    pending: std::collections::VecDeque<usize>,
+    hardware_running: usize,
+}
+
+impl Scheduler {
+    fn new(spec: &QueueSpec) -> Self {
+        Self {
+            state: Mutex::new(SchedulerState {
+                pending: (0..spec.jobs.len()).collect(),
+                hardware_running: 0,
+            }),
+            released: std::sync::Condvar::new(),
+            hardware: spec
+                .jobs
+                .iter()
+                .map(|job| uses_hardware_encoder(job, &spec.encoders))
+                .collect(),
+        }
+    }
+
+    /// The next job to run, or `None` when the queue is cancelled or empty. Waits while the
+    /// queue is paused and while only hardware jobs remain and every session is taken.
+    fn next(&self, control: &WorkerControl) -> Option<usize> {
+        loop {
+            while control.paused.load(Ordering::SeqCst) && !control.is_cancelled() {
+                std::thread::sleep(std::time::Duration::from_millis(80));
+            }
+            if control.is_cancelled() {
+                return None;
+            }
+            let mut state = self.state.lock().ok()?;
+            if state.pending.is_empty() {
+                return None;
+            }
+            let free = state.hardware_running < HARDWARE_ENCODER_SESSIONS;
+            if let Some(position) = state
+                .pending
+                .iter()
+                .position(|index| free || !self.hardware[*index])
+            {
+                let index = state.pending.remove(position)?;
+                if self.hardware[index] {
+                    state.hardware_running += 1;
+                }
+                return Some(index);
+            }
+            let _ = self
+                .released
+                .wait_timeout(state, std::time::Duration::from_millis(100));
+        }
+    }
+
+    fn finish(&self, index: usize) {
+        if self.hardware[index]
+            && let Ok(mut state) = self.state.lock()
+        {
+            state.hardware_running = state.hardware_running.saturating_sub(1);
+        }
+        self.released.notify_all();
+    }
+
+    fn take_pending(&self) -> Vec<usize> {
+        self.state
+            .lock()
+            .map(|mut state| state.pending.drain(..).collect())
+            .unwrap_or_default()
+    }
+}
+
+fn uses_hardware_encoder(job: &JobSpec, encoders: &EncoderSet) -> bool {
+    matches!(
+        crate::transcode::resolve_job_settings(&job.settings, encoders),
+        Ok(JobSettings {
+            video: crate::transcode::VideoSettings::Encode(crate::transcode::VideoEncode {
+                encoder: crate::transcode::VideoEncoder::Hardware { .. },
+                ..
+            }),
+            ..
+        })
+    )
+}
+
+/// Output paths that running jobs are writing, so two parallel jobs never pick the same name.
+#[derive(Debug, Default)]
+struct OutputClaims {
+    paths: Mutex<std::collections::HashSet<PathBuf>>,
+}
+
+/// Releases a claimed output path when the job ends.
+#[derive(Debug)]
+struct OutputClaim<'a> {
+    claims: &'a OutputClaims,
+    path: PathBuf,
+}
+
+impl Drop for OutputClaim<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut paths) = self.claims.paths.lock() {
+            paths.remove(&self.path);
+        }
+    }
+}
+
+/// Runs one queue job and reports its events. Returns true when the whole queue was stopped.
+fn run_job(
+    job: &JobSpec,
+    spec: &QueueSpec,
+    control: &WorkerControl,
+    sender: &mpsc::Sender<WorkerEvent>,
+    ctx: &EventNotifier,
+    claims: &OutputClaims,
+) -> bool {
+    if control.job_stopped(job.id) {
+        queue_update(
+            sender,
+            ctx,
+            job.id,
+            FileStatus::Cancelled,
+            0,
+            Some("Stopped by user".into()),
+        );
+        return false;
+    }
+    let policy = execution_spec(spec, job);
+    let mut resolved_job = job.clone();
+    resolved_job.settings =
+        match crate::transcode::resolve_job_settings(&job.settings, &spec.encoders) {
+            Ok(settings) => settings,
+            Err(error) => {
+                queue_update(sender, ctx, job.id, FileStatus::Error, 0, Some(error));
+                return false;
+            }
+        };
+    if let Some(ffmpeg) = &spec.tools.ffmpeg {
+        match crate::analysis::resolve_automatic_settings(
+            &ffmpeg.path,
+            &job.input,
+            &resolved_job.metadata,
+            &resolved_job.settings,
+        ) {
+            Ok((metadata, settings)) => {
+                resolved_job.metadata = metadata;
+                resolved_job.settings = settings;
+            }
+            Err(error) => {
+                queue_update(sender, ctx, job.id, FileStatus::Error, 0, Some(error));
+                return false;
+            }
+        }
+    }
+    probe_added_files(&mut resolved_job, spec, sender, ctx);
+    let job = &resolved_job;
+    if !policy.dry_run
+        && let Some(parent) = job.output.parent()
+        && let Err(error) = std::fs::create_dir_all(parent)
+    {
+        queue_update(
+            sender,
+            ctx,
+            job.id,
+            FileStatus::Error,
+            0,
+            Some(error.to_string()),
+        );
+        return false;
+    }
+    let (output, _claim) = match queue_output(&job.output, policy.existing, policy.dry_run, claims)
+    {
+        Ok(Some(claimed)) => claimed,
+        Ok(None) => {
+            queue_update(
+                sender,
+                ctx,
+                job.id,
+                FileStatus::Skipped,
+                100,
+                Some("Output already exists".to_owned()),
+            );
+            return false;
+        }
+        Err(error) => {
+            queue_update(sender, ctx, job.id, FileStatus::Error, 0, Some(error));
+            return false;
+        }
+    };
+    if !policy.dry_run
+        && let Err(error) = validate_output_paths(&job.input, &output)
+    {
+        queue_update(sender, ctx, job.id, FileStatus::Error, 0, Some(error));
+        return false;
+    }
+    queue_update(sender, ctx, job.id, FileStatus::Processing, 0, None);
+    for warning in crate::compat::job_warnings(&job.metadata, &job.settings) {
+        send(
+            sender,
+            ctx,
+            WorkerEvent::Log(format!("{} — {warning}", job.input.display())),
+        );
+    }
+    let result = process_queue_job(job, &output, &policy, control, sender, ctx);
+    match result {
+        Ok(outcome) => {
+            let detail = match &outcome {
+                ProcessOutcome::Success => None,
+                ProcessOutcome::Warnings(_) => Some("Warnings".to_owned()),
+            };
+            queue_update(sender, ctx, job.id, FileStatus::Success, 100, detail);
+            if let ProcessOutcome::Warnings(warnings) = outcome {
+                send(
+                    sender,
+                    ctx,
+                    WorkerEvent::Log(format!("{} finished with warnings", job.input.display())),
+                );
+                for warning in warnings.lines {
+                    send(
+                        sender,
+                        ctx,
+                        WorkerEvent::Log(format!("{} — {warning}", job.input.display())),
+                    );
+                }
+                if warnings.omitted > 0 {
+                    send(
+                        sender,
+                        ctx,
+                        WorkerEvent::Log(format!(
+                            "{} — ...and {} more warnings",
+                            job.input.display(),
+                            warnings.omitted
+                        )),
+                    );
+                }
+            }
+            false
+        }
+        Err(error) if control.is_cancelled() => {
+            queue_update(
+                sender,
+                ctx,
+                job.id,
+                FileStatus::Cancelled,
+                0,
+                Some("Stopped by user".to_owned()),
+            );
+            send(
+                sender,
+                ctx,
+                WorkerEvent::Log(format!("{} — {error}", job.input.display())),
+            );
+            true
+        }
+        Err(_) if control.job_stopped(job.id) => {
+            queue_update(
+                sender,
+                ctx,
+                job.id,
+                FileStatus::Cancelled,
+                0,
+                Some("Stopped by user".into()),
+            );
+            false
+        }
+        Err(error) => {
+            queue_update(
+                sender,
+                ctx,
+                job.id,
+                FileStatus::Error,
+                0,
+                Some(error.clone()),
+            );
+            send(
+                sender,
+                ctx,
+                WorkerEvent::Log(format!("{} — {error}", job.input.display())),
+            );
+            false
+        }
+    }
+}
+
+/// Probes every added subtitle/audio file that has no codec yet, so container checks and the
+/// never-re-encode rule use the real codec. A file that cannot be probed keeps the extension
+/// guess and the reason is logged.
+fn probe_added_files(
+    job: &mut JobSpec,
+    spec: &QueueSpec,
+    sender: &mpsc::Sender<WorkerEvent>,
+    ctx: &EventNotifier,
+) {
+    let ffprobe = spec.tools.ffprobe.as_ref().map(|tool| tool.path.as_path());
+    let mut warnings =
+        crate::external::resolve_codecs(ffprobe, &mut job.settings.track_edits.external);
+    warnings.extend(crate::external::resolve_codecs(
+        ffprobe,
+        &mut job.settings.subtitles.external,
+    ));
+    for warning in warnings {
+        send(sender, ctx, WorkerEvent::Log(warning));
+    }
 }
 
 fn queue_update(
@@ -779,26 +951,50 @@ fn queue_update(
     );
 }
 
-fn queue_output(
+/// Picks the output path for a job under the existing-file policy and claims it for the
+/// job's lifetime. `Ok(None)` means the job is skipped because the output is taken.
+fn queue_output<'a>(
     output: &Path,
     existing: ExistingPolicy,
     dry_run: bool,
-) -> Result<Option<PathBuf>, String> {
-    if dry_run || existing != ExistingPolicy::Skip || !output.exists() {
-        if existing == ExistingPolicy::Rename && output.exists() {
+    claims: &'a OutputClaims,
+) -> Result<Option<(PathBuf, Option<OutputClaim<'a>>)>, String> {
+    let mut claimed = claims
+        .paths
+        .lock()
+        .map_err(|_| "Output reservation lock is poisoned".to_owned())?;
+    // A dry run writes nothing, so only files on disk count as taken.
+    let taken = |path: &Path| path.exists() || (!dry_run && claimed.contains(path));
+    let chosen = if dry_run || existing != ExistingPolicy::Skip || !taken(output) {
+        if existing == ExistingPolicy::Rename && taken(output) {
             let stem = output.file_stem().unwrap_or_default().to_string_lossy();
             let extension = output.extension().unwrap_or_default().to_string_lossy();
-            for suffix in 2..1000 {
-                let candidate = output.with_file_name(format!("{stem} ({suffix}).{extension}"));
-                if !candidate.exists() {
-                    return Ok(Some(candidate));
-                }
-            }
-            return Err("Could not find an unused output name".to_owned());
+            (2..1000)
+                .map(|suffix| output.with_file_name(format!("{stem} ({suffix}).{extension}")))
+                .find(|candidate| !taken(candidate))
+                .ok_or_else(|| "Could not find an unused output name".to_owned())?
+        } else if existing == ExistingPolicy::Overwrite && !dry_run && claimed.contains(output) {
+            return Err(format!(
+                "Another running job is already writing {}",
+                output.display()
+            ));
+        } else {
+            output.to_path_buf()
         }
-        return Ok(Some(output.to_path_buf()));
+    } else {
+        return Ok(None);
+    };
+    if dry_run {
+        return Ok(Some((chosen, None)));
     }
-    Ok(None)
+    claimed.insert(chosen.clone());
+    Ok(Some((
+        chosen.clone(),
+        Some(OutputClaim {
+            claims,
+            path: chosen,
+        }),
+    )))
 }
 
 fn process_queue_job(
@@ -976,6 +1172,18 @@ fn process_queue_job(
         });
     }
     finalize_output(partial, output)?;
+    if spec.keep_source_dates
+        && let Err(error) = copy_file_times(&job.input, output)
+    {
+        send(
+            sender,
+            ctx,
+            WorkerEvent::Log(format!(
+                "{}: could not copy the source dates to the output: {error}",
+                job.input.display()
+            )),
+        );
+    }
     match outcome {
         mkv::RemuxExitOutcome::Success => Ok(ProcessOutcome::Success),
         mkv::RemuxExitOutcome::SuccessWithWarnings => Ok(ProcessOutcome::Warnings(
@@ -1017,7 +1225,7 @@ fn run_child_process(
         .map_err(|error| format!("Failed to start {}: {error}", engine.label()))?;
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
-    register_child(control, child)?;
+    register_child(control, job.id, child)?;
 
     let warnings = Arc::new(Mutex::new(WarningSummary::default()));
     let output_reader = stdout.map(|stdout| {
@@ -1076,10 +1284,7 @@ fn run_child_process(
         .and_then(|reader| reader.join().ok())
         .unwrap_or_default();
     let mut child = control
-        .active_child
-        .lock()
-        .ok()
-        .and_then(|mut guard| guard.take())
+        .take_child(job.id)
         .ok_or_else(|| "Child process handle lost".to_owned())?;
     let status = child
         .wait()
@@ -1294,10 +1499,10 @@ impl QueueProgress {
     }
 }
 
-fn register_child(control: &WorkerControl, mut child: Child) -> Result<(), String> {
+fn register_child(control: &WorkerControl, job_id: u64, mut child: Child) -> Result<(), String> {
     let jobs = control.jobs.lock().ok();
-    let mut guard = match control.active_child.lock() {
-        Ok(guard) => guard,
+    let mut children = match control.children.lock() {
+        Ok(children) => children,
         Err(_) => {
             let _ = child.kill();
             let _ = child.wait();
@@ -1309,11 +1514,11 @@ fn register_child(control: &WorkerControl, mut child: Child) -> Result<(), Strin
     if control.is_cancelled()
         || jobs
             .as_ref()
-            .is_some_and(|jobs| jobs.active.is_some_and(|id| jobs.cancelled.contains(&id)))
+            .is_some_and(|jobs| jobs.cancelled.contains(&job_id))
     {
         let _ = child.kill();
     }
-    *guard = Some(child);
+    children.insert(job_id, child);
     Ok(())
 }
 
@@ -1448,7 +1653,7 @@ fn process_file(
         .map_err(|error| format!("Failed to start {}: {error}", engine.label()))?;
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
-    register_child(control, child)?;
+    register_child(control, index as u64, child)?;
 
     let warning_summary = Arc::new(Mutex::new(WarningSummary::default()));
     let stdout_reader = stdout.map(|stdout| {
@@ -1491,12 +1696,7 @@ fn process_file(
         .lock()
         .map(|summary| summary.clone())
         .unwrap_or_default();
-    let Some(mut child) = control
-        .active_child
-        .lock()
-        .ok()
-        .and_then(|mut guard| guard.take())
-    else {
+    let Some(mut child) = control.take_child(index as u64) else {
         return Err(format!("{} process handle lost", engine.label()));
     };
     let status = match child.wait() {
@@ -1668,6 +1868,24 @@ impl Drop for TemporaryOutput {
     }
 }
 
+/// Gives `target` the modified and accessed times of `source`.
+pub fn copy_file_times(source: &Path, target: &Path) -> Result<(), String> {
+    let metadata = std::fs::metadata(source)
+        .map_err(|error| format!("cannot read the source times: {error}"))?;
+    let mut times = std::fs::FileTimes::new();
+    if let Ok(modified) = metadata.modified() {
+        times = times.set_modified(modified);
+    }
+    if let Ok(accessed) = metadata.accessed() {
+        times = times.set_accessed(accessed);
+    }
+    OpenOptions::new()
+        .write(true)
+        .open(target)
+        .and_then(|file| file.set_times(times))
+        .map_err(|error| format!("cannot set the output times: {error}"))
+}
+
 fn finalize_output(partial_output: &Path, output: &Path) -> Result<(), String> {
     #[cfg(windows)]
     if output.exists() {
@@ -1728,6 +1946,8 @@ fn execution_spec(batch: &QueueSpec, job: &JobSpec) -> QueueSpec {
             .as_ref()
             .map_or(batch.existing, |s| s.existing),
         dry_run: job.execution.as_ref().map_or(batch.dry_run, |s| s.dry_run),
+        parallel_jobs: batch.parallel_jobs,
+        keep_source_dates: batch.keep_source_dates,
     }
 }
 
@@ -1803,6 +2023,8 @@ Error opening input files";
                 remux_engine: RemuxEngine::Ffmpeg,
                 existing: Default::default(),
                 dry_run,
+                parallel_jobs: 1,
+                keep_source_dates: false,
             });
             assert!(matches!(events.first(),Some(WorkerEvent::Log(text)) if text==expected));
         }
@@ -1815,7 +2037,6 @@ Error opening input files";
             return;
         }
         let control = WorkerControl::default();
-        control.jobs.lock().unwrap().active = Some(42);
         control.stop_job(42);
         let child = crate::tools::command(&std::env::current_exe().unwrap())
             .args([
@@ -1826,13 +2047,244 @@ Error opening input files";
             .stdout(Stdio::null())
             .spawn()
             .unwrap();
-        register_child(&control, child).unwrap();
-        let mut child = control.active_child.lock().unwrap().take().unwrap();
+        register_child(&control, 42, child).unwrap();
+        let mut child = control.take_child(42).unwrap();
         assert!(!child.wait().unwrap().success());
         assert!(control.job_stopped(42));
         assert!(!control.is_cancelled());
         assert!(!control.job_stopped(43));
     }
+    /// Tools that dry runs never start.
+    fn unused_tools() -> crate::tools::Toolchain {
+        crate::tools::Toolchain {
+            ffmpeg: Some(crate::tools::Tool {
+                path: "unused tool".into(),
+                version: None,
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn dry_job(id: u64) -> super::JobSpec {
+        super::JobSpec {
+            id,
+            input: "input.mkv".into(),
+            output: format!("output-{id}.mkv").into(),
+            metadata: crate::mkv::MediaMetadata {
+                video_codec: Some("h264".into()),
+                ..Default::default()
+            },
+            settings: Default::default(),
+            execution: None,
+        }
+    }
+
+    fn hardware_job(id: u64) -> super::JobSpec {
+        let mut job = dry_job(id);
+        job.settings.video =
+            crate::transcode::VideoSettings::Encode(crate::transcode::VideoEncode {
+                encoder: crate::transcode::VideoEncoder::Hardware {
+                    vendor: crate::transcode::HwVendor::Nvenc,
+                    codec: crate::transcode::HwCodec::Hevc,
+                },
+                ..crate::transcode::VideoEncode::default()
+            });
+        job
+    }
+
+    #[test]
+    fn parallel_dry_run_reports_every_job_and_the_worker_count() {
+        use super::*;
+        let spec = QueueSpec {
+            jobs: (1..=6).map(dry_job).collect(),
+            tools: unused_tools(),
+            encoders: Default::default(),
+            remux_engine: RemuxEngine::Ffmpeg,
+            existing: ExistingPolicy::Overwrite,
+            dry_run: true,
+            parallel_jobs: 3,
+            keep_source_dates: false,
+        };
+        let events = run_queue_blocking(spec);
+        assert!(events.iter().any(|event| matches!(event, WorkerEvent::Log(text) if text == "Running up to 3 jobs at a time")));
+        for id in 1..=6 {
+            assert!(
+                events.iter().any(|event| matches!(event, WorkerEvent::JobUpdated { job_id, status: FileStatus::Success, .. } if *job_id == id)),
+                "job {id}"
+            );
+        }
+        assert!(matches!(
+            events.last(),
+            Some(WorkerEvent::BatchFinished {
+                cancelled: false,
+                ..
+            })
+        ));
+        // A request above the cap is lowered, and 0 means one at a time.
+        let mut one = QueueSpec {
+            jobs: (1..=2).map(dry_job).collect(),
+            tools: unused_tools(),
+            encoders: Default::default(),
+            remux_engine: RemuxEngine::Ffmpeg,
+            existing: ExistingPolicy::Overwrite,
+            dry_run: true,
+            parallel_jobs: 0,
+            keep_source_dates: false,
+        };
+        let events = run_queue_blocking(one.clone());
+        assert!(!events.iter().any(
+            |event| matches!(event, WorkerEvent::Log(text) if text.starts_with("Running up to"))
+        ));
+        one.parallel_jobs = 99;
+        let events = run_queue_blocking(one);
+        assert!(events.iter().any(|event| matches!(event, WorkerEvent::Log(text) if text == "Running up to 2 jobs at a time")));
+    }
+
+    #[test]
+    fn stopping_the_queue_marks_jobs_that_never_started() {
+        use super::*;
+        let control = WorkerControl::default();
+        control.stop();
+        let spec = QueueSpec {
+            jobs: (1..=3).map(dry_job).collect(),
+            tools: unused_tools(),
+            encoders: Default::default(),
+            remux_engine: RemuxEngine::Ffmpeg,
+            existing: ExistingPolicy::Overwrite,
+            dry_run: true,
+            parallel_jobs: 2,
+            keep_source_dates: false,
+        };
+        let (sender, receiver) = mpsc::channel();
+        run_queue(spec, control, sender, Arc::new(|| {}));
+        let events = receiver.into_iter().collect::<Vec<_>>();
+        for id in 1..=3 {
+            assert!(events.iter().any(|event| matches!(event, WorkerEvent::JobUpdated { job_id, status: FileStatus::Cancelled, detail: Some(detail), .. } if *job_id == id && detail == "Not started")));
+        }
+        assert!(matches!(
+            events.last(),
+            Some(WorkerEvent::BatchFinished {
+                cancelled: true,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn hardware_encoder_jobs_wait_for_a_free_session_while_others_pass() {
+        use super::*;
+        let hardware = crate::transcode::VideoEncoder::Hardware {
+            vendor: crate::transcode::HwVendor::Nvenc,
+            codec: crate::transcode::HwCodec::Hevc,
+        };
+        let encoders = EncoderSet {
+            hardware: vec![hardware],
+            ..Default::default()
+        };
+        // Jobs: three hardware encodes, then a plain remux.
+        let jobs = vec![
+            hardware_job(1),
+            hardware_job(2),
+            hardware_job(3),
+            dry_job(4),
+        ];
+        let spec = QueueSpec {
+            jobs,
+            tools: unused_tools(),
+            encoders,
+            remux_engine: RemuxEngine::Ffmpeg,
+            existing: ExistingPolicy::Overwrite,
+            dry_run: true,
+            parallel_jobs: 4,
+            keep_source_dates: false,
+        };
+        let scheduler = Arc::new(Scheduler::new(&spec));
+        let control = WorkerControl::default();
+        assert_eq!(scheduler.next(&control), Some(0));
+        assert_eq!(scheduler.next(&control), Some(1));
+        // Both sessions are taken: the third hardware job is passed over for the remux.
+        assert_eq!(scheduler.next(&control), Some(3));
+        // Only the third hardware job is left, so the next call waits for a release.
+        let waiting = {
+            let scheduler = scheduler.clone();
+            let control = control.clone();
+            std::thread::spawn(move || scheduler.next(&control))
+        };
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(
+            !waiting.is_finished(),
+            "the hardware job started without a free session"
+        );
+        scheduler.finish(0);
+        assert_eq!(waiting.join().unwrap(), Some(2));
+        assert_eq!(scheduler.next(&control), None);
+    }
+
+    #[test]
+    fn parallel_jobs_never_claim_the_same_output_path() {
+        use super::*;
+        let directory = std::env::temp_dir().join(format!("kestrel-claims-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let output = directory.join("movie.mkv");
+        let claims = OutputClaims::default();
+        let (first, first_claim) = queue_output(&output, ExistingPolicy::Rename, false, &claims)
+            .unwrap()
+            .unwrap();
+        assert_eq!(first, output);
+        // The first output is not on disk yet, but the second job still gets another name.
+        let (second, second_claim) = queue_output(&output, ExistingPolicy::Rename, false, &claims)
+            .unwrap()
+            .unwrap();
+        assert_eq!(second, directory.join("movie (2).mkv"));
+        assert!(
+            queue_output(&output, ExistingPolicy::Skip, false, &claims)
+                .unwrap()
+                .is_none()
+        );
+        let error = queue_output(&output, ExistingPolicy::Overwrite, false, &claims).unwrap_err();
+        assert!(error.contains("already writing"), "{error}");
+        // A dry run claims nothing and ignores other jobs' claims.
+        let (planned, claim) = queue_output(&output, ExistingPolicy::Overwrite, true, &claims)
+            .unwrap()
+            .unwrap();
+        assert_eq!((planned, claim.is_none()), (output.clone(), true));
+        // Claims are released when the jobs end.
+        drop((first_claim, second_claim));
+        assert!(claims.paths.lock().unwrap().is_empty());
+        assert!(queue_output(&output, ExistingPolicy::Overwrite, false, &claims).is_ok());
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn copy_file_times_gives_the_output_the_source_modified_and_accessed_times() {
+        use super::*;
+        let directory = std::env::temp_dir().join(format!("kestrel-times-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let (source, target) = (directory.join("source.bin"), directory.join("target.bin"));
+        std::fs::write(&source, b"a").unwrap();
+        std::fs::write(&target, b"b").unwrap();
+        let old = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_400_000_000);
+        OpenOptions::new()
+            .write(true)
+            .open(&source)
+            .unwrap()
+            .set_times(
+                std::fs::FileTimes::new()
+                    .set_modified(old)
+                    .set_accessed(old),
+            )
+            .unwrap();
+        copy_file_times(&source, &target).unwrap();
+        let modified = std::fs::metadata(&target).unwrap().modified().unwrap();
+        assert_eq!(
+            modified,
+            std::fs::metadata(&source).unwrap().modified().unwrap()
+        );
+        assert_eq!(modified, old);
+        assert!(copy_file_times(&directory.join("missing"), &target).is_err());
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
     #[test]
     fn stopping_one_job_does_not_cancel_its_neighbors() {
         use super::*;
@@ -1867,6 +2319,8 @@ Error opening input files";
             remux_engine: RemuxEngine::Ffmpeg,
             existing: ExistingPolicy::Overwrite,
             dry_run: true,
+            parallel_jobs: 1,
+            keep_source_dates: false,
         };
         let (sender, receiver) = mpsc::channel();
         run_queue(spec, control.clone(), sender, Arc::new(|| {}));
@@ -1932,6 +2386,8 @@ Error opening input files";
             remux_engine: RemuxEngine::MkvToolNix,
             existing: ExistingPolicy::Overwrite,
             dry_run: false,
+            parallel_jobs: 1,
+            keep_source_dates: false,
         };
         let events = run_queue_blocking(batch);
         for (id, expected) in [
@@ -1965,6 +2421,8 @@ Error opening input files";
             remux_engine: RemuxEngine::Ffmpeg,
             existing: ExistingPolicy::Rename,
             dry_run: true,
+            parallel_jobs: 1,
+            keep_source_dates: false,
         };
         let effective = execution_spec(&batch, &job);
         assert_eq!(effective.remux_engine, batch.remux_engine);
@@ -1987,7 +2445,7 @@ Error opening input files";
         let control = super::WorkerControl::default();
         let poisoned = control.clone();
         let _ = std::thread::spawn(move || {
-            let _guard = poisoned.active_child.lock().unwrap();
+            let _guard = poisoned.children.lock().unwrap();
             panic!("poison fixture");
         })
         .join();
@@ -1996,7 +2454,7 @@ Error opening input files";
             .stdout(std::process::Stdio::null())
             .spawn()
             .unwrap();
-        let error = super::register_child(&control, child).unwrap_err();
+        let error = super::register_child(&control, 1, child).unwrap_err();
         assert_eq!(
             error,
             "Could not register child process: process-control lock is poisoned"
@@ -2026,6 +2484,8 @@ Error opening input files";
             remux_engine: RemuxEngine::Ffmpeg,
             existing: Default::default(),
             dry_run: false,
+            parallel_jobs: 1,
+            keep_source_dates: false,
         });
         assert!(
             events

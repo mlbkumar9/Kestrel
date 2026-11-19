@@ -41,7 +41,9 @@ for its default `windows-manifest` feature. A Linux cross-build fails with missi
 on Linux. The egui app's Windows exe is built natively on `windows-latest` in
 CI/release workflows and can still be cross-built from Linux with
 `--target x86_64-pc-windows-gnu` for manual releases; both remain until phase 4
-removes egui.
+removes egui. Kestrel 4.0 ships the GPUI app as the primary download on every
+platform; the egui exe is published only as the secondary
+`Kestrel-<tag>-legacy-egui-windows-x64.zip`.
 
 ## Conventions and gotchas
 
@@ -50,5 +52,5 @@ removes egui.
 - Keep MKVToolNix and FFmpeg stream-copy behavior in `crates/kestrel-core/src/mkv.rs`; use FFprobe metadata when `mkvmerge -J` fails, preserving both MKVToolNix IDs and FFmpeg stream indices.
 - Windows child processes must use `CREATE_NO_WINDOW` (`0x08000000`) through `std::os::windows::process::CommandExt`.
 - Persist preferences through the core storage trait; the egui app adapts eframe storage. Keep core free of UI dependencies. Keep scans/remux work on `std::thread` workers and report progress over the event channel.
-- Release packaging is defined by `.github/workflows/release.yml` and `scripts/package-windows.ps1` / `scripts/package-unix.sh`; Windows packages bundle licensed FFmpeg and MKVToolNix tools, while macOS/Linux use system tools.
+- Release packaging is defined by `.github/workflows/release.yml` and `scripts/package-windows.ps1` / `scripts/package-unix.sh`; Windows packages bundle licensed FFmpeg and MKVToolNix tools, while macOS/Linux use system tools. The GPUI binary is `kestrel-gpui`; packaging renames it to `Kestrel.exe` (Windows zip and MSI), `Kestrel.app/Contents/MacOS/Kestrel` (macOS zip) and `kestrel` (Linux tar.gz). A release tag `vX.Y.Z` needs a `## [X.Y.Z]` heading in `CHANGELOG.md` and a matching `kestrel-gpui` crate version (`scripts/release-notes.sh` enforces both before any build starts).
 - Keep track selection and path/argument rules covered by unit tests and JSON fixtures. Keep build output under ignored `target/` directories and screenshots outside the repository.

@@ -5,6 +5,8 @@ pub mod format;
 pub mod library;
 pub mod nav;
 pub mod persist;
+pub mod presets;
+pub mod preview;
 pub mod probe;
 pub mod queue;
 pub mod remux;
@@ -73,12 +75,50 @@ impl Default for AppSettings {
     }
 }
 
+impl AppSettings {
+    /// Priority every tool process started from now on runs at.
+    pub fn tool_priority(&self) -> kestrel_core::tools::Priority {
+        kestrel_core::tools::Priority::from_index(self.priority)
+    }
+
+    /// Makes the stored priority the one `kestrel_core::tools::command` applies.
+    pub fn apply_priority(&self) {
+        kestrel_core::tools::set_priority(self.tool_priority());
+    }
+
+    /// Jobs the queue may run at once (the select stores the index of "1".."4").
+    pub fn parallel_job_count(&self) -> usize {
+        self.parallel_jobs + 1
+    }
+}
+
 pub const PRIORITIES: [&str; 3] = ["Normal", "Below normal", "Low"];
 pub const PARALLEL_JOBS: [&str; 4] = ["1", "2", "3", "4"];
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stored_settings_map_to_the_values_the_worker_uses() {
+        use kestrel_core::tools::{Priority, priority};
+        let mut settings = AppSettings::default();
+        assert_eq!(settings.parallel_job_count(), 1);
+        settings.parallel_jobs = 3;
+        assert_eq!(settings.parallel_job_count(), 4);
+        assert_eq!(PARALLEL_JOBS[settings.parallel_jobs], "4");
+        assert_eq!(settings.tool_priority(), Priority::Normal);
+        settings.priority = 2;
+        settings.apply_priority();
+        assert_eq!(priority(), Priority::Low);
+        settings.priority = 1;
+        settings.apply_priority();
+        assert_eq!(priority(), Priority::BelowNormal);
+        settings.priority = 0;
+        settings.apply_priority();
+        assert_eq!(priority(), Priority::Normal);
+        assert_eq!(PRIORITIES.len(), 3);
+    }
 
     #[test]
     fn page_names_parse_case_insensitively() {

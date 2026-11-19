@@ -1,6 +1,65 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU8, Ordering};
+
+/// Scheduling priority of every tool process Kestrel starts (FFmpeg, FFprobe, MKVToolNix).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Priority {
+    #[default]
+    Normal,
+    BelowNormal,
+    Low,
+}
+
+impl Priority {
+    /// Maps the settings list index (Normal, Below normal, Low); unknown values mean Normal.
+    pub fn from_index(index: usize) -> Self {
+        match index {
+            1 => Self::BelowNormal,
+            2 => Self::Low,
+            _ => Self::Normal,
+        }
+    }
+
+    /// Windows priority class creation flag. Normal is named explicitly: with no class flag a
+    /// child inherits a below-normal or idle class from its parent.
+    pub fn windows_class_flag(self) -> u32 {
+        match self {
+            Self::Normal => 0x0000_0020,
+            Self::BelowNormal => 0x0000_4000,
+            Self::Low => 0x0000_0040,
+        }
+    }
+
+    /// `nice` increment on Unix; `None` keeps the normal niceness.
+    pub fn nice_increment(self) -> Option<u8> {
+        match self {
+            Self::Normal => None,
+            Self::BelowNormal => Some(5),
+            Self::Low => Some(15),
+        }
+    }
+
+    fn to_raw(self) -> u8 {
+        match self {
+            Self::Normal => 0,
+            Self::BelowNormal => 1,
+            Self::Low => 2,
+        }
+    }
+}
+
+static PRIORITY: AtomicU8 = AtomicU8::new(0);
+
+/// Sets the priority [`command`] gives every process it builds from now on.
+pub fn set_priority(priority: Priority) {
+    PRIORITY.store(priority.to_raw(), Ordering::SeqCst);
+}
+
+pub fn priority() -> Priority {
+    Priority::from_index(usize::from(PRIORITY.load(Ordering::SeqCst)))
+}
 
 #[derive(Clone, Debug)]
 pub struct Tool {
@@ -189,17 +248,30 @@ fn read_version(path: &Path, name: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// A command for a tool process: no console window on Windows, at the configured [`priority`].
 pub fn command(executable: &Path) -> Command {
+    command_with_priority(executable, priority())
+}
+
+/// Windows applies the priority class at process creation; Unix starts the tool through `nice`.
+pub fn command_with_priority(executable: &Path, priority: Priority) -> Command {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         let mut command = Command::new(executable);
-        command.creation_flags(0x08000000);
+        command.creation_flags(0x08000000 | priority.windows_class_flag());
         command
     }
     #[cfg(not(windows))]
     {
-        Command::new(executable)
+        match priority.nice_increment() {
+            Some(increment) => {
+                let mut command = Command::new("nice");
+                command.arg("-n").arg(increment.to_string()).arg(executable);
+                command
+            }
+            None => Command::new(executable),
+        }
     }
 }
 
@@ -227,6 +299,76 @@ fn display_command_for(executable: &Path, arguments: &[OsString], windows: bool)
         .collect::<Vec<_>>()
         .join(" ");
     if windows { format!("& {parts}") } else { parts }
+}
+
+#[cfg(test)]
+mod priority_tests {
+    use super::*;
+
+    #[test]
+    fn settings_index_maps_to_priority_and_flags() {
+        assert_eq!(Priority::from_index(0), Priority::Normal);
+        assert_eq!(Priority::from_index(1), Priority::BelowNormal);
+        assert_eq!(Priority::from_index(2), Priority::Low);
+        assert_eq!(Priority::from_index(9), Priority::Normal);
+        assert_eq!(Priority::Normal.windows_class_flag(), 0x20);
+        assert_eq!(Priority::BelowNormal.windows_class_flag(), 0x4000);
+        assert_eq!(Priority::Low.windows_class_flag(), 0x40);
+        assert_eq!(Priority::Normal.nice_increment(), None);
+        assert_eq!(Priority::Low.nice_increment(), Some(15));
+    }
+
+    /// Asks the started process itself which priority class it runs in.
+    #[cfg(windows)]
+    #[test]
+    fn spawned_process_runs_in_the_requested_priority_class() {
+        for (priority, expected) in [
+            (Priority::Normal, "Normal"),
+            (Priority::BelowNormal, "BelowNormal"),
+            (Priority::Low, "Idle"),
+        ] {
+            let output = command_with_priority(Path::new("powershell.exe"), priority)
+                .args([
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    "(Get-Process -Id $PID).PriorityClass",
+                ])
+                .output()
+                .expect("powershell runs");
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout).trim(),
+                expected,
+                "{priority:?}"
+            );
+        }
+    }
+
+    /// Asks the started shell for its own niceness (`ps` reads it the same way on Linux and
+    /// macOS; BSD `nice` with no command prints nothing).
+    #[cfg(unix)]
+    #[test]
+    fn spawned_process_runs_at_the_requested_niceness() {
+        let niceness = |priority: Priority| -> i32 {
+            let mut command = command_with_priority(Path::new("sh"), priority);
+            command.args(["-c", "ps -o ni= -p $$"]);
+            let output = command.output().expect("sh runs");
+            String::from_utf8_lossy(&output.stdout)
+                .trim()
+                .parse()
+                .unwrap_or_else(|_| panic!("no niceness for {priority:?}"))
+        };
+        // `nice -n` adds to the niceness the test process already has (CI runners are not at 0).
+        let base = niceness(Priority::Normal);
+        for priority in [Priority::BelowNormal, Priority::Low] {
+            let increment = i32::from(priority.nice_increment().unwrap());
+            assert_eq!(
+                niceness(priority),
+                (base + increment).min(19),
+                "{priority:?}"
+            );
+        }
+    }
 }
 
 #[cfg(test)]
