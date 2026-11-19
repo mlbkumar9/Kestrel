@@ -36,14 +36,14 @@ Press **Re-detect** after installing a driver or switching the FFmpeg build. A r
 
 ## Behaviour
 
-| Option | State in 4.0 |
+| Option | What it does |
 |---|---|
-| Notify when the queue finishes | Works. Shows a toast when the queue ends. |
-| Parallel jobs | Saved, but the queue still runs one job at a time. |
-| Process priority | Saved, but not applied to the tools yet. |
-| Keep the source file's dates | Saved, but not applied yet. |
+| Notify when the queue finishes | Shows a toast when the queue ends. |
+| Parallel jobs | How many queue jobs run at once, 1 to 4. With more than one, each job writes its own output file. |
+| Process priority | Normal, Below normal or Low. Applies to every FFmpeg, FFprobe and mkvmerge process Kestrel starts. Use Low to keep the computer responsive during a long encode. |
+| Keep the source file's dates | Gives each output the source file's modified and accessed times. If Kestrel cannot copy them, Activity logs it and the job still finishes. |
 
-Treat the last three as placeholders. They keep their value across restarts, and a later version will wire them in.
+All four keep their value across restarts.
 
 ## Appearance
 

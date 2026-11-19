@@ -4,7 +4,19 @@ How to get Kestrel 4.0 running, and which tools it needs. Back to the [README](.
 
 ## Kestrel 4.0
 
-No 4.0 release has been tagged yet. The latest GitHub releases (v3.0.x) ship the earlier egui app, not the 4.0 app. To run 4.0, build it from source. When a 4.0 release is tagged, the release workflow also publishes `kestrel-gpui.exe` (Windows x64) with a `SHA256SUMS.txt`. That executable does not bundle FFmpeg or MKVToolNix, so you install them yourself.
+Download Kestrel 4.0 from the [v4.0.0 release](https://github.com/mlbkumar9/Kestrel/releases/tag/v4.0.0), or build it from source (below). Each tag publishes these files:
+
+| File | What it is |
+|---|---|
+| `Kestrel-v4.0.0-windows-x64.zip` | Unzip and run `Kestrel.exe`. Bundles FFmpeg and mkvmerge in `tools`. |
+| `Kestrel-v4.0.0-windows-x64.msi` | Installer with the same bundled tools. |
+| `Kestrel-v4.0.0-windows-x64.exe` | The program alone, without tools. |
+| `Kestrel-v4.0.0-macos-aarch64.zip`, `-macos-x86_64.zip` | Ad-hoc signed, so Gatekeeper prompts on first launch. FFmpeg and MKVToolNix come from the system. |
+| `Kestrel-v4.0.0-linux-x64.tar.gz` | FFmpeg and MKVToolNix come from the system. |
+| `Kestrel-v4.0.0-legacy-egui-windows-x64.zip` | The earlier egui app. |
+| `SHA256SUMS.txt` | Checksums for every file above. |
+
+The Windows zip and MSI need no separate FFmpeg or MKVToolNix install. The other downloads need them on `PATH`.
 
 ## Tools
 
@@ -68,7 +80,7 @@ You cannot cross-build the Windows GPUI binary from Linux: the build fails with 
 
 ### macOS
 
-Untested for 4.0.
+Building from source is untested for 4.0. Use the release zip.
 
 ### Opening files from the command line
 

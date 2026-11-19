@@ -3,7 +3,7 @@
 Answers about Kestrel 4.0. Back to the [README](../README.md).
 
 ## Is there a 4.0 download?
-Not yet. The latest release is v3.0.2, which ships the earlier egui app. Build 4.0 from source: see [Installation](INSTALLATION.md).
+Yes. Download it from the [v4.0.0 release](https://github.com/mlbkumar9/Kestrel/releases/tag/v4.0.0). The README says [which file to pick](../README.md#download). You can also build from source: see [Installation](INSTALLATION.md).
 
 ## Do I need Python?
 No. Kestrel 4.0 is a Rust app. The Python scripts are legacy tools.
@@ -24,7 +24,7 @@ Input: `mkv`, `mk3d`, `webm`, `mp4`, `m4v`, `mov`, `avi`, `ts`, `m2ts`, `mts`, `
 Yes. On Remux, use **Add subtitle file** or **Add audio file**. On Transcode, import subtitles and optionally burn them in. See [Adding subtitles and audio](guides/adding-subtitles.md).
 
 ## Can I change the track order?
-Not from the 4.0 interface. Source tracks keep their order, and added files go after them.
+Yes, on the Remux page. Each source and added row has up and down buttons in the Order column. See [Remux](guides/remux.md#the-track-editor).
 
 ## How are languages selected?
 Audio and subtitles are separate. Click the language chips on Remux, or enter codes on the Transcode Audio tab. No selection keeps everything. If you select audio languages and none match a file, Kestrel keeps all audio tracks of that file and warns. Tracks without a tag count as `und`.
@@ -36,10 +36,10 @@ FFmpeg builds differ, and hardware encoders also need a working device and drive
 For x264 and x265, CRF 18 to 24 covers most HD sources, and the default is 22. For AV1 and VP9, 25 to 34. See [Choosing a quality value](guides/transcode.md#choosing-a-quality-value).
 
 ## Can Kestrel measure VMAF, PSNR or SSIM?
-Not in 4.0. The Metrics page is a disabled placeholder. Quality metrics are the main feature of 4.1. See the [roadmap](ROADMAP.md).
+Not in 4.0. The Metrics page is a placeholder. Quality metrics are the main feature of 4.1. See the [roadmap](ROADMAP.md).
 
-## Why do Parallel jobs and Process priority in Settings do nothing?
-They are saved but not applied in 4.0. The queue runs one job at a time.
+## What do Parallel jobs and Process priority in Settings do?
+Parallel jobs sets how many queue jobs run at once, from 1 to 4. Process priority sets the scheduling priority of every FFmpeg, FFprobe and mkvmerge process Kestrel starts (Normal, Below normal or Low). Both are applied. See [Settings](guides/settings.md#behaviour).
 
 ## Where should I look when a job fails?
 Open Activity (`Ctrl 5`). It shows the command and the tool's error. Check that the tools exist, that the output folder is writable, that there is free space and that the container fits the tracks. Stop cancels the running job and removes its temporary file. Finished outputs stay.

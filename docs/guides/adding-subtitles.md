@@ -15,7 +15,7 @@ Accepted files:
 | Subtitle | `srt`, `ass`, `ssa`, `vtt`, `sup` |
 | Audio | `aac`, `ac3`, `eac3`, `dts`, `flac`, `mka`, `m4a`, `mp3`, `ogg`, `opus`, `wav`, `thd` |
 
-Kestrel reads the codec from the file extension.
+Kestrel probes each added file with `ffprobe`, so a `.mka` or `.thd` file shows its real codec and channel layout. If a file cannot be probed, Kestrel falls back to the extension.
 
 Edit the new row like any other track:
 
@@ -23,7 +23,9 @@ Edit the new row like any other track:
 - **Title** starts as "Added from file". Change or clear it.
 - **Default** makes it the default track of its type and clears the flag on the others.
 - **Forced** marks forced display.
+- The **Order** buttons move the row up or down, like a source track.
 - The **x** button removes the added file from the job.
+- Under each added row, **Offset (ms)** shifts the track in time, and **Charset** sets the text encoding of a text subtitle. See the next section.
 
 The same container rules as for source tracks apply. A `.sup` (picture) subtitle goes into MKV only. An audio file the container cannot hold is dropped with a warning.
 
@@ -31,9 +33,13 @@ Added files are part of that source file's edits. They are not shared between fi
 
 ## Timing offset and character set
 
-The engines support a time offset in milliseconds (positive delays the track, negative advances it) and a character set for text subtitles. The 4.0 Remux page does not show fields for either. If a subtitle is out of sync or shows broken accents in a remux, use the Transcode import below, which has both, or fix the file with a subtitle editor first.
+![Offset and charset fields under an added subtitle](../images/remux-offset-charset.png)
 
-For reference, the engines apply them like this:
+Every added file has an **Offset (ms)** field under its row. A positive value delays the track and a negative value advances it. The hint "Positive delays, negative advances" sits beside the field.
+
+An added text subtitle (SRT, ASS, SSA or VTT) also has a **Charset** menu. It lists UTF-8 (default), Windows-1252, ISO-8859-1, ISO-8859-15, Shift_JIS, GB18030, Big5, EUC-KR, KOI8-R, Windows-1251 and Windows-1256. Pick the one that matches the file if accents or other characters look wrong. Picture subtitles and audio files have no charset.
+
+The engines apply them like this:
 
 - **MKVToolNix:** `--sync 0:<seconds>` for the offset and `--sub-charset 0:<name>` for the character set.
 - **FFmpeg:** the offset shifts the input timestamps, and a non-UTF-8 character set makes FFmpeg decode and re-encode the subtitle text (`-sub_charenc`). UTF-8 is the default.

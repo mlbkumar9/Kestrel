@@ -33,13 +33,14 @@ Pick a file in the menu above the table (it lists the files in your Library). Th
 | Title | The track name. Clear it to remove the name. |
 | Default | Marks the track the player picks first. |
 | Forced | Marks a track for forced display, usually foreign-language dialogue. |
+| Order | Up and down buttons that move the track one place earlier or later. |
 
 The header shows how many edits differ from the source file. Kestrel records only the fields you changed, so untouched tracks keep their source values.
 
 Rules that apply to the whole file:
 
 - **One default per type.** If you set Default on a track, every other track of that type loses the flag. If you set it on several, the last one in output order wins. If you set none, the first source default stays and later ones are cleared. If you drop the default track, Kestrel does not promote another one.
-- **Order.** Source tracks keep their original order. Tracks you add from files (see [Adding subtitles and audio](adding-subtitles.md)) go after them, in the order you added them. The 4.0 interface has no reorder control. The engine supports an explicit order, but you cannot set it from the page.
+- **Order.** Source tracks keep their original order until you change it. Tracks you add from files (see [Adding subtitles and audio](adding-subtitles.md)) go after them, in the order you added them. Use the up and down buttons in the **Order** column to move any source or added row. The order you set is the order of the tracks in the output, within each type.
 
 ## Output container
 

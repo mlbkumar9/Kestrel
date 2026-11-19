@@ -34,7 +34,24 @@ Check the Video tab after loading a preset. A preset that names an encoder your 
 
 The preset appears in the menu and in the palette. Kestrel saves your presets with its other settings in `gpui.ron` (see [Settings](settings.md)), so they survive a restart.
 
-The 4.0 interface has no controls to rename, delete, import or export presets. The engine supports these operations, and the preset file format is JSON with a `version` of 1, but you cannot reach them from the app yet.
+## Manage presets
+
+![Preset menu in the sidebar](../images/presets-menu.png)
+
+Open the preset menu with the three-dot button beside **Save as...** on the Transcode page, or right-click a preset in the sidebar. It holds:
+
+| Item | What it does |
+|---|---|
+| Rename... | Renames a saved preset. |
+| Duplicate | Copies any preset, built-in or saved, under a new name. This is how you start from a built-in. |
+| Delete... | Deletes a saved preset after a confirmation. This cannot be undone. |
+| Export preset... | Writes the selected preset to a JSON file. |
+| Import presets... | Reads one or more presets from a JSON file. |
+| Export all saved... | Writes every saved preset to one JSON file. |
+
+Built-in presets are read-only. Rename, Delete and Export are greyed out for them. Duplicate one to get an editable copy.
+
+The file format is JSON with a `version` of 1. Imported presets are added to your list and do not replace existing ones.
 
 ## Related
 

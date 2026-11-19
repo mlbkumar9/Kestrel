@@ -26,7 +26,26 @@ Each queued job keeps a snapshot of its settings.
 | Align A/V start | Pads or trims the start of re-encoded audio so it begins together with the video (`-avoid_negative_ts make_zero` plus audio padding). On by default. |
 | Passthru common metadata | Copies the source's tags (`-map_metadata 0`). Off writes none. |
 | Keep attachments (fonts, cover art) | MKV only. Copies attached files. Off by default. Attachments are not kept when a subtitle is burned in. |
-| Preview | The preview section is shown but disabled. It reads "Preview encoding arrives with the 4.1 engine". |
+| Preview | Encodes a short segment with the current settings. See [Preview](#preview). |
+
+### Preview
+
+![Transcode preview with size, bitrate and stills](../images/transcode-preview.png)
+
+The **Preview** section at the bottom of the Summary tab encodes a short segment of the source with the settings on the page, so you can judge size and picture before you queue the whole file.
+
+1. Choose a **Length**: 15 s, 30 s or 60 s.
+2. Choose where it **Starts at**: 25%, 50% or 75% of the duration, or drag the slider. The **Segment** line shows the time range.
+3. Press **Encode preview**. A progress bar and **Cancel** show while it runs.
+
+When it ends, Kestrel shows:
+
+- **Preview size** and **Bitrate** of the encoded segment.
+- **Full file, extrapolated**: the segment size scaled to the whole duration. Treat it as an estimate, because scenes differ in how well they compress.
+- **Play preview**, which opens the encoded segment in your default video player.
+- Two stills from the middle of the segment, **Source** and **Encoded**, side by side.
+
+If the stills cannot be made, the preview still finishes and says why. A failed preview shows the error under the button.
 
 ## Dimensions
 

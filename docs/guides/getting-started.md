@@ -4,7 +4,7 @@ This guide takes you from a fresh build to your first remux and your first trans
 
 ## Before you start
 
-Kestrel 4.0 has no tagged release yet, so you build it from source. Follow [Build from source](../../README.md#build-from-source), and install FFmpeg (with FFprobe) and MKVToolNix first. Open **Settings** after the first launch. Each tool should show a version badge. If one shows `missing`, see [Troubleshooting](troubleshooting.md).
+Download Kestrel from the [v4.0.0 release](https://github.com/mlbkumar9/Kestrel/releases/tag/v4.0.0) (the README says [which file to pick](../../README.md#download)), or [build it from source](../../README.md#build-from-source). The Windows zip and MSI bundle FFmpeg and MKVToolNix. For the other downloads, install them first. Open **Settings** after the first launch. Each tool should show a version badge. If one shows `missing`, see [Troubleshooting](troubleshooting.md).
 
 ## The window
 
@@ -17,12 +17,28 @@ The sidebar lists seven pages.
 | Transcode | `Ctrl 3` | Re-encode video and audio |
 | Queue | `Ctrl 4` | Run and watch jobs |
 | Activity | `Ctrl 5` | Read commands, warnings and errors |
-| Metrics | `Ctrl 6` | Placeholder for 4.1; it does nothing yet |
+| Metrics | `Ctrl 6` | Placeholder for 4.1 |
 | Settings | none | Check tools, hardware encoders and appearance |
 
 `Ctrl K` opens the command palette. It lists actions (add files, add a folder, start or pause the queue, toggle light and dark), every page, and every preset.
 
 ![Command palette](../images/command-palette.png)
+
+## The top bar
+
+![Top bar](../images/top-bar.png)
+
+The bar above every page holds, from left to right:
+
+- **Sidebar toggle** (`Ctrl B`) hides or shows the sidebar.
+- **Back and forward** (`Alt Left`, `Alt Right`, or mouse buttons 4 and 5) step through the pages you visited.
+- **Breadcrumb** names the current page.
+- **Search** in the centre opens the command palette (`Ctrl K`).
+- **Queue pill** appears while the queue runs. It shows progress, the file, the percentage, the ETA and a pause button. After the queue ends it shows done or failed for 10 seconds.
+- **Activity bell** carries a badge with the number of unread warnings and errors. Opening Activity clears it.
+- **Theme toggle** switches between the light and dark theme.
+- **Add media** (`Ctrl O`) and **Start queue** or **Pause**.
+- The window controls take the colours of the theme.
 
 ## 1. Add media
 

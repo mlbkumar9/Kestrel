@@ -69,11 +69,11 @@ Hardware encoders do not support two-pass, advanced options, or fast decode in K
 Text subtitle files from older sources are often not UTF-8. Accents or kana show as garbage.
 
 - In Transcode, set **Import character set** on the Subtitles tab to Windows-1252, ISO-8859-1 or Shift_JIS, then encode.
-- The Remux page does not offer a character set in 4.0. Convert the file to UTF-8 in a text editor first, or import it through Transcode.
+- In Remux, pick the file's encoding in the **Charset** menu under the added subtitle row. It applies to text subtitles only.
 
 ## A subtitle is out of sync
 
-Transcode imports have an **Offset (ms)** column. A positive value delays the subtitle, and a negative one advances it. The Remux page has no offset field in 4.0.
+Remux and Transcode both have an **Offset (ms)** field for an added subtitle. A positive value delays the subtitle, and a negative one advances it.
 
 ## Two-pass or advanced options are greyed out or warned about
 
@@ -89,9 +89,13 @@ Two-pass needs **Average bitrate** and a software encoder. Advanced options exis
 
 On Remux, **If the output exists** chooses between Rename (adds `(2)`), Skip and Overwrite. A skipped job shows Skipped on the Queue. A queued job keeps the policy it had when you queued it, so change the policy on Remux and queue the job again.
 
-## Preview and Metrics do nothing
+## The Preview fails
 
-The Transcode preview and the Metrics page are placeholders in 4.0. Both are planned for 4.1. See the [roadmap](../ROADMAP.md).
+The preview is a short encode, so it needs the same things a transcode needs: a working FFmpeg and an available encoder. Read the error under the **Encode preview** button, then check Settings. If the source is shorter than the chosen length, Kestrel shortens the segment. See [Transcode](transcode.md#preview).
+
+## Metrics does nothing
+
+The Metrics page is a placeholder in 4.0. Quality metrics are planned for 4.1. See the [roadmap](../ROADMAP.md).
 
 ## Settings or window do not behave
 

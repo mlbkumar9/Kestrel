@@ -22,7 +22,13 @@ A job keeps the settings it had when you queued it. Changing the page afterwards
 - Each row has a menu (the three-dot button) with **Retry** (for a failed, cancelled or skipped job), **Remove** and **Reveal output** (shows the output file in your file manager).
 - **When done**: Nothing, Notify, or Open output folder. Notify shows a toast. Open output folder reveals the last output.
 
-The Queue page has no reorder control in 4.0. Jobs run in the order you added them.
+The Queue page has no reorder control in 4.0. Jobs start in the order you added them. With **Parallel jobs** above 1 in [Settings](settings.md#behaviour), several jobs run at the same time.
+
+### Queue status in the top bar
+
+![Top bar with the queue pill](../images/top-bar.png)
+
+While the queue runs, a pill in the [top bar](getting-started.md#the-top-bar) shows the progress, the current file, the percentage and the ETA, with a pause button. When the queue ends, the pill shows done or failed for 10 seconds. The **Start queue** button in the bar becomes **Pause** while jobs run, and **Resume** while it is paused.
 
 ## Activity
 
@@ -37,6 +43,8 @@ Activity logs, per job, what Kestrel did:
 | DONE | A job or the queue finished. |
 | WARN | Something was changed or skipped, such as a dropped track or a fallback. |
 | ERROR | A job failed. The tool's own message is included. |
+
+A bell in the top bar shows how many warnings and errors you have not read. Opening Activity clears the count.
 
 Use **All jobs** to filter to one file. **Copy** puts the visible log on the clipboard. **Export...** saves it as `kestrel-activity.log`. **Clear** empties it. The log lives in memory and is cleared when you close the app.
 

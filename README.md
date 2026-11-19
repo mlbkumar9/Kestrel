@@ -16,7 +16,23 @@
 
 Kestrel 4.0 is a desktop app written in Rust with the GPUI toolkit. It drives FFmpeg and MKVToolNix on your machine. Files never leave your disk.
 
-Kestrel 4.0 has not been tagged yet. The latest GitHub release is v3.0.2, an earlier egui build. To run 4.0, [build it from source](#build-from-source).
+Download Kestrel 4.0 from the [v4.0.0 release](https://github.com/mlbkumar9/Kestrel/releases/tag/v4.0.0), or [build it from source](#build-from-source). The [Download](#download) section says which file to pick.
+
+## Download
+
+Get the files from the [v4.0.0 release](https://github.com/mlbkumar9/Kestrel/releases/tag/v4.0.0). Pick one per system:
+
+| System | File | Notes |
+|---|---|---|
+| Windows 11 | `Kestrel-v4.0.0-windows-x64.zip` | Unzip and run `Kestrel.exe`. FFmpeg and mkvmerge are bundled in the `tools` folder. |
+| Windows 11 | `Kestrel-v4.0.0-windows-x64.msi` | Installer with the same bundled tools. |
+| Windows 11 | `Kestrel-v4.0.0-windows-x64.exe` | The program alone. Install FFmpeg and MKVToolNix yourself. |
+| macOS, Apple silicon | `Kestrel-v4.0.0-macos-aarch64.zip` | Ad-hoc signed, so Gatekeeper asks before the first launch. Uses FFmpeg and MKVToolNix from the system. |
+| macOS, Intel | `Kestrel-v4.0.0-macos-x86_64.zip` | Same as above. |
+| Linux | `Kestrel-v4.0.0-linux-x64.tar.gz` | Uses FFmpeg and MKVToolNix from the system. |
+| Windows 11, earlier app | `Kestrel-v4.0.0-legacy-egui-windows-x64.zip` | The egui app, kept for reference. |
+
+`SHA256SUMS.txt` lists the checksum of every file. Compare it with `Get-FileHash <file>` on Windows or `sha256sum <file>` elsewhere.
 
 ## What it does
 
@@ -24,7 +40,8 @@ Kestrel 4.0 has not been tagged yet. The latest GitHub release is v3.0.2, an ear
 - **Add subtitles and audio.** Mux external SRT, ASS, SSA, VTT and SUP files, or audio files, into a container as new tracks.
 - **Change containers.** Write MKV, MP4, MOV or WebM. Kestrel checks every track against the target container and tells you what will be dropped before you start.
 - **Transcode with HandBrake-level controls.** Eight tabs (Summary, Dimensions, Filters, Video, Audio, Subtitles, Chapters, Tags) cover encoders, quality, crop, scaling, filters, HDR, per-track audio, burned-in subtitles and chapter names. FFmpeg does the work.
-- **Queue and presets.** Add jobs to a queue, start, pause or stop it, and read every command in the Activity log. Five built-in presets plus your own.
+- **Queue and presets.** Add jobs to a queue, start, pause or stop it, and read every command in the Activity log. Five built-in presets plus your own, which you can rename, duplicate, delete, import and export.
+- **Preview before you commit.** Encode a 15, 30 or 60 second segment with the current settings, read its size and extrapolated full size, and play it.
 - **Batch.** Add files or whole folders. Folder inputs keep their subfolder layout in the output.
 
 ## A closer look
@@ -73,9 +90,9 @@ Settings shows what was found. The tool paths are read-only in 4.0, so fix a mis
 
 | Platform | Steps |
 |---|---|
-| Windows 11 | Install FFmpeg (for example a build from gyan.dev) and MKVToolNix, put them on `PATH`, then [build from source](#build-from-source). |
-| macOS | `brew install ffmpeg mkvtoolnix`, then build from source. macOS builds are untested for 4.0. |
-| Linux | `sudo apt install ffmpeg mkvtoolnix`, then build from source (extra packages listed below). Linux builds are untested for 4.0. |
+| Windows 11 | The zip and the MSI bundle both tools. With the standalone exe, install FFmpeg (for example a build from gyan.dev) and MKVToolNix and put them on `PATH`. |
+| macOS | `brew install ffmpeg mkvtoolnix`, then run the app from the zip. |
+| Linux | `sudo apt install ffmpeg mkvtoolnix`, then run the binary from the tar.gz. |
 
 Full steps, including the legacy 3.x releases, are in [docs/INSTALLATION.md](docs/INSTALLATION.md).
 
@@ -108,6 +125,8 @@ Reference pages: [Installation](docs/INSTALLATION.md), [Usage](docs/USAGE.md), [
 |---|---|
 | `Ctrl K` | Open the command palette |
 | `Ctrl O` | Add media files |
+| `Ctrl B` | Show or hide the sidebar |
+| `Alt Left`, `Alt Right` | Back and forward through the pages you visited (mouse buttons 4 and 5 work too) |
 | `Ctrl Enter` | Queue the current job (Remux, Library or Transcode page) |
 | `Esc` | Close the palette or any open overlay |
 | `Ctrl 1` | Library |
@@ -115,10 +134,14 @@ Reference pages: [Installation](docs/INSTALLATION.md), [Usage](docs/USAGE.md), [
 | `Ctrl 3` | Transcode |
 | `Ctrl 4` | Queue |
 | `Ctrl 5` | Activity |
-| `Ctrl 6` | Metrics (disabled placeholder until 4.1) |
+| `Ctrl 6` | Metrics (placeholder until 4.1) |
 | `Up`, `Down` | Move in the palette list |
 
 Settings has no shortcut. Open it from the sidebar or the palette.
+
+The [top bar](docs/guides/getting-started.md#the-top-bar) holds the sidebar toggle, history buttons, search, queue status, activity bell, theme toggle, and the Add media and Start queue buttons.
+
+![Kestrel top bar](docs/images/top-bar.png)
 
 ## Build from source
 
@@ -168,7 +191,7 @@ The egui app (`cargo run -p kestrel-media --release`), the Tauri app and the Pyt
 
 ## Roadmap
 
-Kestrel 4.1 adds quality metrics: VMAF, PSNR, SSIM and XPSNR for an encode against its source. The 4.0 app shows the Metrics page as a disabled placeholder. See [docs/ROADMAP.md](docs/ROADMAP.md).
+Kestrel 4.1 adds quality metrics: VMAF, PSNR, SSIM and XPSNR for an encode against its source. The 4.0 app shows the Metrics page as a placeholder. See [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Credits
 
