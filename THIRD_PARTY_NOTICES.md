@@ -4,9 +4,9 @@ The Windows release bundle includes the following third-party command-line tools
 
 ## FFmpeg
 
-- Version: `n9.0.2-37-gae19868753` (GPL-enabled BtbN build)
+- Version: `n9.0.2-39-g7adfbe40dc` (GPL-enabled BtbN build)
 - Source project: <https://ffmpeg.org/>
-- Build source and pinned Windows asset: <https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-29-19-17/ffmpeg-n9.0.2-37-gae19868753-win64-gpl-9.0.zip>
+- Build source and pinned Windows asset: <https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-31-12-59/ffmpeg-n9.0.2-39-g7adfbe40dc-win64-gpl-9.0.zip>
 - License: GPL; see `tools/ffmpeg/LICENSE` in the Windows package.
 
 ## MKVToolNix
