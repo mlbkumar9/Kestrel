@@ -50,10 +50,17 @@ impl EncoderSet {
     }
 }
 
+/// How long `ffmpeg -encoders` may run before detection gives up.
+const ENCODER_LIST_TIMEOUT: Duration = Duration::from_secs(15);
+
 pub fn detect(ffmpeg: &Path) -> Result<EncoderSet, String> {
-    let output = tools::command(ffmpeg)
-        .args(["-hide_banner", "-encoders"])
-        .output()
+    detect_with_timeout(ffmpeg, ENCODER_LIST_TIMEOUT)
+}
+
+fn detect_with_timeout(ffmpeg: &Path, timeout: Duration) -> Result<EncoderSet, String> {
+    let mut command = tools::command(ffmpeg);
+    command.args(["-hide_banner", "-encoders"]);
+    let output = output_with_timeout(command, timeout)
         .map_err(|error| format!("Failed to list FFmpeg encoders: {error}"))?;
     if !output.status.success() {
         return Err(format!(
@@ -111,6 +118,55 @@ pub fn detect(ffmpeg: &Path) -> Result<EncoderSet, String> {
         software,
         hardware,
         audio,
+    })
+}
+
+/// Runs `command` to completion, killing it when it exceeds `timeout`.
+fn output_with_timeout(
+    mut command: std::process::Command,
+    timeout: Duration,
+) -> Result<std::process::Output, String> {
+    use std::io::Read;
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| error.to_string())?;
+    let drain = |stream: Option<Box<dyn Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            if let Some(mut stream) = stream {
+                let _ = stream.read_to_end(&mut bytes);
+            }
+            bytes
+        })
+    };
+    let stdout = drain(child.stdout.take().map(|s| Box::new(s) as _));
+    let stderr = drain(child.stderr.take().map(|s| Box::new(s) as _));
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("timed out after {} s", timeout.as_secs_f32()));
+            }
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error.to_string());
+            }
+        }
+    };
+    Ok(std::process::Output {
+        status,
+        stdout: stdout.join().unwrap_or_default(),
+        stderr: stderr.join().unwrap_or_default(),
     })
 }
 
@@ -201,6 +257,36 @@ fn wait_for_encoder_probe(child: &mut Child, timeout: Duration) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Hangs for a minute when run by name; `encoder_listing_times_out` starts it as a child.
+    #[test]
+    #[ignore = "helper process for encoder_listing_times_out"]
+    fn hang_for_encoder_timeout_test() {
+        std::thread::sleep(Duration::from_secs(60));
+    }
+
+    #[test]
+    fn encoder_listing_times_out_instead_of_hanging() {
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command.args([
+            "--ignored",
+            "--exact",
+            "encoders::tests::hang_for_encoder_timeout_test",
+        ]);
+        let started = Instant::now();
+        let error = output_with_timeout(command, Duration::from_millis(700)).unwrap_err();
+        assert!(error.contains("timed out"), "{error}");
+        assert!(started.elapsed() < Duration::from_secs(20));
+    }
+
+    #[test]
+    fn output_with_timeout_returns_output_of_a_finishing_process() {
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command.args(["--list", "--format", "terse"]);
+        let output = output_with_timeout(command, Duration::from_secs(30)).unwrap();
+        assert!(output.status.success());
+        assert!(String::from_utf8_lossy(&output.stdout).contains("parses_ffmpeg_encoder"));
+    }
 
     #[test]
     fn parses_ffmpeg_encoder_listing_flags() {
