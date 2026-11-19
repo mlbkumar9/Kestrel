@@ -52,6 +52,34 @@ impl Kestrel {
         change(self.remux.edits_for(&path, &meta));
     }
 
+    /// What core says about the selected files (or the file shown) for the chosen container:
+    /// tracks the container cannot hold are dropped, never converted, and each says so here.
+    fn remux_warnings(&self) -> Vec<String> {
+        let mut indices = self.library.selected();
+        if indices.is_empty() {
+            indices.push(self.remux_file);
+        }
+        let several = indices.len() > 1;
+        let mut warnings = Vec::new();
+        for index in indices {
+            let Some(source) = self.library.sources.get(index) else {
+                continue;
+            };
+            let Some(meta) = source.metadata() else {
+                continue;
+            };
+            let settings = self.remux.settings_for_file(&source.path, meta);
+            for warning in compat::job_warnings(meta, &settings) {
+                warnings.push(if several {
+                    format!("{}: {warning}", source.name)
+                } else {
+                    warning
+                });
+            }
+        }
+        warnings
+    }
+
     fn language_chips(&self, cx: &mut Context<Self>, subtitles: bool) -> Vec<AnyElement> {
         let t = self.theme();
         let counts = self.library.language_counts(subtitles);
@@ -476,10 +504,7 @@ impl Kestrel {
             .iter()
             .position(|(_, policy)| *policy == self.remux.collision)
             .unwrap_or(0);
-        let warnings = meta
-            .as_ref()
-            .map(|meta| compat::job_warnings(meta, &self.remux.job_settings()))
-            .unwrap_or_default();
+        let warnings = self.remux_warnings();
         let warning_card =
             card(&t)
                 .p(px(12.0))

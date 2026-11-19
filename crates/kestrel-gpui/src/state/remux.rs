@@ -309,6 +309,18 @@ impl RemuxState {
         }
     }
 
+    /// Job settings for one file: the shared settings plus that file's track edits. Edits that
+    /// do not map (an invalid language code) are left out; queueing reports them.
+    pub fn settings_for_file(&self, path: &Path, meta: &MediaMetadata) -> JobSettings {
+        let mut settings = self.job_settings();
+        if let Some(edits) = self.edits.get(path)
+            && let Ok(track_edits) = core_track_edits(meta, edits)
+        {
+            settings.track_edits = track_edits;
+        }
+        settings
+    }
+
     /// Short description for the queue table.
     pub fn summary(&self) -> String {
         let languages = |set: &BTreeSet<String>| {
@@ -561,5 +573,52 @@ mod tests {
                 },
             ]
         );
+    }
+    #[test]
+    fn inspector_warnings_cover_audio_the_container_cannot_hold() {
+        use kestrel_core::compat;
+        let mut meta = meta_with_ids();
+        meta.audio_tracks[0].codec_id = "dts".to_owned();
+        meta.audio_tracks[0].codec = "dts".to_owned();
+        let path = PathBuf::from("movie.mkv");
+        let mut state = RemuxState {
+            container: Container::Mp4,
+            ..RemuxState::default()
+        };
+        // The only audio track is DTS: the job would fail, and the inspector says so.
+        let warnings = compat::job_warnings(&meta, &state.settings_for_file(&path, &meta));
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w == "DTS audio cannot be stored in MP4; choose MKV or use Transcode"),
+            "{warnings:?}"
+        );
+        // MKV holds it.
+        state.container = Container::Mkv;
+        assert!(
+            !compat::job_warnings(&meta, &state.settings_for_file(&path, &meta))
+                .iter()
+                .any(|w| w.contains("DTS"))
+        );
+        // A second, storable track turns the failure into a per-track drop warning.
+        state.container = Container::Mp4;
+        let mut second = meta.audio_tracks[0].clone();
+        second.id = 7;
+        second.codec_id = "aac".to_owned();
+        second.codec = "aac".to_owned();
+        meta.audio_tracks.push(second);
+        let warnings = compat::job_warnings(&meta, &state.settings_for_file(&path, &meta));
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("Audio track 1 will be dropped")),
+            "{warnings:?}"
+        );
+        // Removing the DTS track in the editor clears the warning.
+        let mut edits = FileEdits::from_metadata(&meta);
+        edits.tracks[1].keep = false;
+        state.edits.insert(path.clone(), edits);
+        let warnings = compat::job_warnings(&meta, &state.settings_for_file(&path, &meta));
+        assert!(warnings.iter().all(|w| !w.contains("DTS")), "{warnings:?}");
     }
 }
