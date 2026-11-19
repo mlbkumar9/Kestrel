@@ -124,7 +124,12 @@ impl Kestrel {
         let library_count = self.library.sources.len();
 
         let mark = gpui::img(gpui::ImageSource::Resource(gpui::Resource::Embedded(
-            crate::assets::LOGO.into(),
+            if t.light {
+                crate::assets::LOGO_LIGHT
+            } else {
+                crate::assets::LOGO
+            }
+            .into(),
         )))
         .flex_none()
         .size(px(22.0))
