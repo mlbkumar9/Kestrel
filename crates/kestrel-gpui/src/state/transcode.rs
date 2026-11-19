@@ -267,6 +267,9 @@ pub const SUB_DEFAULT_VALUES: [SubtitleDefault; 3] = [
     SubtitleDefault::None,
     SubtitleDefault::Forced,
 ];
+/// Top entry of the video encoder picker: stream-copy the video instead of encoding it.
+pub const COPY_VIDEO_LABEL: &str = "Passthru (copy video)";
+
 pub const CHARSETS: [&str; 4] = ["UTF-8", "Windows-1252", "ISO-8859-1", "Shift_JIS"];
 
 #[derive(Clone, Debug, PartialEq)]
@@ -608,6 +611,9 @@ pub struct TranscodeForm {
     pub tonemap: usize,
     pub grayscale: bool,
     // Video
+    /// Copy the video stream as is. The encoder, quality, dimension and filter controls keep
+    /// their values but do not apply while this is set.
+    pub copy_video: bool,
     pub encoder: VideoEncoder,
     pub ten_bit: TenBit,
     pub frame_rate: usize,
@@ -705,6 +711,7 @@ impl Default for TranscodeForm {
             grayscale: false,
             rf: default_rf(&encoder),
             preset_name: default_preset(&encoder).to_owned(),
+            copy_video: false,
             encoder,
             ten_bit: TenBit::On,
             frame_rate: 0,
@@ -780,6 +787,35 @@ impl TranscodeForm {
             });
         }
         options
+    }
+
+    /// Labels for the encoder picker: the copy entry first, then `options`.
+    pub fn picker_labels(options: &[EncoderChoice]) -> Vec<String> {
+        std::iter::once(COPY_VIDEO_LABEL.to_owned())
+            .chain(options.iter().map(|choice| choice.label.clone()))
+            .collect()
+    }
+
+    /// Picker position of the current choice for [`Self::picker_labels`].
+    pub fn picker_index(&self, options: &[EncoderChoice]) -> usize {
+        if self.copy_video {
+            0
+        } else {
+            self.encoder_index(options).map_or(0, |index| index + 1)
+        }
+    }
+
+    /// Applies a picker position from [`Self::picker_labels`].
+    pub fn pick_encoder(&mut self, options: &[EncoderChoice], index: usize) {
+        match index.checked_sub(1) {
+            None => self.copy_video = true,
+            Some(position) => {
+                if let Some(choice) = options.get(position) {
+                    self.copy_video = false;
+                    self.set_encoder(choice);
+                }
+            }
+        }
     }
 
     /// Position of the form's encoder and bit depth in `options`.
@@ -889,6 +925,9 @@ impl TranscodeForm {
 
     /// Short summary such as `H.265 10-bit · CRF 22`.
     pub fn video_summary(&self) -> String {
+        if self.copy_video {
+            return COPY_VIDEO_LABEL.to_owned();
+        }
         let depth = match self.ten_bit {
             TenBit::On => " 10-bit",
             TenBit::Twelve => " 12-bit",
@@ -916,6 +955,9 @@ impl TranscodeForm {
     }
 
     pub fn filter_summary(&self) -> String {
+        if self.copy_video {
+            return "none (video copied)".to_owned();
+        }
         let mut parts = Vec::new();
         if self.deinterlace > 0 {
             parts.push(DEINTERLACE[self.deinterlace].to_lowercase());
@@ -1040,6 +1082,9 @@ impl TranscodeForm {
         let Some((width, height)) = source else {
             return "Source dimensions unknown".to_owned();
         };
+        if self.copy_video {
+            return format!("{width}x{height} (video copied)");
+        }
         let cropped = self.cropped((width, height));
         let target = self.output_size((width, height));
         let ratio = f64::from(target.0) / f64::from(target.1.max(1));
@@ -1367,7 +1412,11 @@ impl TranscodeForm {
         };
         JobSettings {
             container: self.container,
-            video: VideoSettings::Encode(self.video_encode()),
+            video: if self.copy_video {
+                VideoSettings::Copy
+            } else {
+                VideoSettings::Encode(self.video_encode())
+            },
             audio: AudioSettings {
                 languages: parse_languages(&self.languages),
                 codec: audio_choice(self.default_audio_encoder),
@@ -1409,8 +1458,13 @@ impl TranscodeForm {
     pub fn apply_job_settings(&mut self, name: &str, settings: &JobSettings) {
         self.preset = name.to_owned();
         self.container = settings.container;
-        if let VideoSettings::Encode(encode) = &settings.video {
-            self.apply_video(encode);
+        match &settings.video {
+            VideoSettings::Encode(encode) => {
+                self.copy_video = false;
+                self.apply_video(encode);
+            }
+            // The encode controls keep their values for when the user switches back.
+            VideoSettings::Copy => self.copy_video = true,
         }
         self.apply_audio(&settings.audio);
         self.apply_subtitles(&settings.subtitles);
@@ -1790,6 +1844,9 @@ pub fn rf_from_quality(encoder: &VideoEncoder, quality: u8) -> u8 {
 
 /// Rough output size for a form against a source, used until a sample is measured.
 pub fn heuristic_size(form: &TranscodeForm, source_bytes: u64, duration: Option<f64>) -> u64 {
+    if form.copy_video {
+        return source_bytes;
+    }
     if !form.is_constant_quality() {
         let seconds = duration.unwrap_or(0.0);
         return (f64::from(form.bitrate_kbps) * 1000.0 / 8.0 * seconds) as u64;
@@ -1818,6 +1875,9 @@ pub fn heuristic_size(form: &TranscodeForm, source_bytes: u64, duration: Option<
 
 /// Rough encode time in minutes for a source of the given duration.
 pub fn heuristic_minutes(form: &TranscodeForm, duration: Option<f64>) -> u64 {
+    if form.copy_video {
+        return 1;
+    }
     let hours = duration.unwrap_or(0.0) / 3600.0;
     let hardware = form.encoder_family() == Family::Hardware;
     let av1 = form.encoder_family() == Family::Av1;

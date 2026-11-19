@@ -167,6 +167,17 @@ pub fn job_warnings(metadata: &MediaMetadata, settings: &JobSettings) -> Vec<Str
         ));
     }
 
+    if matches!(&settings.video, VideoSettings::Copy)
+        && (settings.subtitles.burn_in != crate::transcode::BurnIn::None
+            || settings
+                .subtitles
+                .external
+                .iter()
+                .any(|track| track.burn_in))
+    {
+        warnings.push("Subtitle burn-in needs the video to be re-encoded".to_owned());
+    }
+
     if settings.audio.tracks.is_empty() {
         if !mkv::normalize_languages(&settings.audio.languages).is_empty()
             && !metadata.audio_tracks.is_empty()

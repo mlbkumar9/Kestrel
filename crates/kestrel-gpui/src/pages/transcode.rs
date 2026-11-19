@@ -657,7 +657,28 @@ impl Kestrel {
             .child(section(&t, true).child(output))
     }
 
+    /// Replaces the controls of a video-only tab while the video is copied, and says why.
+    fn copy_video_note(&self, controls: &'static str) -> Div {
+        let t = self.theme();
+        div().child(
+            section(&t, true)
+                .child(section_title("Video is copied", &t))
+                .child(
+                    div()
+                        .mt(px(8.0))
+                        .text_size(px(12.0))
+                        .text_color(t.muted)
+                        .child(format!(
+                            "{controls} apply only when the video is re-encoded. The video encoder is \"{COPY_VIDEO_LABEL}\"; pick an encoder on the Video tab to use them."
+                        )),
+                ),
+        )
+    }
+
     fn tab_dimensions(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+        if self.form.copy_video {
+            return self.copy_video_note("Crop, resolution limit, scaling, borders and rotation");
+        }
         let t = self.theme();
         let form = self.form.clone();
         let dims = self.current_dims();
@@ -877,6 +898,9 @@ impl Kestrel {
     }
 
     fn tab_filters(&mut self, cx: &mut Context<Self>) -> Div {
+        if self.form.copy_video {
+            return self.copy_video_note("Filters (deinterlace, denoise, sharpen, colour and HDR)");
+        }
         let t = self.theme();
         let form = self.form.clone();
         let filters = grid(3)
@@ -1038,8 +1062,8 @@ impl Kestrel {
                 .child(text)
         };
         let options = form.encoder_options(self.encoders.as_ref());
-        let selected = form.encoder_index(&options).unwrap_or(0);
-        let labels: Vec<String> = options.iter().map(|choice| choice.label.clone()).collect();
+        let selected = form.picker_index(&options);
+        let labels = TranscodeForm::picker_labels(&options);
         let picker = field(
             "Video encoder",
             &t,
@@ -1049,13 +1073,22 @@ impl Kestrel {
                 labels,
                 selected,
                 false,
-                move |this, index, _| {
-                    if let Some(choice) = options.get(index) {
-                        this.form.set_encoder(choice);
-                    }
-                },
+                move |this, index, _| this.form.pick_encoder(&options, index),
             ),
         );
+        if form.copy_video {
+            return div().child(
+                section(&t, true)
+                    .child(grid(3).child(picker))
+                    .child(
+                        div()
+                            .mt(px(12.0))
+                            .text_size(px(12.0))
+                            .text_color(t.muted)
+                            .child("The video stream is copied without re-encoding, so quality, frame rate, dimensions, filters and subtitle burn-in do not apply."),
+                    ),
+            );
+        }
         let top = grid(3)
             .child(picker)
             .child(self.fsel(

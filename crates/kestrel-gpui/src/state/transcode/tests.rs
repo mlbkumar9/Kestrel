@@ -646,3 +646,71 @@ fn heuristic_estimate_shrinks_with_higher_rf() {
     assert!(low < high);
     assert!(heuristic_minutes(&form, Some(3600.0)) >= 1);
 }
+
+#[test]
+fn copy_video_round_trips_through_the_form_and_the_builtin_remux_preset() {
+    let remux = kestrel_core::presets::builtin_preset("remux").unwrap();
+    assert_eq!(remux.settings.video, VideoSettings::Copy);
+    // A form that was encoding loads the Copy preset and stops encoding.
+    let mut form = TranscodeForm::from_job_settings("Rich", &rich_settings());
+    assert!(!form.copy_video);
+    assert!(matches!(
+        form.to_job_settings().video,
+        VideoSettings::Encode(_)
+    ));
+    form.apply_job_settings(&remux.name, &remux.settings);
+    assert!(form.copy_video);
+    assert_eq!(form.to_job_settings().video, VideoSettings::Copy);
+    assert_eq!(form.video_summary(), COPY_VIDEO_LABEL);
+    // Loading an encode preset afterwards switches back, with that preset's encoder.
+    let archive = kestrel_core::presets::builtin_preset("archive").unwrap();
+    form.apply_job_settings(&archive.name, &archive.settings);
+    assert!(!form.copy_video);
+    assert_eq!(form.encoder, VideoEncoder::SvtAv1);
+    assert!(matches!(
+        form.to_job_settings().video,
+        VideoSettings::Encode(_)
+    ));
+    // Settings saved from a copy form reload as copy.
+    let mut copying = TranscodeForm::default();
+    copying.copy_video = true;
+    let saved = copying.to_job_settings();
+    assert_eq!(saved.video, VideoSettings::Copy);
+    assert!(TranscodeForm::from_job_settings("Saved", &saved).copy_video);
+}
+
+#[test]
+fn encoder_picker_offers_copy_first_and_maps_positions() {
+    let set = software_set();
+    let mut form = TranscodeForm::default();
+    let options = form.encoder_options(Some(&set));
+    let labels = TranscodeForm::picker_labels(&options);
+    assert_eq!(labels[0], COPY_VIDEO_LABEL);
+    assert_eq!(labels.len(), options.len() + 1);
+    assert_eq!(
+        form.picker_index(&options),
+        form.encoder_index(&options).unwrap() + 1
+    );
+    form.pick_encoder(&options, 0);
+    assert!(form.copy_video);
+    assert_eq!(form.picker_index(&options), 0);
+    let x264 = options
+        .iter()
+        .position(|choice| choice.encoder == VideoEncoder::X264)
+        .unwrap();
+    form.pick_encoder(&options, x264 + 1);
+    assert!(!form.copy_video);
+    assert_eq!(form.encoder, VideoEncoder::X264);
+}
+
+#[test]
+fn copy_video_with_burn_in_is_reported_as_a_warning() {
+    let mut form = TranscodeForm::default();
+    form.copy_video = true;
+    form.sub_burn = 2;
+    let warnings = kestrel_core::compat::job_warnings(&source_meta(), &form.to_job_settings());
+    assert!(
+        warnings.iter().any(|warning| warning.contains("burn-in")),
+        "{warnings:?}"
+    );
+}
