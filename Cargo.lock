@@ -3413,10 +3413,14 @@ dependencies = [
 name = "kestrel-gpui"
 version = "4.0.0-alpha.0"
 dependencies = [
+ "dirs 5.0.1",
  "gpui",
  "kestrel-core",
  "rfd",
+ "ron",
+ "serde",
  "serde_json",
+ "tempfile",
  "winresource",
 ]
 

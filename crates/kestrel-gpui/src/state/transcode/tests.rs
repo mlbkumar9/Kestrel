@@ -672,8 +672,10 @@ fn copy_video_round_trips_through_the_form_and_the_builtin_remux_preset() {
         VideoSettings::Encode(_)
     ));
     // Settings saved from a copy form reload as copy.
-    let mut copying = TranscodeForm::default();
-    copying.copy_video = true;
+    let copying = TranscodeForm {
+        copy_video: true,
+        ..TranscodeForm::default()
+    };
     let saved = copying.to_job_settings();
     assert_eq!(saved.video, VideoSettings::Copy);
     assert!(TranscodeForm::from_job_settings("Saved", &saved).copy_video);
@@ -705,9 +707,11 @@ fn encoder_picker_offers_copy_first_and_maps_positions() {
 
 #[test]
 fn copy_video_with_burn_in_is_reported_as_a_warning() {
-    let mut form = TranscodeForm::default();
-    form.copy_video = true;
-    form.sub_burn = 2;
+    let form = TranscodeForm {
+        copy_video: true,
+        sub_burn: 2,
+        ..TranscodeForm::default()
+    };
     let warnings = kestrel_core::compat::job_warnings(&source_meta(), &form.to_job_settings());
     assert!(
         warnings.iter().any(|warning| warning.contains("burn-in")),

@@ -3,9 +3,11 @@
 pub mod activity;
 pub mod format;
 pub mod library;
+pub mod persist;
 pub mod probe;
 pub mod queue;
 pub mod remux;
+pub mod storage;
 pub mod transcode;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -51,7 +53,7 @@ impl Page {
 }
 
 /// Settings page values that are not part of a job.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct AppSettings {
     pub parallel_jobs: usize,
     pub priority: usize,

@@ -218,6 +218,10 @@ pub struct RemuxState {
     pub collision: ExistingPolicy,
     pub dry_run: bool,
     pub include_subtitles: bool,
+    /// Carried over from stored settings (the egui app had these toggles); the page has no
+    /// control for them, so they stay at the stored value.
+    pub keep_chapters: bool,
+    pub keep_metadata: bool,
     pub audio_langs: BTreeSet<String>,
     pub sub_langs: BTreeSet<String>,
     /// Languages typed into the "+ code" boxes that no source carries.
@@ -235,6 +239,8 @@ impl Default for RemuxState {
             collision: ExistingPolicy::Rename,
             dry_run: false,
             include_subtitles: true,
+            keep_chapters: true,
+            keep_metadata: true,
             audio_langs: BTreeSet::new(),
             sub_langs: BTreeSet::new(),
             extra_audio: Vec::new(),
@@ -296,6 +302,8 @@ impl RemuxState {
     pub fn job_settings(&self) -> JobSettings {
         JobSettings {
             container: self.container,
+            keep_chapters: self.keep_chapters,
+            keep_metadata: self.keep_metadata,
             audio: AudioSettings {
                 languages: self.audio_langs.iter().cloned().collect(),
                 ..AudioSettings::default()

@@ -27,9 +27,11 @@ use crate::actions::{
 use crate::palette::{Command, PaletteState};
 use crate::state::activity::{ActivityLog, Level};
 use crate::state::library::{Library, Probe};
+use crate::state::persist::{Persistence, RemuxPrefs, Restored, View};
 use crate::state::probe::{chapter_names_from_csv, read_chapters};
 use crate::state::queue::{JobKind, QueueState};
 use crate::state::remux::{AddedFile, AddedKind, RemuxState, core_track_edits};
+use crate::state::storage::SettingsPaths;
 use crate::state::transcode::{ChapterRow, SubTrackForm, Tab, TranscodeForm};
 use crate::state::{AppSettings, Page};
 use crate::theme::{Appearance, Theme};
@@ -94,6 +96,16 @@ pub struct DebugOptions {
 }
 
 impl DebugOptions {
+    /// Any switch set: such runs must not rewrite the user's saved settings.
+    pub fn active(&self) -> bool {
+        self.page.is_some()
+            || self.appearance.is_some()
+            || self.tab.is_some()
+            || self.palette
+            || self.queue > 0
+            || self.edit
+    }
+
     pub fn from_env() -> Self {
         let var = |name: &str| std::env::var(name).ok();
         Self {
@@ -161,8 +173,15 @@ pub struct Kestrel {
     polling: bool,
     next_toast: u64,
     next_preset: u32,
+    persist: Persistence,
+    /// A debounced settings write is already scheduled.
+    persist_scheduled: bool,
     _appearance_subscription: Option<Subscription>,
+    _quit_subscription: Option<Subscription>,
 }
+
+/// How long after a change the settings file is written; changes within it share one write.
+const SETTINGS_SAVE_DELAY: Duration = Duration::from_millis(600);
 
 impl Kestrel {
     pub fn new(
@@ -174,6 +193,10 @@ impl Kestrel {
         let (ui_tx, ui_rx) = mpsc::channel();
         let tools = Toolchain::discover();
         let system_light = is_light(window.appearance());
+        let (mut persist, loaded, load_error) = Persistence::open(SettingsPaths::discover());
+        if debug.active() {
+            persist.set_read_only();
+        }
         let appearance = debug.appearance.unwrap_or_default();
         let subscription = cx.observe_window_appearance(window, |this, window, cx| {
             this.system_light = is_light(window.appearance());
@@ -219,8 +242,29 @@ impl Kestrel {
             polling: false,
             next_toast: 0,
             next_preset: 0,
+            persist,
+            persist_scheduled: false,
             _appearance_subscription: Some(subscription),
+            _quit_subscription: None,
         };
+        app._quit_subscription = Some(cx.on_app_quit(|this, cx| {
+            this.flush_settings(cx);
+            async {}
+        }));
+        match load_error {
+            Some(message) => {
+                eprintln!("{message}");
+                app.activity.push(Level::Warn, message.clone(), None);
+                app.toast(message, TagKind::Warn, cx);
+            }
+            None => {
+                app.apply_restored(loaded.restore(), debug.appearance.is_some());
+                if let Some(path) = app.persist.path() {
+                    let line = format!("Settings file: {}", path.display());
+                    app.activity.push(Level::Info, line, None);
+                }
+            }
+        }
         app.apply_theme(cx);
         app.detect_encoders(cx);
         app.detect_legacy();
@@ -232,6 +276,93 @@ impl Kestrel {
         }
         window.focus(&app.focus);
         app
+    }
+
+    /// Puts the loaded settings into the view. A debug theme switch wins over the stored one.
+    fn apply_restored(&mut self, restored: Restored, keep_appearance: bool) {
+        let stored = restored.appearance.as_deref().and_then(|label| {
+            Appearance::ALL
+                .into_iter()
+                .find(|appearance| appearance.label() == label)
+        });
+        if let (false, Some(appearance)) = (keep_appearance, stored) {
+            self.appearance = appearance;
+        }
+        if let Some(app) = restored.app {
+            self.settings = app;
+        }
+        if let Some(remux) = restored.remux {
+            remux.apply(&mut self.remux);
+        }
+        if let Some((name, settings)) = restored.form {
+            self.form.apply_job_settings(&name, &settings);
+        }
+        self.next_preset = restored
+            .presets
+            .iter()
+            .filter_map(|preset| preset.id.strip_prefix("user-")?.parse().ok())
+            .max()
+            .unwrap_or(0);
+        self.presets.extend(restored.presets);
+        self.legacy_dismissed = restored.legacy_dismissed;
+    }
+
+    /// Everything that is saved, as of now.
+    fn capture_view(&self) -> View {
+        View {
+            appearance: self.appearance.label().to_owned(),
+            app: self.settings.clone(),
+            remux: RemuxPrefs::of(&self.remux),
+            form: self.form.clone(),
+            presets: self
+                .presets
+                .iter()
+                .filter(|preset| !preset.builtin)
+                .cloned()
+                .collect(),
+            selected_preset_id: self
+                .presets
+                .get(self.selected_preset_index())
+                .map(|preset| preset.id.clone())
+                .unwrap_or_default(),
+            legacy_dismissed: self.legacy_dismissed,
+        }
+    }
+
+    /// Called on every render, which is exactly when something may have changed: schedules one
+    /// debounced write per burst of changes. No timer runs while nothing changes.
+    fn sync_persistence(&mut self, cx: &mut Context<Self>) {
+        if !self.persist.enabled() {
+            return;
+        }
+        let view = self.capture_view();
+        if self.persist.observe(view) && !self.persist_scheduled {
+            self.persist_scheduled = true;
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(SETTINGS_SAVE_DELAY).await;
+                this.update(cx, |this, cx| {
+                    this.persist_scheduled = false;
+                    this.flush_settings(cx);
+                })
+                .ok();
+            })
+            .detach();
+        }
+    }
+
+    /// Writes the settings now if anything changed since the last write.
+    pub fn flush_settings(&mut self, cx: &mut Context<Self>) {
+        if !self.persist.enabled() {
+            return;
+        }
+        let view = self.capture_view();
+        self.persist.observe(view);
+        if let Err(error) = self.persist.flush() {
+            let message = format!("Settings could not be saved: {error}");
+            eprintln!("{message}");
+            self.activity.push(Level::Warn, message.clone(), None);
+            self.toast(message, TagKind::Warn, cx);
+        }
     }
 
     pub fn theme(&self) -> Theme {
@@ -1335,6 +1466,7 @@ pub fn plan_transcode_outputs(
 
 impl Render for Kestrel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_persistence(cx);
         let t = self.theme();
         let page: AnyElement = match self.page {
             Page::Library => self.render_library(window, cx).into_any_element(),

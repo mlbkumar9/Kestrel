@@ -1,0 +1,3 @@
+{
+    "kestrel.preferences.v3": "(light_theme:true,output_directory:\"D:/Out\",audio_languages:\"fra, jpn\",subtitle_languages:\"spa\",remux_engine:Ffmpeg,selected_preset_id:\"user-2\",current_settings:(container:mp4,keep_chapters:false,subtitles:(include:false)),user_presets:[(id:\"user-2\",name:\"My x264\",description:\"Saved from the Transcode page\",builtin:false,settings:(container:mkv,video:encode((encoder:x264,rate:quality(20)))))],existing:overwrite,output_target:Some(folder(\"D:/Out\")),legacy_banner_dismissed:true,output_target_explicit:true)",
+}

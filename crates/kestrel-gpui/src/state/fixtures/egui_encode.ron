@@ -1,0 +1,3 @@
+{
+    "kestrel.preferences.v3": "(audio_languages:\"fra\",subtitle_languages:\"deu\",current_settings:(container:mp4,video:encode((encoder:x265,rate:quality(70))),audio:(codec:aac,bitrate_kbps:160,mixdown:stereo),subtitles:(burn_in:first_selected,include:false),keep_chapters:false,keep_metadata:false,title:Some(\"Imported\")))",
+}
