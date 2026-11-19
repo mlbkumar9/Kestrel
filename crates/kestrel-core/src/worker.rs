@@ -763,6 +763,7 @@ fn process_queue_job(
             subtitle_languages,
             false,
             mkv::MkvRemuxSettings {
+                include_subtitles: job.settings.subtitles.include,
                 keep_chapters: job.settings.keep_chapters,
                 keep_metadata: job.settings.keep_metadata,
                 title: job.settings.title.as_deref(),
@@ -1086,6 +1087,7 @@ fn process_file(
                 &spec.subtitle_languages,
                 spec.dry_run,
                 mkv::MkvRemuxSettings {
+                    include_subtitles: true,
                     keep_chapters: true,
                     keep_metadata: true,
                     title: None,

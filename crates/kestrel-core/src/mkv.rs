@@ -600,6 +600,7 @@ pub fn selected_tracks(
 
 #[derive(Clone, Copy, Debug)]
 pub struct MkvRemuxSettings<'a> {
+    pub include_subtitles: bool,
     pub keep_chapters: bool,
     pub keep_metadata: bool,
     pub title: Option<&'a str>,
@@ -618,7 +619,11 @@ pub fn build_arguments(
     if audio_tracks.is_empty() && !metadata.audio_tracks.is_empty() {
         audio_tracks = metadata.audio_tracks.iter().collect();
     }
-    let subtitle_tracks = matching_tracks(&metadata.subtitle_tracks, subtitle_languages);
+    let subtitle_tracks = if settings.include_subtitles {
+        matching_tracks(&metadata.subtitle_tracks, subtitle_languages)
+    } else {
+        Vec::new()
+    };
     if audio_tracks.is_empty() {
         return Err("No matching audio tracks found".to_owned());
     }
@@ -818,6 +823,30 @@ mod tests {
     }
 
     #[test]
+    fn explicitly_disabled_subtitles_are_not_copied_by_mkvmerge() {
+        let mut metadata = fixture();
+        metadata.subtitle_tracks[0].mkvmerge_id = None;
+        let arguments = build_arguments(
+            Path::new("source.mkv"),
+            Path::new("out.mkv"),
+            &metadata,
+            &[],
+            &[],
+            false,
+            MkvRemuxSettings {
+                include_subtitles: false,
+                keep_chapters: true,
+                keep_metadata: true,
+                title: None,
+            },
+        )
+        .unwrap()
+        .unwrap();
+        assert!(arguments.iter().any(|arg| arg == "--no-subtitles"));
+        assert!(!arguments.iter().any(|arg| arg == "--subtitle-tracks"));
+    }
+
+    #[test]
     fn builds_track_flags_and_disables_unselected_subtitles() {
         let metadata = fixture();
         let arguments = build_arguments(
@@ -828,6 +857,7 @@ mod tests {
             &["eng".to_owned()],
             false,
             MkvRemuxSettings {
+                include_subtitles: true,
                 keep_chapters: true,
                 keep_metadata: true,
                 title: None,
@@ -859,6 +889,7 @@ mod tests {
             &["not-present".to_owned()],
             false,
             MkvRemuxSettings {
+                include_subtitles: true,
                 keep_chapters: true,
                 keep_metadata: true,
                 title: None,
@@ -883,6 +914,7 @@ mod tests {
             &[],
             true,
             MkvRemuxSettings {
+                include_subtitles: true,
                 keep_chapters: true,
                 keep_metadata: true,
                 title: None,
@@ -1008,6 +1040,7 @@ mod tests {
             &[],
             false,
             MkvRemuxSettings {
+                include_subtitles: true,
                 keep_chapters: false,
                 keep_metadata: false,
                 title: Some("Preserved title"),
