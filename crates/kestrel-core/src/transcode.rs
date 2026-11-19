@@ -522,7 +522,7 @@ fn burn_source<'a>(
         .iter()
         .find(|track| track.burn_in)
     {
-        let image = subs::is_image_codec(subs::external_codec_id(&track.path)?);
+        let image = subs::is_image_codec(&subs::track_codec_id(track)?);
         return Ok(Some(if image {
             BurnSource::ExternalImage
         } else {
@@ -712,10 +712,40 @@ fn pixel_format_filters(encode: &VideoEncode) -> Result<Vec<String>, String> {
 }
 
 pub fn video_filter_chain(
+    input: &Path,
+    metadata: &MediaMetadata,
+    settings: &JobSettings,
+    text_burn_in_file: Option<&str>,
+) -> Result<Vec<String>, String> {
+    video_filter_chain_at(input, metadata, settings, text_burn_in_file, 0.0)
+}
+
+/// `setpts` pair that moves the video clock by `seconds` around a text-subtitle filter, so
+/// the subtitles line up with the video they belong to.
+fn clock_shift(seconds: f64) -> Option<(String, String)> {
+    (seconds.abs() >= 0.0005).then(|| {
+        let magnitude = format!("{:.3}", seconds.abs());
+        let (before, after) = if seconds > 0.0 {
+            ('+', '-')
+        } else {
+            ('-', '+')
+        };
+        (
+            format!("setpts=PTS{before}({magnitude})/TB"),
+            format!("setpts=PTS{after}({magnitude})/TB"),
+        )
+    })
+}
+
+/// [`video_filter_chain`] for an encode that starts `seek_seconds` into the source. FFmpeg
+/// restarts the video clock at zero after an input seek, so burned-in text subtitles (read
+/// from their own timeline) need the clock moved back by the seek while they are drawn.
+pub fn video_filter_chain_at(
     _input: &Path,
     metadata: &MediaMetadata,
     settings: &JobSettings,
     text_burn_in_file: Option<&str>,
+    seek_seconds: f64,
 ) -> Result<Vec<String>, String> {
     let burn = burn_source(metadata, settings)?;
     if matches!(burn, Some(BurnSource::EmbeddedText)) && text_burn_in_file.is_none() {
@@ -796,7 +826,10 @@ pub fn video_filter_chain(
     match burn {
         Some(BurnSource::EmbeddedText) => {
             let filename = text_burn_in_file.expect("validated above");
+            let shift = clock_shift(seek_seconds);
+            filters.extend(shift.as_ref().map(|(before, _)| before.clone()));
             filters.push(format!("subtitles=filename={filename}"));
+            filters.extend(shift.map(|(_, after)| after));
         }
         Some(BurnSource::ExternalText(track)) => {
             let mut filter = format!(
@@ -806,7 +839,12 @@ pub fn video_filter_chain(
             if let Some(charset) = &track.charset {
                 filter.push_str(&format!(":charenc={charset}"));
             }
-            if track.offset_ms != 0 {
+            if seek_seconds > 0.0 {
+                let shift = clock_shift(seek_seconds - track.offset_ms as f64 / 1000.0);
+                filters.extend(shift.as_ref().map(|(before, _)| before.clone()));
+                filters.push(filter);
+                filters.extend(shift.map(|(_, after)| after));
+            } else if track.offset_ms != 0 {
                 // The subtitles filter has no offset option: shift the video clock instead.
                 let shift = subs::offset_seconds(track.offset_ms);
                 filters.push(format!("setpts=PTS-({shift})/TB"));
@@ -974,6 +1012,13 @@ pub struct JobResources {
     pub pass_log_prefix: Option<PathBuf>,
 }
 
+/// A stretch of the source to encode: `-ss` before every input, `-t` on the output.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Segment {
+    pub start_seconds: f64,
+    pub length_seconds: f64,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PassKind {
     Single,
@@ -1019,6 +1064,7 @@ pub fn build_ffmpeg_job_passes(
                 encoders,
                 resources,
                 PassKind::First,
+                None,
             )?,
             build_pass(
                 input,
@@ -1028,6 +1074,7 @@ pub fn build_ffmpeg_job_passes(
                 encoders,
                 resources,
                 PassKind::Second,
+                None,
             )?,
         ])
     } else {
@@ -1039,8 +1086,38 @@ pub fn build_ffmpeg_job_passes(
             encoders,
             resources,
             PassKind::Single,
+            None,
         )?])
     }
+}
+
+/// Single-pass arguments that encode only `segment` of the source with the job's settings
+/// (two-pass rates run as one pass and no pass logs are written). This is what the Transcode
+/// page's preview runs.
+pub fn build_ffmpeg_segment_arguments(
+    input: &Path,
+    output_tmp: &Path,
+    metadata: &MediaMetadata,
+    settings: &JobSettings,
+    encoders: &EncoderSet,
+    text_burn_in_file: Option<&str>,
+    segment: Segment,
+) -> Result<Vec<OsString>, String> {
+    let resolved_settings = resolve_job_settings(settings, encoders)?;
+    let resources = JobResources {
+        text_burn_in_file: text_burn_in_file.map(str::to_owned),
+        ..JobResources::default()
+    };
+    build_pass(
+        input,
+        output_tmp,
+        metadata,
+        &resolved_settings,
+        encoders,
+        &resources,
+        PassKind::Single,
+        Some(segment),
+    )
 }
 
 /// Builds the single-pass argument list (two-pass settings run as one pass here, which is what
@@ -1066,9 +1143,11 @@ pub fn build_ffmpeg_job_arguments(
         encoders,
         &resources,
         PassKind::Single,
+        None,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_pass(
     input: &Path,
     output_tmp: &Path,
@@ -1077,6 +1156,7 @@ fn build_pass(
     encoders: &EncoderSet,
     resources: &JobResources,
     pass: PassKind,
+    segment: Option<Segment>,
 ) -> Result<Vec<OsString>, String> {
     let first_pass = pass == PassKind::First;
     let audio_outputs = audio::plan_audio(metadata, settings)?;
@@ -1086,11 +1166,12 @@ fn build_pass(
         Vec::new()
     };
     let burn = burn_source(metadata, settings)?;
-    let video_filters = video_filter_chain(
+    let video_filters = video_filter_chain_at(
         input,
         metadata,
         settings,
         resources.text_burn_in_file.as_deref(),
+        segment.map_or(0.0, |segment| segment.start_seconds),
     )?;
     if burn.is_some() && matches!(&settings.video, VideoSettings::Copy) {
         return Err("Subtitle burn-in requires video re-encoding".to_owned());
@@ -1109,6 +1190,7 @@ fn build_pass(
     ) {
         arguments.extend(["-vaapi_device".into(), "/dev/dri/renderD128".into()]);
     }
+    push_segment_seek(&mut arguments, segment);
     arguments.extend(["-i".into(), input.as_os_str().to_owned()]);
 
     // Extra inputs: imported subtitle files (soft or image burn-in), then the chapter file.
@@ -1117,11 +1199,11 @@ fn build_pass(
     let mut external_burn_image_input = None;
     if settings.subtitles.include {
         for track in &settings.subtitles.external {
-            let codec = subs::external_codec_id(&track.path)?;
+            let codec = subs::track_codec_id(track)?;
             if track.burn_in {
-                if subs::is_image_codec(codec) {
+                if subs::is_image_codec(&codec) {
                     external_burn_image_input = Some(extra_inputs + 1);
-                    push_external_input(&mut arguments, track);
+                    push_external_input(&mut arguments, track, segment);
                     extra_inputs += 1;
                 }
                 continue;
@@ -1129,7 +1211,7 @@ fn build_pass(
             if first_pass {
                 continue;
             }
-            let mut plan = compat::subtitle_plan(codec, settings.container);
+            let mut plan = compat::subtitle_plan(&codec, settings.container);
             if matches!(plan, StreamPlan::Drop(_)) {
                 continue;
             }
@@ -1140,12 +1222,12 @@ fn build_pass(
                     .charset
                     .as_deref()
                     .is_some_and(|charset| !crate::remux_edit::is_utf8(charset))
-                && let Some(target) = crate::remux_edit::recode_target(codec)
+                && let Some(target) = crate::remux_edit::recode_target(&codec)
             {
                 plan = StreamPlan::Convert(target);
             }
             external_soft.push((extra_inputs + 1, track, plan));
-            push_external_input(&mut arguments, track);
+            push_external_input(&mut arguments, track, segment);
             extra_inputs += 1;
         }
     }
@@ -1328,11 +1410,34 @@ fn build_pass(
     if settings.web_optimized && matches!(settings.container, Container::Mp4 | Container::Mov) {
         arguments.extend(["-movflags".into(), "+faststart".into()]);
     }
+    if let Some(segment) = segment {
+        // Copied streams start at the seek point, not at the keyframe before it: without this a
+        // stream-copied track begins seconds ahead of the re-encoded video and the file runs long.
+        push_pair(&mut arguments, "-copypriorss", "0");
+        // An output option: it must follow every `-i` and precede the output path.
+        push_pair(
+            &mut arguments,
+            "-t",
+            format!("{:.3}", segment.length_seconds),
+        );
+    }
     arguments.push(output_tmp.as_os_str().to_owned());
     Ok(arguments)
 }
 
-fn push_external_input(arguments: &mut Vec<OsString>, track: &ExternalTrack) {
+/// `-ss start` for the input that follows, when the job encodes a segment.
+fn push_segment_seek(arguments: &mut Vec<OsString>, segment: Option<Segment>) {
+    if let Some(segment) = segment {
+        push_pair(arguments, "-ss", format!("{:.3}", segment.start_seconds));
+    }
+}
+
+fn push_external_input(
+    arguments: &mut Vec<OsString>,
+    track: &ExternalTrack,
+    segment: Option<Segment>,
+) {
+    push_segment_seek(arguments, segment);
     if track.offset_ms != 0 {
         push_pair(
             arguments,
@@ -2904,6 +3009,161 @@ mod tests {
                 ..VideoEncode::default()
             })
             .contains("key=value")
+        );
+    }
+
+    fn segment_args(settings: &JobSettings, segment: Segment) -> Vec<String> {
+        build_ffmpeg_segment_arguments(
+            Path::new("input.mkv"),
+            Path::new("preview.mkv"),
+            &fixture_metadata(),
+            settings,
+            &all_software_encoders(),
+            None,
+            segment,
+        )
+        .unwrap()
+        .iter()
+        .map(|argument| argument.to_string_lossy().into_owned())
+        .collect()
+    }
+
+    #[test]
+    fn segment_arguments_seek_before_the_input_and_limit_the_output() {
+        let settings = encode_settings(VideoEncode {
+            encoder: VideoEncoder::X265,
+            rate: RateControl::Bitrate(1500),
+            passes: 2,
+            ..VideoEncode::default()
+        });
+        let segment = Segment {
+            start_seconds: 90.5,
+            length_seconds: 30.0,
+        };
+        let arguments = segment_args(&settings, segment);
+        let position = |needle: &str| arguments.iter().position(|argument| argument == needle);
+        let input = position("-i").unwrap();
+        assert_eq!(arguments[input - 2..input], ["-ss", "90.500"]);
+        // `-t` is an output option: after the last input, right before the output path.
+        let duration = position("-t").unwrap();
+        assert_eq!(arguments[duration + 1], "30.000");
+        assert_eq!(arguments[duration + 2], "preview.mkv");
+        assert_eq!(duration + 3, arguments.len());
+        assert!(duration > input);
+        // Two-pass settings still run as one pass, and nothing touches a pass log.
+        assert!(position("-pass").is_none());
+        assert!(position("-passlogfile").is_none());
+        assert!(!arguments.contains(&"null".to_owned()));
+        assert!(arguments.windows(2).any(|pair| pair == ["-c:v", "libx265"]));
+        assert_eq!(arguments.iter().filter(|a| *a == "-ss").count(), 1);
+
+        // The segment only adds the seek and the limit to the job's own arguments.
+        let mut without = segment_args(&settings, segment);
+        without.drain(input - 2..input);
+        let duration = without
+            .iter()
+            .position(|argument| argument == "-t")
+            .unwrap();
+        without.drain(duration..duration + 2);
+        let prior = without
+            .iter()
+            .position(|argument| argument == "-copypriorss")
+            .unwrap();
+        without.drain(prior..prior + 2);
+        let plain = build_ffmpeg_job_arguments(
+            Path::new("input.mkv"),
+            Path::new("preview.mkv"),
+            &fixture_metadata(),
+            &settings,
+            &all_software_encoders(),
+            None,
+        )
+        .unwrap()
+        .iter()
+        .map(|argument| argument.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+        assert_eq!(without, plain);
+    }
+
+    #[test]
+    fn segment_arguments_seek_every_added_input() {
+        let mut settings = encode_settings(VideoEncode::default());
+        settings.container = Container::Mkv;
+        settings.subtitles.include = true;
+        settings.subtitles.external = vec![ExternalTrack {
+            path: PathBuf::from("extra.srt"),
+            kind: crate::external::ExternalKind::Subtitle,
+            offset_ms: 500,
+            ..ExternalTrack::default()
+        }];
+        let arguments = segment_args(
+            &settings,
+            Segment {
+                start_seconds: 12.0,
+                length_seconds: 15.0,
+            },
+        );
+        let inputs: Vec<usize> = arguments
+            .iter()
+            .enumerate()
+            .filter(|(_, argument)| *argument == "-i")
+            .map(|(index, _)| index)
+            .collect();
+        assert_eq!(inputs.len(), 2, "{arguments:?}");
+        for index in inputs {
+            let before = &arguments[..index];
+            let seek = before
+                .iter()
+                .rposition(|argument| argument == "-ss")
+                .unwrap();
+            // The seek belongs to this input: nothing but its own input options in between.
+            assert!(index - seek <= 4, "{arguments:?}");
+            assert_eq!(arguments[seek + 1], "12.000");
+        }
+    }
+
+    #[test]
+    fn burned_text_subtitles_follow_the_seek() {
+        let metadata = fixture_metadata();
+        let mut settings = encode_settings(VideoEncode::default());
+        settings.subtitles.burn_in = BurnIn::FirstSelected;
+        let chain = |seek: f64| {
+            video_filter_chain_at(
+                Path::new("i.mkv"),
+                &metadata,
+                &settings,
+                Some("s.ass"),
+                seek,
+            )
+            .unwrap()
+        };
+        let plain = chain(0.0);
+        assert!(plain.iter().all(|filter| !filter.starts_with("setpts")));
+        let seeked = chain(90.5);
+        let subtitles = seeked
+            .iter()
+            .position(|filter| filter.starts_with("subtitles="))
+            .unwrap();
+        assert_eq!(seeked[subtitles - 1], "setpts=PTS+(90.500)/TB");
+        assert_eq!(seeked[subtitles + 1], "setpts=PTS-(90.500)/TB");
+    }
+
+    #[test]
+    fn clock_shift_names_the_direction() {
+        assert_eq!(clock_shift(0.0), None);
+        assert_eq!(
+            clock_shift(2.0),
+            Some((
+                "setpts=PTS+(2.000)/TB".to_owned(),
+                "setpts=PTS-(2.000)/TB".to_owned()
+            ))
+        );
+        assert_eq!(
+            clock_shift(-1.5),
+            Some((
+                "setpts=PTS-(1.500)/TB".to_owned(),
+                "setpts=PTS+(1.500)/TB".to_owned()
+            ))
         );
     }
 

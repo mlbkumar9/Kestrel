@@ -274,6 +274,24 @@ pub fn read_metadata(
     }
 }
 
+/// Codec of the first audio or subtitle stream (by `kind`) in an added file, as FFmpeg names it.
+pub fn probe_external_codec(
+    ffprobe: &Path,
+    path: &Path,
+    kind: crate::external::ExternalKind,
+) -> Result<String, String> {
+    let metadata = read_ffprobe_metadata(ffprobe, path)?;
+    let (tracks, label) = match kind {
+        crate::external::ExternalKind::Audio => (&metadata.audio_tracks, "audio"),
+        crate::external::ExternalKind::Subtitle => (&metadata.subtitle_tracks, "subtitle"),
+    };
+    tracks
+        .first()
+        .map(|track| track.codec_id.clone())
+        .filter(|codec| !codec.is_empty() && codec != "unknown")
+        .ok_or_else(|| format!("the file has no readable {label} stream"))
+}
+
 fn read_ffprobe_metadata(executable: &Path, input: &Path) -> Result<MediaMetadata, String> {
     let output = tools::command(executable)
         .args([
