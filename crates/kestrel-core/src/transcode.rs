@@ -16,6 +16,7 @@ pub struct JobSettings {
     pub keep_chapters: bool,
     pub keep_metadata: bool,
     pub title: Option<String>,
+    pub track_edits: crate::remux_edit::TrackEdits,
 }
 
 impl Default for JobSettings {
@@ -28,6 +29,7 @@ impl Default for JobSettings {
             keep_chapters: true,
             keep_metadata: true,
             title: None,
+            track_edits: crate::remux_edit::TrackEdits::default(),
         }
     }
 }

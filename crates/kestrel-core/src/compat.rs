@@ -133,6 +133,16 @@ pub fn job_warnings(metadata: &MediaMetadata, settings: &JobSettings) -> Vec<Str
             }
         }
     }
+    if settings.is_remux_only() {
+        warnings.extend(crate::remux_edit::external_warnings(
+            metadata,
+            &settings.audio.languages,
+            &settings.subtitles.languages,
+            settings.subtitles.include,
+            &settings.track_edits,
+            settings.container,
+        ));
+    }
     warnings
 }
 
