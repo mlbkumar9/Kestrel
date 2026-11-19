@@ -274,13 +274,16 @@ impl Render for Kestrel {
 
 fn main() {
     Application::new().with_assets(Assets).run(|cx: &mut App| {
-        cx.text_system()
+        if let Err(error) = cx
+            .text_system()
             .add_fonts(vec![Cow::Borrowed(include_bytes!(
                 "../../kestrel-app/assets/Inter-Regular.ttf"
             ))])
-            .expect("Inter font should load");
+        {
+            eprintln!("Could not load the bundled Inter font; using system fonts: {error}");
+        }
         let bounds = Bounds::centered(None, size(px(1200.0), px(760.0)), cx);
-        cx.open_window(
+        if let Err(error) = cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 window_min_size: Some(size(px(960.0), px(600.0))),
@@ -291,8 +294,11 @@ fn main() {
                 ..Default::default()
             },
             |_, cx| cx.new(|_| Kestrel::default()),
-        )
-        .expect("Kestrel window should open");
+        ) {
+            eprintln!("Could not open the Kestrel window: {error}");
+            cx.quit();
+            return;
+        }
         cx.on_window_closed(|cx| {
             if cx.windows().is_empty() {
                 cx.quit();
