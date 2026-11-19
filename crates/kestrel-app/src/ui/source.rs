@@ -1,11 +1,11 @@
 use super::widgets;
 use crate::app::{KestrelApp, Step};
-use crate::formats::Container;
-use crate::inputs::{self, ExistingPolicy, OutputTarget};
 use crate::theme;
 use eframe::egui::{
     self, Align, Button, ComboBox, CornerRadius, Layout, RichText, ScrollArea, Stroke,
 };
+use kestrel_core::formats::Container;
+use kestrel_core::inputs::{self, ExistingPolicy, OutputTarget};
 
 pub fn show(app: &mut KestrelApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
@@ -321,7 +321,7 @@ fn source_table(app: &mut KestrelApp, ui: &mut egui::Ui) {
             }
             if let Some(index) = remove {
                 let path = app.sources.remove(index).source.path;
-                crate::app::remove_sources(&mut app.preferences, &[path]);
+                kestrel_core::settings::remove_sources(&mut app.preferences, &[path]);
             }
         });
 }

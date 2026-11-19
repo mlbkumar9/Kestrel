@@ -94,7 +94,7 @@ pub fn show(app: &mut KestrelApp, root: &mut egui::Ui, ctx: &egui::Context) {
                 if ui.button("Import presets…").clicked() {
                     if let Some(path) = rfd::FileDialog::new().pick_file()
                         && let Ok(contents) = std::fs::read_to_string(path)
-                        && let Ok(imported) = crate::presets::import_user_presets(&contents)
+                        && let Ok(imported) = kestrel_core::presets::import_user_presets(&contents)
                     {
                         app.preferences.user_presets.extend(imported);
                     }
@@ -104,8 +104,9 @@ pub fn show(app: &mut KestrelApp, root: &mut egui::Ui, ctx: &egui::Context) {
                     if let Some(path) = rfd::FileDialog::new()
                         .set_file_name("kestrel-presets.json")
                         .save_file()
-                        && let Ok(contents) =
-                            crate::presets::export_user_presets(&app.preferences.user_presets)
+                        && let Ok(contents) = kestrel_core::presets::export_user_presets(
+                            &app.preferences.user_presets,
+                        )
                     {
                         let _ = std::fs::write(path, contents);
                     }
@@ -199,19 +200,20 @@ pub fn show(app: &mut KestrelApp, root: &mut egui::Ui, ctx: &egui::Context) {
                     .filter(|job| {
                         matches!(
                             job.status,
-                            crate::worker::FileStatus::Success | crate::worker::FileStatus::Skipped
+                            kestrel_core::worker::FileStatus::Success
+                                | kestrel_core::worker::FileStatus::Skipped
                         )
                     })
                     .count();
                 let active_index = app
                     .queue
                     .iter()
-                    .position(|job| job.status == crate::worker::FileStatus::Processing)
+                    .position(|job| job.status == kestrel_core::worker::FileStatus::Processing)
                     .map(|index| index + 1);
                 let active = app
                     .queue
                     .iter()
-                    .find(|job| job.status == crate::worker::FileStatus::Processing);
+                    .find(|job| job.status == kestrel_core::worker::FileStatus::Processing);
                 let status = if let Some(index) = active_index {
                     let detail =
                         active.map_or_else(String::new, |job| match (job.speed, job.eta) {

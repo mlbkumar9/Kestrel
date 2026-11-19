@@ -63,6 +63,7 @@ pub struct BatchStats {
 }
 
 #[derive(Clone, Debug, Default)]
+/// Distinct, sorted language codes grouped separately by track kind.
 pub struct AvailableLanguages {
     pub audio: Vec<String>,
     pub subtitles: Vec<String>,
@@ -206,6 +207,8 @@ pub fn classify_remux_exit(
     }
 }
 
+/// Probes a source with MKVToolNix, falling back to FFprobe when needed.
+/// Returns an error when no usable probe is available or metadata cannot be read.
 pub fn read_metadata(
     mkvmerge: Option<&Path>,
     ffprobe: Option<&Path>,
@@ -557,6 +560,7 @@ fn pix_fmt_bit_depth(value: Option<&str>) -> Option<u8> {
     Some(8)
 }
 
+/// Collects distinct case-insensitive audio and subtitle language codes across sources.
 pub fn available_languages(metadata: &[MediaMetadata]) -> AvailableLanguages {
     let mut audio = BTreeSet::new();
     let mut subtitles = BTreeSet::new();
@@ -1170,5 +1174,43 @@ mod tests {
             "langmux-path-test-{}-{timestamp}",
             std::process::id()
         ))
+    }
+}
+
+#[cfg(test)]
+mod language_tests {
+    use super::{MediaMetadata, TrackInfo, available_languages};
+
+    #[test]
+    fn languages_are_distinct_sorted_and_separate_by_kind() {
+        let track = |language: &str| TrackInfo {
+            language: language.to_owned(),
+            ..Default::default()
+        };
+        let sources = [
+            MediaMetadata {
+                audio_tracks: vec![track("JPN"), track("eng")],
+                subtitle_tracks: vec![track("fra")],
+                ..Default::default()
+            },
+            MediaMetadata {
+                audio_tracks: vec![track("jpn")],
+                subtitle_tracks: vec![track("ENG"), track("fra")],
+                ..Default::default()
+            },
+        ];
+        let languages = available_languages(&sources);
+        assert_eq!(languages.audio, ["eng", "jpn"]);
+        assert_eq!(languages.subtitles, ["eng", "fra"]);
+    }
+
+    #[test]
+    fn empty_sources_have_no_languages() {
+        let languages = available_languages(&[]);
+        assert!(languages.audio.is_empty());
+        assert!(languages.subtitles.is_empty());
+        let languages = available_languages(&[MediaMetadata::default()]);
+        assert!(languages.audio.is_empty());
+        assert!(languages.subtitles.is_empty());
     }
 }
