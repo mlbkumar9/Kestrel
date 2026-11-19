@@ -3402,6 +3402,12 @@ dependencies = [
 [[package]]
 name = "kestrel-core"
 version = "0.1.0"
+dependencies = [
+ "regex",
+ "ron",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "kestrel-gpui"
@@ -3416,10 +3422,8 @@ version = "3.0.2"
 dependencies = [
  "eframe",
  "image",
- "regex",
+ "kestrel-core",
  "rfd",
- "serde",
- "serde_json",
  "winresource",
 ]
 

@@ -191,10 +191,10 @@ pub fn count_label(count: usize, singular: &str, plural: &str) -> String {
 
 pub fn preset_display_name(
     id: &str,
-    encoders: &crate::encoders::EncoderSet,
-    user_presets: &[crate::presets::Preset],
+    encoders: &kestrel_core::encoders::EncoderSet,
+    user_presets: &[kestrel_core::presets::Preset],
 ) -> String {
-    crate::presets::builtins(encoders)
+    kestrel_core::presets::builtins(encoders)
         .into_iter()
         .chain(user_presets.iter().cloned())
         .find(|preset| preset.id == id)

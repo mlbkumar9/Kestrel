@@ -39,6 +39,7 @@ pub enum ExistingPolicy {
     Rename,
 }
 
+/// Expands files and folders into sources, applying output and removed-source exclusions.
 pub fn expand(
     items: &[InputItem],
     exclude: &[PathBuf],
@@ -294,6 +295,7 @@ fn common_parent(items: &[InputItem]) -> Option<PathBuf> {
     })
 }
 
+/// Plans collision-free output paths, rejecting a file target for multiple sources.
 pub fn plan_outputs(
     sources: &[SourceFile],
     target: &OutputTarget,

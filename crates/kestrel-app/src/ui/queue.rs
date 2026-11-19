@@ -1,8 +1,8 @@
 use super::widgets;
 use crate::app::KestrelApp;
 use crate::theme;
-use crate::worker::FileStatus;
 use eframe::egui::{self, Align, Button, Layout, ProgressBar, RichText, ScrollArea, Stroke};
+use kestrel_core::worker::FileStatus;
 
 pub fn show(app: &mut KestrelApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     ui.horizontal(|ui| {
@@ -272,11 +272,11 @@ fn reveal(path: &std::path::Path) {
     #[cfg(target_os = "linux")]
     let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
     #[cfg(target_os = "windows")]
-    let mut command = crate::tools::command(std::path::Path::new("explorer"));
+    let mut command = kestrel_core::tools::command(std::path::Path::new("explorer"));
     #[cfg(target_os = "macos")]
-    let mut command = crate::tools::command(std::path::Path::new("open"));
+    let mut command = kestrel_core::tools::command(std::path::Path::new("open"));
     #[cfg(target_os = "linux")]
-    let mut command = crate::tools::command(std::path::Path::new("xdg-open"));
+    let mut command = kestrel_core::tools::command(std::path::Path::new("xdg-open"));
     #[cfg(target_os = "windows")]
     command.arg(format!("/select,{}", path.display()));
     #[cfg(target_os = "macos")]

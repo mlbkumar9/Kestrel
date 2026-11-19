@@ -1,11 +1,11 @@
-use kestrel_media::encoders::{self, EncoderSet};
-use kestrel_media::formats::Container;
-use kestrel_media::inputs::ExistingPolicy;
-use kestrel_media::mkv::{self, MediaMetadata};
-use kestrel_media::presets;
-use kestrel_media::tools::{self, Toolchain};
-use kestrel_media::transcode::{BurnIn, Crop, VideoEncoder};
-use kestrel_media::worker::{self, FileStatus, JobSpec, QueueSpec, RemuxEngine, WorkerEvent};
+use kestrel_core::encoders::{self, EncoderSet};
+use kestrel_core::formats::Container;
+use kestrel_core::inputs::ExistingPolicy;
+use kestrel_core::mkv::{self, MediaMetadata};
+use kestrel_core::presets;
+use kestrel_core::tools::{self, Toolchain};
+use kestrel_core::transcode::{BurnIn, Crop, VideoEncoder};
+use kestrel_core::worker::{self, FileStatus, JobSpec, QueueSpec, RemuxEngine, WorkerEvent};
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
@@ -390,7 +390,7 @@ fn real_ffmpeg_detects_letterbox_crop_from_multiple_frames() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let crop = kestrel_media::analysis::detect_crop(&ffmpeg.path, &input, 3.0)
+    let crop = kestrel_core::analysis::detect_crop(&ffmpeg.path, &input, 3.0)
         .expect("crop detection should find the letterbox");
     let Crop::Custom {
         top,
