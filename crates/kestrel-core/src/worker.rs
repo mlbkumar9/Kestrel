@@ -7,7 +7,7 @@ use crate::inputs::ExistingPolicy;
 use crate::mkv::{self, AvailableLanguages, BatchStats, FileInfo, MediaMetadata};
 use crate::subtitles::{absolute_path, prepare_text_subtitle};
 use crate::tools::{self, Toolchain};
-use crate::transcode::{JobSettings, build_ffmpeg_job_arguments};
+use crate::transcode::{JobResources, JobSettings, build_ffmpeg_job_passes, chapters};
 use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
 use std::fs::OpenOptions;
@@ -589,6 +589,23 @@ fn run_queue(
                     continue;
                 }
             };
+        if let Some(ffmpeg) = &spec.tools.ffmpeg {
+            match crate::analysis::resolve_automatic_settings(
+                &ffmpeg.path,
+                &job.input,
+                &resolved_job.metadata,
+                &resolved_job.settings,
+            ) {
+                Ok((metadata, settings)) => {
+                    resolved_job.metadata = metadata;
+                    resolved_job.settings = settings;
+                }
+                Err(error) => {
+                    queue_update(&sender, &ctx, job.id, FileStatus::Error, 0, Some(error));
+                    continue;
+                }
+            }
+        }
         let job = &resolved_job;
         if !policy.dry_run
             && let Some(parent) = job.output.parent()
@@ -810,6 +827,15 @@ fn process_queue_job(
     let text_burn_in_file = prepared_text_subtitle
         .as_ref()
         .map(|subtitle| subtitle.filename());
+    let prepared_chapters = prepare_chapter_names(job, spec)?;
+    let pass_logs = PassLogs::create_if_needed(job)?;
+    let resources = JobResources {
+        text_burn_in_file: text_burn_in_file.map(str::to_owned),
+        chapters_file: prepared_chapters
+            .as_ref()
+            .map(|chapters| chapters.path().to_path_buf()),
+        pass_log_prefix: pass_logs.as_ref().map(PassLogs::prefix),
+    };
     let uses_mkvmerge = mkvmerge_engine_eligible(
         &job.input,
         &job.metadata,
@@ -827,7 +853,7 @@ fn process_queue_job(
         .map(TemporaryOutput::path)
         .unwrap_or(output);
 
-    let (executable, arguments, engine) = if uses_mkvmerge {
+    let (executable, passes, engine) = if uses_mkvmerge {
         let mkvmerge = spec.tools.mkvmerge.as_ref().unwrap();
         let audio_languages = &job.settings.audio.languages;
         let subtitle_languages = &job.settings.subtitles.languages;
@@ -845,42 +871,127 @@ fn process_queue_job(
                 title: job.settings.title.as_deref(),
             },
         ) {
-            Ok(Some(arguments)) => (mkvmerge.path.clone(), arguments, RemuxEngine::MkvToolNix),
-            Ok(None) => queue_ffmpeg_arguments(job, engine_output, spec, text_burn_in_file)?,
+            Ok(Some(arguments)) => (
+                mkvmerge.path.clone(),
+                vec![arguments],
+                RemuxEngine::MkvToolNix,
+            ),
+            Ok(None) => queue_ffmpeg_arguments(job, engine_output, spec, &resources)?,
             Err(error) if error.contains("track IDs are unavailable") => {
-                queue_ffmpeg_arguments(job, engine_output, spec, text_burn_in_file)?
+                queue_ffmpeg_arguments(job, engine_output, spec, &resources)?
             }
             Err(error) => return Err(error),
         }
     } else {
-        queue_ffmpeg_arguments(job, engine_output, spec, text_burn_in_file)?
+        queue_ffmpeg_arguments(job, engine_output, spec, &resources)?
     };
     if control.is_cancelled() || control.job_stopped(job.id) {
         return Err("Stopped by user".to_owned());
     }
-    let command_text = tools::display_command(&executable, &arguments);
-    send(
-        sender,
-        ctx,
-        WorkerEvent::Command {
-            job_id: job.id,
-            executable: executable.clone(),
-            arguments: arguments.clone(),
-            display: command_text.clone(),
-        },
-    );
-    send(
-        sender,
-        ctx,
-        WorkerEvent::Log(format!("{}: {command_text}", job.input.display())),
-    );
+    for arguments in &passes {
+        let command_text = tools::display_command(&executable, arguments);
+        send(
+            sender,
+            ctx,
+            WorkerEvent::Command {
+                job_id: job.id,
+                executable: executable.clone(),
+                arguments: arguments.clone(),
+                display: command_text.clone(),
+            },
+        );
+        send(
+            sender,
+            ctx,
+            WorkerEvent::Log(format!("{}: {command_text}", job.input.display())),
+        );
+    }
     if spec.dry_run {
         return Ok(ProcessOutcome::Success);
     }
     let partial = temporary.as_ref().unwrap().path();
-    let mut command = tools::command(&executable);
-    command.args(&arguments);
-    if prepared_text_subtitle.is_some() {
+    let pass_count = passes.len() as u32;
+    let mut run = None;
+    for (index, arguments) in passes.iter().enumerate() {
+        let index = index as u32;
+        let span = 100 / pass_count;
+        let result = run_child_process(
+            job,
+            &executable,
+            arguments,
+            engine,
+            control,
+            sender,
+            ctx,
+            prepared_text_subtitle.is_some(),
+            (index * span, span),
+        )?;
+        if index + 1 < pass_count {
+            if !result.0.success() {
+                return Err(format!(
+                    "{} analysis pass failed: {}",
+                    engine.label(),
+                    result.1.trim()
+                ));
+            }
+        } else {
+            run = Some(result);
+        }
+    }
+    let (status, diagnostic, warnings) = run.expect("at least one pass runs");
+    if control.is_cancelled() || control.job_stopped(job.id) {
+        return Err("Stopped by user".to_owned());
+    }
+    let output_exists =
+        std::fs::metadata(partial).is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0);
+    let outcome = mkv::classify_remux_exit(
+        engine == RemuxEngine::MkvToolNix,
+        status.code(),
+        output_exists,
+    );
+    if outcome == mkv::RemuxExitOutcome::Failure {
+        return Err(if diagnostic.trim().is_empty() {
+            format!(
+                "{} failed with exit code {:?}",
+                engine.label(),
+                status.code()
+            )
+        } else {
+            format!("{} failed: {}", engine.label(), diagnostic.trim())
+        });
+    }
+    finalize_output(partial, output)?;
+    match outcome {
+        mkv::RemuxExitOutcome::Success => Ok(ProcessOutcome::Success),
+        mkv::RemuxExitOutcome::SuccessWithWarnings => Ok(ProcessOutcome::Warnings(
+            warnings
+                .lock()
+                .map(|warnings| warnings.clone())
+                .unwrap_or_default(),
+        )),
+        mkv::RemuxExitOutcome::Failure => unreachable!(),
+    }
+}
+
+type ChildRun = (std::process::ExitStatus, String, Arc<Mutex<WarningSummary>>);
+
+/// Runs one FFmpeg or mkvmerge process to completion, reporting progress scaled into
+/// `progress.0..progress.0 + progress.1` percent.
+#[allow(clippy::too_many_arguments)]
+fn run_child_process(
+    job: &JobSpec,
+    executable: &Path,
+    arguments: &[OsString],
+    engine: RemuxEngine,
+    control: &WorkerControl,
+    sender: &mpsc::Sender<WorkerEvent>,
+    ctx: &EventNotifier,
+    temp_cwd: bool,
+    progress: (u32, u32),
+) -> Result<ChildRun, String> {
+    let mut command = tools::command(executable);
+    command.args(arguments);
+    if temp_cwd {
         command.current_dir(std::env::temp_dir());
     }
     let mut child = command
@@ -912,7 +1023,7 @@ fn process_queue_job(
                         &ctx,
                         WorkerEvent::Progress {
                             job_id,
-                            percent: current.percent,
+                            percent: progress.0 + current.percent.min(100) * progress.1 / 100,
                             fps: current.fps,
                             speed: current.speed,
                             eta_seconds: current.eta,
@@ -958,38 +1069,7 @@ fn process_queue_job(
     let status = child
         .wait()
         .map_err(|error| format!("Could not wait for {}: {error}", engine.label()))?;
-    if control.is_cancelled() || control.job_stopped(job.id) {
-        return Err("Stopped by user".to_owned());
-    }
-    let output_exists =
-        std::fs::metadata(partial).is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0);
-    let outcome = mkv::classify_remux_exit(
-        engine == RemuxEngine::MkvToolNix,
-        status.code(),
-        output_exists,
-    );
-    if outcome == mkv::RemuxExitOutcome::Failure {
-        return Err(if diagnostic.trim().is_empty() {
-            format!(
-                "{} failed with exit code {:?}",
-                engine.label(),
-                status.code()
-            )
-        } else {
-            format!("{} failed: {}", engine.label(), diagnostic.trim())
-        });
-    }
-    finalize_output(partial, output)?;
-    match outcome {
-        mkv::RemuxExitOutcome::Success => Ok(ProcessOutcome::Success),
-        mkv::RemuxExitOutcome::SuccessWithWarnings => Ok(ProcessOutcome::Warnings(
-            warnings
-                .lock()
-                .map(|warnings| warnings.clone())
-                .unwrap_or_default(),
-        )),
-        mkv::RemuxExitOutcome::Failure => unreachable!(),
-    }
+    Ok((status, diagnostic, warnings))
 }
 
 fn mkvmerge_engine_eligible(
@@ -1000,6 +1080,7 @@ fn mkvmerge_engine_eligible(
     mkvmerge_available: bool,
 ) -> bool {
     if !settings.is_remux_only()
+        || settings.needs_ffmpeg_muxing()
         || settings.container != Container::Mkv
         || selected_engine != RemuxEngine::MkvToolNix
         || !mkvmerge_available
@@ -1040,8 +1121,8 @@ fn queue_ffmpeg_arguments(
     job: &JobSpec,
     output: &Path,
     spec: &QueueSpec,
-    text_burn_in_file: Option<&str>,
-) -> Result<(PathBuf, Vec<OsString>, RemuxEngine), String> {
+    resources: &JobResources,
+) -> Result<(PathBuf, Vec<Vec<OsString>>, RemuxEngine), String> {
     let ffmpeg = spec.tools.ffmpeg.as_ref().ok_or_else(|| {
         if spec.remux_engine == RemuxEngine::MkvToolNix {
             "FFmpeg is unavailable and this job cannot use MKVToolNix".to_owned()
@@ -1049,13 +1130,14 @@ fn queue_ffmpeg_arguments(
             "FFmpeg is unavailable".to_owned()
         }
     })?;
-    let arguments = build_ffmpeg_job_arguments(
-        &if text_burn_in_file.is_some() {
+    let absolute = resources.text_burn_in_file.is_some();
+    let passes = build_ffmpeg_job_passes(
+        &if absolute {
             absolute_path(&job.input)?
         } else {
             job.input.clone()
         },
-        &if text_burn_in_file.is_some() {
+        &if absolute {
             absolute_path(output)?
         } else {
             output.to_path_buf()
@@ -1063,9 +1145,59 @@ fn queue_ffmpeg_arguments(
         &job.metadata,
         &job.settings,
         &spec.encoders,
-        text_burn_in_file,
+        resources,
     )?;
-    Ok((ffmpeg.path.clone(), arguments, RemuxEngine::Ffmpeg))
+    Ok((ffmpeg.path.clone(), passes, RemuxEngine::Ffmpeg))
+}
+
+/// Writes the renamed-chapter metadata file when the job overrides chapter names.
+fn prepare_chapter_names(
+    job: &JobSpec,
+    spec: &QueueSpec,
+) -> Result<Option<chapters::PreparedChapters>, String> {
+    if job.settings.chapter_names.is_empty() || !job.settings.keep_chapters {
+        return Ok(None);
+    }
+    let ffprobe = spec
+        .tools
+        .ffprobe
+        .as_ref()
+        .ok_or_else(|| "FFprobe is unavailable for chapter renaming".to_owned())?;
+    chapters::prepare_chapter_file(&ffprobe.path, &job.input, &job.settings.chapter_names).map(Some)
+}
+
+/// A private temporary directory for two-pass statistics, removed when dropped.
+struct PassLogs {
+    directory: PathBuf,
+}
+
+impl PassLogs {
+    fn create_if_needed(job: &JobSpec) -> Result<Option<Self>, String> {
+        let two_pass = matches!(
+            &job.settings.video,
+            crate::transcode::VideoSettings::Encode(encode)
+                if encode.passes >= 2
+                    && matches!(encode.rate, crate::transcode::RateControl::Bitrate(_))
+        );
+        if !two_pass {
+            return Ok(None);
+        }
+        let directory =
+            std::env::temp_dir().join(format!("kestrel-pass-{}-{}", std::process::id(), job.id));
+        std::fs::create_dir_all(&directory)
+            .map_err(|error| format!("Could not create the pass log folder: {error}"))?;
+        Ok(Some(Self { directory }))
+    }
+
+    fn prefix(&self) -> PathBuf {
+        self.directory.join("pass")
+    }
+}
+
+impl Drop for PassLogs {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.directory);
+    }
 }
 
 #[derive(Default)]

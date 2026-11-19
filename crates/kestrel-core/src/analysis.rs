@@ -3,8 +3,8 @@ use crate::mkv::MediaMetadata;
 use crate::subtitles::{absolute_path, prepare_text_subtitle};
 use crate::tools;
 use crate::transcode::{
-    Crop, JobSettings, RateControl, VideoSettings, build_ffmpeg_job_arguments, is_text_subtitle,
-    selected_burn_in_subtitle, video_filter_chain,
+    Crop, Deinterlace, JobSettings, RateControl, VideoSettings, build_ffmpeg_job_arguments,
+    conservative_crop, is_text_subtitle, selected_burn_in_subtitle, video_filter_chain,
 };
 use std::ffi::OsString;
 use std::path::Path;
@@ -110,6 +110,72 @@ pub fn detect_crop(ffmpeg: &Path, input: &Path, duration: f64) -> Option<Crop> {
         .max_by_key(|(_, count)| *count)
         .map(|(crop, _)| crop.clone())?;
     (best != Crop::None).then_some(best)
+}
+
+/// Runs the analyses a job asked for (automatic crop, interlace detection) and returns the
+/// metadata and settings with the results filled in, ready for [`build_ffmpeg_job_arguments`].
+pub fn resolve_automatic_settings(
+    ffmpeg: &Path,
+    input: &Path,
+    metadata: &MediaMetadata,
+    settings: &JobSettings,
+) -> Result<(MediaMetadata, JobSettings), String> {
+    let mut metadata = metadata.clone();
+    let mut settings = settings.clone();
+    let duration = metadata.duration.unwrap_or_default();
+    if let VideoSettings::Encode(encode) = &mut settings.video {
+        if matches!(encode.crop, Crop::Automatic | Crop::Conservative) {
+            let detected = detect_crop(ffmpeg, input, duration).unwrap_or(Crop::None);
+            encode.crop = if encode.crop == Crop::Conservative {
+                conservative_crop(&detected)
+            } else {
+                detected
+            };
+        }
+        if encode.interlace_detection
+            && encode.deinterlace == Deinterlace::Auto
+            && let Some(video) = metadata.video.as_mut()
+            && video.interlaced.is_none()
+        {
+            video.interlaced = detect_interlaced(ffmpeg, input, duration);
+        }
+    }
+    Ok((metadata, settings))
+}
+
+/// Measures interlacing with the `idet` filter over three 100-frame samples.
+/// Returns `None` when the filter output could not be read.
+pub fn detect_interlaced(ffmpeg: &Path, input: &Path, duration: f64) -> Option<bool> {
+    let mut totals = (0_u32, 0_u32, 0_u32);
+    for percentage in [0.2, 0.5, 0.8] {
+        let seek = (duration.max(0.0) * percentage).to_string();
+        let output = tools::command(ffmpeg)
+            .args(["-nostdin", "-ss", &seek, "-i"])
+            .arg(input)
+            .args(["-an", "-vf", "idet", "-frames:v", "100", "-f", "null", "-"])
+            .stdin(std::process::Stdio::null())
+            .output()
+            .ok()?;
+        let (tff, bff, progressive) = parse_idet(&String::from_utf8_lossy(&output.stderr))?;
+        totals = (totals.0 + tff, totals.1 + bff, totals.2 + progressive);
+    }
+    let interlaced = totals.0 + totals.1;
+    let classified = interlaced + totals.2;
+    (classified > 0).then(|| interlaced * 10 >= classified)
+}
+
+fn parse_idet(output: &str) -> Option<(u32, u32, u32)> {
+    let re = regex::Regex::new(
+        r"Multi frame detection: TFF:\s*(\d+)\s+BFF:\s*(\d+)\s+Progressive:\s*(\d+)",
+    )
+    .ok()?;
+    re.captures_iter(output).last().and_then(|captures| {
+        Some((
+            captures[1].parse().ok()?,
+            captures[2].parse().ok()?,
+            captures[3].parse().ok()?,
+        ))
+    })
 }
 
 pub fn estimate_size(
@@ -263,11 +329,18 @@ fn parse_crop(output: &str) -> Option<(u32, u32, u32, u32)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{estimate_from_bitrate, parse_crop, parse_dimensions};
+    use super::{estimate_from_bitrate, parse_crop, parse_dimensions, parse_idet};
 
     #[test]
     fn estimates_sizes_from_total_bitrate() {
         assert_eq!(estimate_from_bitrate(1000, 8.0), 1_000_000);
+    }
+
+    #[test]
+    fn parses_the_last_idet_summary() {
+        let output = "[Parsed_idet_0 @ 0x1] Multi frame detection: TFF: 1 BFF: 2 Progressive: 3 Undetermined: 0
+[Parsed_idet_0 @ 0x1] Multi frame detection: TFF: 0 BFF: 0 Progressive: 98 Undetermined: 2";
+        assert_eq!(parse_idet(output), Some((0, 0, 98)));
     }
 
     #[test]
