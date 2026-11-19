@@ -17,7 +17,7 @@ if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 fi
 
 for file in \
-  kestrel.exe \
+  Kestrel.exe \
   LICENSE \
   README.md \
   THIRD_PARTY_NOTICES.md \

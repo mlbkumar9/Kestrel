@@ -4,13 +4,26 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$Tag,
     [Parameter(Mandatory = $true)]
-    [string]$OutputDirectory
+    [string]$OutputDirectory,
+    # File name of the executable inside the package (Kestrel.exe for the GPUI app).
+    [string]$ExeName = "Kestrel.exe",
+    # Archive file name; defaults to Kestrel-<Tag>-windows-x64.zip.
+    [string]$ArchiveName = ""
 )
 
 $ErrorActionPreference = "Stop"
 
 if ($Tag -notmatch '^[A-Za-z0-9._-]+$') {
     throw "Tag must contain only letters, numbers, dots, underscores, or hyphens."
+}
+if ($ExeName -notmatch '^[A-Za-z0-9._-]+\.exe$') {
+    throw "ExeName must be a plain file name ending in .exe."
+}
+if ([string]::IsNullOrWhiteSpace($ArchiveName)) {
+    $ArchiveName = "Kestrel-$Tag-windows-x64.zip"
+}
+if ($ArchiveName -notmatch '^[A-Za-z0-9._-]+\.zip$') {
+    throw "ArchiveName must be a plain file name ending in .zip."
 }
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -83,12 +96,12 @@ try {
     Get-ChildItem -LiteralPath $mkvmergeExe.Directory.FullName -Filter "*.dll" -File |
         Copy-Item -Destination $mkvtoolnixBin
 
-    Copy-Item -LiteralPath $binary -Destination (Join-Path $stage "kestrel.exe")
+    Copy-Item -LiteralPath $binary -Destination (Join-Path $stage $ExeName)
     Copy-Item -LiteralPath (Join-Path $repoRoot "README.md") -Destination $stage
     Copy-Item -LiteralPath (Join-Path $repoRoot "LICENSE") -Destination $stage
     Copy-Item -LiteralPath (Join-Path $repoRoot "THIRD_PARTY_NOTICES.md") -Destination $stage
 
-    $archive = Join-Path $output "Kestrel-$Tag-windows-x64.zip"
+    $archive = Join-Path $output $ArchiveName
     if (Test-Path -LiteralPath $archive) {
         Remove-Item -LiteralPath $archive -Force
     }
