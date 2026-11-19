@@ -836,6 +836,9 @@ fn process_queue_job(
             .map(|chapters| chapters.path().to_path_buf()),
         pass_log_prefix: pass_logs.as_ref().map(PassLogs::prefix),
     };
+    if job.settings.is_remux_only() {
+        job.settings.track_edits.check_external_files()?;
+    }
     let uses_mkvmerge = mkvmerge_engine_eligible(
         &job.input,
         &job.metadata,
@@ -853,6 +856,7 @@ fn process_queue_job(
         .map(TemporaryOutput::path)
         .unwrap_or(output);
 
+    let mut edit_warnings = Vec::new();
     let (executable, passes, engine) = if uses_mkvmerge {
         let mkvmerge = spec.tools.mkvmerge.as_ref().unwrap();
         let audio_languages = &job.settings.audio.languages;
@@ -869,6 +873,7 @@ fn process_queue_job(
                 keep_chapters: job.settings.keep_chapters,
                 keep_metadata: job.settings.keep_metadata,
                 title: job.settings.title.as_deref(),
+                track_edits: Some(&job.settings.track_edits),
             },
         ) {
             Ok(Some(arguments)) => (
@@ -876,15 +881,24 @@ fn process_queue_job(
                 vec![arguments],
                 RemuxEngine::MkvToolNix,
             ),
-            Ok(None) => queue_ffmpeg_arguments(job, engine_output, spec, &resources)?,
+            Ok(None) => {
+                queue_ffmpeg_arguments(job, engine_output, spec, &resources, &mut edit_warnings)?
+            }
             Err(error) if error.contains("track IDs are unavailable") => {
-                queue_ffmpeg_arguments(job, engine_output, spec, &resources)?
+                queue_ffmpeg_arguments(job, engine_output, spec, &resources, &mut edit_warnings)?
             }
             Err(error) => return Err(error),
         }
     } else {
-        queue_ffmpeg_arguments(job, engine_output, spec, &resources)?
+        queue_ffmpeg_arguments(job, engine_output, spec, &resources, &mut edit_warnings)?
     };
+    for warning in &edit_warnings {
+        send(
+            sender,
+            ctx,
+            WorkerEvent::Log(format!("{}: warning: {warning}", job.input.display())),
+        );
+    }
     if control.is_cancelled() || control.job_stopped(job.id) {
         return Err("Stopped by user".to_owned());
     }
@@ -1122,6 +1136,7 @@ fn queue_ffmpeg_arguments(
     output: &Path,
     spec: &QueueSpec,
     resources: &JobResources,
+    edit_warnings: &mut Vec<String>,
 ) -> Result<(PathBuf, Vec<Vec<OsString>>, RemuxEngine), String> {
     let ffmpeg = spec.tools.ffmpeg.as_ref().ok_or_else(|| {
         if spec.remux_engine == RemuxEngine::MkvToolNix {
@@ -1130,6 +1145,15 @@ fn queue_ffmpeg_arguments(
             "FFmpeg is unavailable".to_owned()
         }
     })?;
+    if job.settings.is_remux_only()
+        && !job.settings.track_edits.is_empty()
+        && resources.text_burn_in_file.is_none()
+    {
+        let (arguments, warnings) =
+            mkv::build_ffmpeg_edit_arguments(&job.input, output, &job.metadata, &job.settings)?;
+        edit_warnings.extend(warnings);
+        return Ok((ffmpeg.path.clone(), vec![arguments], RemuxEngine::Ffmpeg));
+    }
     let absolute = resources.text_burn_in_file.is_some();
     let passes = build_ffmpeg_job_passes(
         &if absolute {
@@ -1315,6 +1339,7 @@ fn process_file(
                     keep_chapters: true,
                     keep_metadata: true,
                     title: None,
+                    track_edits: None,
                 },
             ) {
                 Ok(Some(arguments)) => (mkvmerge.path.clone(), arguments, RemuxEngine::MkvToolNix),

@@ -42,6 +42,9 @@ pub struct JobSettings {
     /// Chapter names that replace the source titles, in order; empty keeps the source titles.
     pub chapter_names: Vec<String>,
     pub tags: MediaTags,
+    /// Track edits (drop, retitle, flags, external files in `track_edits.external`) for remux
+    /// (stream-copy) jobs only. Transcode jobs use `subtitles.external` for imported subtitles.
+    pub track_edits: crate::remux_edit::TrackEdits,
 }
 
 impl Default for JobSettings {
@@ -59,6 +62,7 @@ impl Default for JobSettings {
             keep_attachments: true,
             chapter_names: Vec::new(),
             tags: MediaTags::default(),
+            track_edits: crate::remux_edit::TrackEdits::default(),
         }
     }
 }
@@ -458,7 +462,7 @@ pub struct SubtitleSettings {
     /// With `BurnIn::ForcedOnly`: burn the first selected track when no forced track exists.
     /// See `burn_behavior`/`set_burn_behavior` for the four-way view.
     pub burn_in_fallback_first: bool,
-    /// Subtitle files imported into the output.
+    /// Subtitle files imported into transcode jobs. Remux jobs use `track_edits.external`.
     pub external: Vec<ExternalTrack>,
 }
 

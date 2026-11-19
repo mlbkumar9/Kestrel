@@ -194,6 +194,21 @@ pub fn job_warnings(metadata: &MediaMetadata, settings: &JobSettings) -> Vec<Str
             warnings.push("8-bit output of HDR video will show banding".to_owned());
         }
     }
+    if settings.is_remux_only() {
+        warnings.extend(crate::remux_edit::external_warnings(
+            metadata,
+            &settings.audio.languages,
+            &settings.subtitles.languages,
+            settings.subtitles.include,
+            &settings.track_edits,
+            settings.container,
+        ));
+    } else if !settings.track_edits.is_empty() {
+        warnings.push(
+            "Track edits apply to remux (stream-copy) jobs only and are ignored for transcode jobs"
+                .to_owned(),
+        );
+    }
     warnings
 }
 
@@ -242,6 +257,25 @@ mod tests {
     use crate::formats::Container;
     use crate::mkv::{MediaMetadata, TrackInfo, VideoInfo};
     use crate::transcode::{AudioSettings, JobSettings, SubtitleSettings, VideoSettings};
+
+    #[test]
+    fn track_edits_on_a_transcode_job_warn_that_they_apply_to_remux_only() {
+        let mut settings = JobSettings::default();
+        settings.track_edits.order = vec![1];
+        let metadata = MediaMetadata::default();
+        assert!(
+            !job_warnings(&metadata, &settings)
+                .iter()
+                .any(|warning| warning.contains("remux"))
+        );
+        settings.audio.codec = crate::transcode::AudioChoice::Aac;
+        assert!(!settings.is_remux_only());
+        assert!(
+            job_warnings(&metadata, &settings)
+                .iter()
+                .any(|warning| warning.contains("remux (stream-copy) jobs only"))
+        );
+    }
 
     #[test]
     fn plans_video_copy_per_container() {

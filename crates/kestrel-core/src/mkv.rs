@@ -1,4 +1,5 @@
 use crate::formats;
+use crate::remux_edit::{self, TrackEdits};
 use crate::tools;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -604,6 +605,8 @@ pub struct MkvRemuxSettings<'a> {
     pub keep_chapters: bool,
     pub keep_metadata: bool,
     pub title: Option<&'a str>,
+    /// Per-track edits and added files; `None` or empty keeps the language-based selection.
+    pub track_edits: Option<&'a TrackEdits>,
 }
 
 pub fn build_arguments(
@@ -626,6 +629,18 @@ pub fn build_arguments(
     };
     if dry_run {
         return Ok(None);
+    }
+    if let Some(edits) = settings.track_edits.filter(|edits| !edits.is_empty()) {
+        return remux_edit::build_mkvmerge_arguments(
+            input,
+            output,
+            metadata,
+            audio_languages,
+            subtitle_languages,
+            settings,
+            edits,
+        )
+        .map(Some);
     }
     let audio_ids = audio_tracks
         .iter()
@@ -674,6 +689,17 @@ pub fn build_arguments(
     }
     arguments.push(input.as_os_str().to_owned());
     Ok(Some(arguments))
+}
+
+/// FFmpeg stream-copy arguments for a remux with per-track edits and added files, plus warnings
+/// for tracks the container cannot hold (those are skipped, not fatal).
+pub fn build_ffmpeg_edit_arguments(
+    input: &Path,
+    output: &Path,
+    metadata: &MediaMetadata,
+    settings: &crate::transcode::JobSettings,
+) -> Result<(Vec<OsString>, Vec<String>), String> {
+    remux_edit::build_ffmpeg_remux_arguments(input, output, metadata, settings)
 }
 
 pub fn build_ffmpeg_arguments(
@@ -838,6 +864,7 @@ mod tests {
                 keep_chapters: true,
                 keep_metadata: true,
                 title: None,
+                track_edits: None,
             },
         )
         .unwrap()
@@ -880,6 +907,7 @@ mod tests {
                 keep_chapters: true,
                 keep_metadata: true,
                 title: None,
+                track_edits: None,
             },
         )
         .unwrap()
@@ -903,6 +931,7 @@ mod tests {
                 keep_chapters: true,
                 keep_metadata: true,
                 title: None,
+                track_edits: None,
             },
         )
         .expect("arguments should build")
@@ -935,6 +964,7 @@ mod tests {
                 keep_chapters: true,
                 keep_metadata: true,
                 title: None,
+                track_edits: None,
             },
         )
         .expect("arguments should build")
@@ -960,6 +990,7 @@ mod tests {
                 keep_chapters: true,
                 keep_metadata: true,
                 title: None,
+                track_edits: None,
             },
         )
         .expect("matching dry run should succeed");
@@ -1086,6 +1117,7 @@ mod tests {
                 keep_chapters: false,
                 keep_metadata: false,
                 title: Some("Preserved title"),
+                track_edits: None,
             },
         )
         .unwrap()
