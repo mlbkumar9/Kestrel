@@ -220,6 +220,91 @@ Encoders:
         assert!(parsed.contains("libvpx-vp9"));
         assert!(!parsed.contains("aac"));
     }
+
+    /// `ffmpeg -hide_banner -encoders` (FFmpeg 9.0.1, Windows build), trimmed to the lines the
+    /// detector looks at. This machine has an Intel iGPU and no NVIDIA driver, yet FFmpeg lists
+    /// every NVENC encoder: a listing says what the build contains, not what the host can run.
+    const CAPTURED_ENCODERS: &str = r#"Encoders:
+ V..... = Video
+ A..... = Audio
+ S..... = Subtitle
+ .F.... = Frame-level multithreading
+ ..S... = Slice-level multithreading
+ ...X.. = Codec is experimental
+ ....B. = Supports draw_horiz_band
+ .....D = Supports direct rendering method 1
+ ------
+ V....D libaom-av1           libaom AV1 (codec av1)
+ V..... libsvtav1            SVT-AV1(Scalable Video Technology for AV1) encoder (codec av1)
+ V....D av1_nvenc            NVIDIA NVENC av1 encoder (codec av1)
+ V..... av1_qsv              AV1 (Intel Quick Sync Video acceleration) (codec av1)
+ V....D libx264              libx264 H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10 (codec h264)
+ V....D h264_nvenc           NVIDIA NVENC H.264 encoder (codec h264)
+ V..... h264_qsv             H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10 (Intel Quick Sync Video acceleration) (codec h264)
+ V....D libx265              libx265 H.265 / HEVC (codec hevc)
+ V....D hevc_nvenc           NVIDIA NVENC hevc encoder (codec hevc)
+ V..... hevc_qsv             HEVC (Intel Quick Sync Video acceleration) (codec hevc)
+ V....D libvpx-vp9           libvpx VP9 (codec vp9)
+ A....D aac                  AAC (Advanced Audio Coding)
+ A....D libopus              libopus Opus (codec opus)
+"#;
+
+    #[test]
+    fn captured_listing_shows_libx265_and_the_nvenc_names() {
+        let video = parse_encoder_list(CAPTURED_ENCODERS);
+        for name in [
+            "libx264",
+            "libx265",
+            "libsvtav1",
+            "libaom-av1",
+            "libvpx-vp9",
+            "h264_nvenc",
+            "hevc_nvenc",
+            "av1_nvenc",
+            "h264_qsv",
+            "hevc_qsv",
+        ] {
+            assert!(video.contains(name), "{name} missing from {video:?}");
+        }
+        assert!(
+            !video.contains("aac"),
+            "audio encoders stay out of the video list"
+        );
+        let audio = parse_audio_encoder_list(CAPTURED_ENCODERS);
+        assert!(audio.contains("aac") && audio.contains("libopus"));
+        assert!(!audio.contains("libx265"));
+    }
+
+    /// Regression: the GPUI queue used `EncoderSet::default()` while detection was still
+    /// running, which makes every transcode fail with "libx265 is unavailable" although the
+    /// listing above contains libx265. A detected set resolves it; the empty set cannot.
+    #[test]
+    fn libx265_resolves_from_a_detected_set_but_not_from_the_empty_one() {
+        let detected = EncoderSet {
+            software: vec![VideoEncoder::X264, VideoEncoder::X265, VideoEncoder::SvtAv1],
+            hardware: vec![
+                VideoEncoder::Hardware {
+                    vendor: HwVendor::Qsv,
+                    codec: HwCodec::H264,
+                },
+                VideoEncoder::Hardware {
+                    vendor: HwVendor::Qsv,
+                    codec: HwCodec::Hevc,
+                },
+            ],
+            ..EncoderSet::default()
+        };
+        assert_eq!(
+            detected.resolve(&VideoEncoder::X265),
+            Ok(VideoEncoder::X265)
+        );
+        assert_eq!(
+            EncoderSet::default()
+                .resolve(&VideoEncoder::X265)
+                .unwrap_err(),
+            "Video encoder libx265 is unavailable; no available HEVC encoder can replace it"
+        );
+    }
 }
 
 #[cfg(test)]

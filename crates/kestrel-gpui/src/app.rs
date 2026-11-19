@@ -147,6 +147,8 @@ pub struct Kestrel {
     pub legacy: Option<LegacyInstall>,
     pub legacy_dismissed: bool,
     legacy_removing: bool,
+    /// A queue start was requested while encoder detection was still running.
+    start_after_detection: bool,
     debug_queue: u8,
     debug_edit: bool,
     pub control: WorkerControl,
@@ -203,6 +205,7 @@ impl Kestrel {
             legacy: None,
             legacy_dismissed: false,
             legacy_removing: false,
+            start_after_detection: false,
             debug_queue: debug.queue,
             debug_edit: debug.edit,
             control: WorkerControl::default(),
@@ -412,6 +415,9 @@ impl Kestrel {
                         );
                         self.encoders = Some(EncoderSet::default());
                     }
+                }
+                if std::mem::take(&mut self.start_after_detection) {
+                    self.start_queue(cx);
                 }
             }
             UiEvent::LegacyRemoved(result) => {
@@ -985,10 +991,21 @@ impl Kestrel {
             self.toast("FFmpeg and MKVToolNix were not found", TagKind::Bad, cx);
             return;
         }
+        // Detection runs on a worker thread for a few seconds after launch. Starting with an
+        // empty set would make every transcode fail with "encoder unavailable", so wait for it.
+        let Some(encoders) = self.encoders.clone() else {
+            self.start_after_detection = true;
+            self.toast(
+                "Detecting encoders; the queue starts when detection finishes",
+                TagKind::Info,
+                cx,
+            );
+            return;
+        };
         let spec = QueueSpec {
             jobs,
             tools: self.tools.clone(),
-            encoders: self.encoders.clone().unwrap_or_default(),
+            encoders,
             remux_engine: self.remux.engine,
             existing: self.remux.collision,
             dry_run: self.remux.dry_run,
