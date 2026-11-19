@@ -447,9 +447,16 @@ mod tests {
         let files = expand(&[input], &[root.join("converted")], &[]);
         let relatives = files
             .iter()
-            .map(|file| file.relative.to_string_lossy().into_owned())
+            .map(|file| file.relative.clone())
             .collect::<Vec<_>>();
-        assert_eq!(relatives, ["a2.MP4", "a10.mkv", "nested/b1.avi"]);
+        assert_eq!(
+            relatives,
+            [
+                PathBuf::from("a2.MP4"),
+                PathBuf::from("a10.mkv"),
+                PathBuf::from("nested").join("b1.avi")
+            ]
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -654,9 +661,9 @@ mod tests {
         assert_eq!(
             files
                 .iter()
-                .map(|source| source.relative.to_string_lossy())
+                .map(|source| source.relative.clone())
                 .collect::<Vec<_>>(),
-            ["sub/other.mkv"]
+            [PathBuf::from("sub").join("other.mkv")]
         );
         std::fs::remove_dir_all(root).unwrap();
     }
