@@ -37,9 +37,11 @@ Build GPUI Windows binaries on Windows with `cargo build --release -p kestrel-gp
 using the MSVC Rust toolchain, Visual Studio C++ build tools, and Windows SDK.
 GPUI's build script needs the SDK's `fxc.exe` for release shaders and `rc.exe`
 for its default `windows-manifest` feature. A Linux cross-build fails with missing
-`shaders_bytes.rs`. No GPUI fork is used. Linux builds, the egui Windows
-cross-build, and MSI packaging stay on Linux; the egui cross-build remains
-supported until phase 4 removes egui.
+`shaders_bytes.rs`. No GPUI fork is used. Linux builds and MSI packaging stay
+on Linux. The egui app's Windows exe is built natively on `windows-latest` in
+CI/release workflows and can still be cross-built from Linux with
+`--target x86_64-pc-windows-gnu` for manual releases; both remain until phase 4
+removes egui.
 
 ## Conventions and gotchas
 
