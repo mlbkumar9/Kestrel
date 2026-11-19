@@ -213,9 +213,10 @@ impl Kestrel {
                                 .id("palette-list")
                                 .flex()
                                 .flex_col()
+                                .flex_1()
+                                .min_h_0()
                                 .p(px(6.0))
                                 .overflow_y_scroll()
-                                .max_h(px(380.0))
                                 .children(rows),
                         ),
                 )
