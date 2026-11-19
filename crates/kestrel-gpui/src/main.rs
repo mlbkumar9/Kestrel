@@ -251,15 +251,8 @@ impl Render for Kestrel {
                                     .flex()
                                     .items_center()
                                     .gap_3()
-                                    .child(widgets::muted(
-                                        if self.light {
-                                            "Light theme"
-                                        } else {
-                                            "Dark theme"
-                                        },
-                                        theme,
-                                    ))
-                                    .child(widgets::toggle(self.light, theme).on_click(
+                                    .child(widgets::muted("Dark mode", theme))
+                                    .child(widgets::toggle(!self.light, theme).on_click(
                                         cx.listener(|this, _, _, cx| {
                                             this.light = !this.light;
                                             cx.notify();
