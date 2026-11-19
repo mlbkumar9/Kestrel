@@ -15,7 +15,8 @@ permissions:
   contents: write
 
 jobs:
-  # The egui Linux-to-Windows cross-build remains supported until phase 4 removes egui.
+  # Native MSVC build of the egui app; manual releases may instead cross-build it
+  # from Linux (x86_64-pc-windows-gnu). Both remain until phase 4 removes egui.
   windows:
     name: Windows x64
     runs-on: windows-latest
