@@ -3072,9 +3072,8 @@ mod tests {
         assert!(has(&arguments, ["-c:s:0", "copy"]));
     }
 
-    #[test]
-    fn burned_imported_text_subtitle_escapes_windows_paths_and_applies_offset() {
-        let settings = JobSettings {
+    fn burned_srt_settings(path: &str) -> JobSettings {
+        JobSettings {
             container: Container::Mp4,
             video: VideoSettings::Encode(VideoEncode {
                 deinterlace: Deinterlace::Off,
@@ -3083,7 +3082,7 @@ mod tests {
             }),
             subtitles: SubtitleSettings {
                 external: vec![ExternalTrack {
-                    path: r"C:\Users\Bob's, [test]\en.srt".into(),
+                    path: path.into(),
                     burn_in: true,
                     charset: Some("CP1252".to_owned()),
                     offset_ms: -500,
@@ -3092,7 +3091,26 @@ mod tests {
                 ..SubtitleSettings::default()
             },
             ..JobSettings::default()
-        };
+        }
+    }
+
+    // A drive-letter path is only absolute on Windows; elsewhere it would be resolved
+    // against the current directory, so each platform checks its own absolute path.
+    #[cfg(not(windows))]
+    #[test]
+    fn burned_imported_text_subtitle_escapes_unix_paths_and_applies_offset() {
+        let settings = burned_srt_settings("/media/Bob's, [test]/en.srt");
+        assert_eq!(
+            vf(&settings),
+            r"setpts=PTS-(-0.5)/TB,subtitles=filename=/media/Bob\\\'s\, \[test\]/en.srt:charenc=CP1252,setpts=PTS+(-0.5)/TB"
+        );
+        assert!(!args(&settings).contains(&"-itsoffset".to_owned()));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn burned_imported_text_subtitle_escapes_windows_paths_and_applies_offset() {
+        let settings = burned_srt_settings(r"C:\Users\Bob's, [test]\en.srt");
         let filter = vf(&settings);
         assert_eq!(
             filter,

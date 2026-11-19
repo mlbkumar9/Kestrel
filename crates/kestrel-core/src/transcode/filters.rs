@@ -464,6 +464,10 @@ mod tests {
             escape_filter_path(Path::new("/tmp/a b.srt")),
             "/tmp/a b.srt"
         );
+        assert_eq!(
+            escape_filter_path(Path::new("/media/Bob's, [test]/en.srt")),
+            r"/media/Bob\\\'s\, \[test\]/en.srt"
+        );
     }
 
     #[test]
