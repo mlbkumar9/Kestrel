@@ -40,7 +40,12 @@ The app follows the approved prototype `plan/design/Main.dc.html`.
 - `src/widgets/`: own widgets (buttons, selects, text input, sliders, tabs, tables, overlays).
 - `assets/icons/*.svg`: embedded icon set loaded through the `AssetSource` in `src/assets.rs`.
 
-Shortcuts: Ctrl+K palette, Ctrl+O add media, Ctrl+Enter queue the current transcode, Ctrl+1..6 pages.
+Shortcuts: Ctrl+K palette, Ctrl+O add media, Ctrl+Enter queue the current transcode, Ctrl+1..6 pages,
+Ctrl+B sidebar, Alt+Left and Alt+Right (or mouse buttons 4 and 5) page history.
+
+The top bar is client-drawn (transparent title bar): sidebar toggle, back and forward, breadcrumb, command
+palette field, queue status pill, Activity bell with an unread counter, theme, Add media, Start or Pause queue,
+and on Windows and Linux the window buttons. Drag regions are siblings of the buttons, never parents.
 
 ## Logo
 
