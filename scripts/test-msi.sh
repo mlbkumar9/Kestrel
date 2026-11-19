@@ -13,7 +13,7 @@ if ! command -v msiinfo >/dev/null 2>&1; then
 fi
 
 standard_files=(
-  kestrel.exe
+  Kestrel.exe
   LICENSE
   README.md
   THIRD_PARTY_NOTICES.md
@@ -65,7 +65,7 @@ file_rows = exported_rows("File")
 actual_files = Counter(row[2] for row in file_rows)
 expected_files = Counter(
     [
-        "kestrel.exe",
+        "Kestrel.exe",
         "LICENSE",
         "README.md",
         "THIRD_PARTY_NOTICES.md",

@@ -15,11 +15,58 @@ permissions:
   contents: write
 
 jobs:
-  # Native MSVC build of the egui app; manual releases may instead cross-build it
-  # from Linux (x86_64-pc-windows-gnu). Both remain until phase 4 removes egui.
+  # Fails the run before any build starts if the tag has no CHANGELOG.md section
+  # (heading "## [<tag without v>]", e.g. "## [4.0.0] - 2026-11-20") or does not match
+  # the kestrel-gpui crate version.
+  notes:
+    name: Check release notes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - name: Extract release notes for tag
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: ./scripts/release-notes.sh "$RELEASE_TAG" "$RUNNER_TEMP/release-notes.md"
+
+  # Primary Windows build: the GPUI app, built natively (GPUI release shaders need fxc.exe).
   windows:
     name: Windows x64
     runs-on: windows-latest
+    needs: notes
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+      - name: Build
+        run: cargo build --release -p kestrel-gpui
+      - name: Package bundled tools
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          ./scripts/package-windows.ps1 `
+            -BinaryPath "target/release/kestrel-gpui.exe" `
+            -Tag "$env:RELEASE_TAG" `
+            -OutputDirectory "dist"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-release
+          path: dist/*
+          if-no-files-found: error
+
+  # Secondary asset: the egui app, kept until it is removed.
+  windows-legacy:
+    name: Windows x64 legacy egui
+    runs-on: windows-latest
+    needs: notes
     steps:
       - uses: actions/checkout@v4
         with:
@@ -40,33 +87,13 @@ jobs:
           ./scripts/package-windows.ps1 `
             -BinaryPath "target/x86_64-pc-windows-msvc/release/kestrel.exe" `
             -Tag "$env:RELEASE_TAG" `
-            -OutputDirectory "dist"
+            -OutputDirectory "dist" `
+            -ExeName "kestrel.exe" `
+            -ArchiveName "Kestrel-$($env:RELEASE_TAG)-legacy-egui-windows-x64.zip"
       - uses: actions/upload-artifact@v4
         with:
-          name: windows-release
+          name: windows-legacy-release
           path: dist/*
-          if-no-files-found: error
-
-  gpui-windows:
-    name: GPUI Windows x64
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.tag || github.ref }}
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-msvc
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: . -> target
-      # GPUI release shaders require fxc.exe on a Windows host.
-      - name: Build GPUI
-        run: cargo build --release -p kestrel-gpui
-      - uses: actions/upload-artifact@v4
-        with:
-          name: gpui-windows-release
-          path: target/release/kestrel-gpui.exe
           if-no-files-found: error
 
   windows-msi:
@@ -92,13 +119,14 @@ jobs:
         run: |
           set -euo pipefail
           version="${RELEASE_TAG#v}"
+          version="${version%%-*}"
           archive="dist/Kestrel-${RELEASE_TAG}-windows-x64.zip"
           stage="windows-stage"
           mkdir -p "$stage"
           unzip -q "$archive" -d "$stage"
           ./scripts/build-msi.sh "$stage" "$version" \
             "dist/Kestrel-${RELEASE_TAG}-windows-x64.msi"
-          cp "$stage/kestrel.exe" \
+          cp "$stage/Kestrel.exe" \
             "dist/Kestrel-${RELEASE_TAG}-windows-x64.exe"
       - uses: actions/upload-artifact@v4
         with:
@@ -111,6 +139,7 @@ jobs:
   macos-arm64:
     name: macOS Apple Silicon
     runs-on: macos-latest
+    needs: notes
     steps:
       - uses: actions/checkout@v4
         with:
@@ -122,14 +151,14 @@ jobs:
         with:
           workspaces: . -> target
       - name: Build
-        run: cargo build -p kestrel-media --release --target aarch64-apple-darwin
+        run: cargo build --release -p kestrel-gpui
       - name: Package
         env:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           mkdir -p dist
           ./scripts/package-unix.sh "$RELEASE_TAG" macos aarch64 \
-            "target/aarch64-apple-darwin/release/kestrel" dist
+            "target/release/kestrel-gpui" dist
       - uses: actions/upload-artifact@v4
         with:
           name: macos-arm64-release
@@ -139,6 +168,7 @@ jobs:
   macos-x64:
     name: macOS Intel
     runs-on: macos-15-intel
+    needs: notes
     steps:
       - uses: actions/checkout@v4
         with:
@@ -150,14 +180,14 @@ jobs:
         with:
           workspaces: . -> target
       - name: Build
-        run: cargo build -p kestrel-media --release --target x86_64-apple-darwin
+        run: cargo build --release -p kestrel-gpui
       - name: Package
         env:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           mkdir -p dist
           ./scripts/package-unix.sh "$RELEASE_TAG" macos x86_64 \
-            "target/x86_64-apple-darwin/release/kestrel" dist
+            "target/release/kestrel-gpui" dist
       - uses: actions/upload-artifact@v4
         with:
           name: macos-x64-release
@@ -167,6 +197,7 @@ jobs:
   linux:
     name: Linux x64
     runs-on: ubuntu-latest
+    needs: notes
     steps:
       - uses: actions/checkout@v4
         with:
@@ -177,7 +208,7 @@ jobs:
           sudo apt-get install --yes \
             libasound2-dev \
             libdbus-1-dev \
-            libgtk-3-dev \
+            libfontconfig1-dev \
             libwayland-dev \
             libx11-dev \
             libxcb1-dev \
@@ -195,14 +226,14 @@ jobs:
         with:
           workspaces: . -> target
       - name: Build
-        run: cargo build -p kestrel-media --release --target x86_64-unknown-linux-gnu
+        run: cargo build --release -p kestrel-gpui
       - name: Package
         env:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           mkdir -p dist
           ./scripts/package-unix.sh "$RELEASE_TAG" linux x64 \
-            "target/x86_64-unknown-linux-gnu/release/kestrel" dist
+            "target/release/kestrel-gpui" dist
       - uses: actions/upload-artifact@v4
         with:
           name: linux-x64-release
@@ -213,9 +244,10 @@ jobs:
     name: Publish GitHub release
     runs-on: ubuntu-latest
     needs:
+      - notes
       - windows
+      - windows-legacy
       - windows-msi
-      - gpui-windows
       - macos-arm64
       - macos-x64
       - linux
@@ -227,29 +259,36 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - name: Create checksums
-        run: |
-          cd dist
-          sha256sum Kestrel-* kestrel-gpui.exe > SHA256SUMS.txt
-      - name: Extract release notes for tag
+      - name: Check release assets
         env:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          version="${RELEASE_TAG#v}"
-          escaped_version="$(printf '%s' "$version" | sed 's/\./\\./g')"
-          CHANGELOG_VERSION_REGEX="$escaped_version" awk '
-            $0 ~ ("^## \\[" ENVIRON["CHANGELOG_VERSION_REGEX"] "\\]") { capture = 1; found = 1; next }
-            /^## \[/ && capture { exit }
-            capture { print }
-            END { if (!found) exit 2 }
-          ' CHANGELOG.md > release-notes.md || {
-            echo "::error::No CHANGELOG.md section found for tag ${RELEASE_TAG} (expected version ${version})." >&2
-            exit 1
-          }
-          if ! grep -q '[^[:space:]]' release-notes.md; then
-            echo "::error::CHANGELOG.md section for tag ${RELEASE_TAG} is empty." >&2
-            exit 1
-          fi
+          set -euo pipefail
+          expected=(
+            "Kestrel-${RELEASE_TAG}-windows-x64.zip"
+            "Kestrel-${RELEASE_TAG}-windows-x64.msi"
+            "Kestrel-${RELEASE_TAG}-windows-x64.exe"
+            "Kestrel-${RELEASE_TAG}-legacy-egui-windows-x64.zip"
+            "Kestrel-${RELEASE_TAG}-macos-aarch64.zip"
+            "Kestrel-${RELEASE_TAG}-macos-x86_64.zip"
+            "Kestrel-${RELEASE_TAG}-linux-x64.tar.gz"
+          )
+          for asset in "${expected[@]}"; do
+            if [[ ! -s "dist/$asset" ]]; then
+              echo "::error::Release asset is missing or empty: $asset" >&2
+              exit 1
+            fi
+          done
+          ls -l dist
+      - name: Create checksums
+        run: |
+          cd dist
+          find . -maxdepth 1 -type f ! -name SHA256SUMS.txt -printf '%P\n' | LC_ALL=C sort | xargs -d '\n' sha256sum > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+      - name: Extract release notes for tag
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: ./scripts/release-notes.sh "$RELEASE_TAG" release-notes.md
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}

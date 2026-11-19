@@ -28,7 +28,7 @@
         <Directory Id="LegacyLangMuxFolder" Name="LangMux" />
         <Directory Id="INSTALLFOLDER" Name="Kestrel">
           <Component Id="ApplicationFiles" Guid="{5a0a83fb-0598-4b63-abef-7b399d4442f8}">
-            <File Id="KestrelExe" Name="kestrel.exe" Source="$(var.StageDir)/kestrel.exe" KeyPath="yes" />
+            <File Id="KestrelExe" Name="Kestrel.exe" Source="$(var.StageDir)/Kestrel.exe" KeyPath="yes" />
             <File Id="RootLicense" Name="LICENSE" Source="$(var.StageDir)/LICENSE" />
             <File Id="Readme" Name="README.md" Source="$(var.StageDir)/README.md" />
             <File Id="ThirdPartyNotices" Name="THIRD_PARTY_NOTICES.md" Source="$(var.StageDir)/THIRD_PARTY_NOTICES.md" />
@@ -70,7 +70,7 @@
           <Component Id="StartMenuShortcut" Guid="{f6a5b3f5-e2ff-4bc4-ba84-e24ca4d8b7a0}">
             <Shortcut Id="KestrelStartMenuShortcut" Name="Kestrel"
                       Description="Kestrel MKV language remuxer"
-                      Target="[INSTALLFOLDER]kestrel.exe" WorkingDirectory="INSTALLFOLDER"
+                      Target="[INSTALLFOLDER]Kestrel.exe" WorkingDirectory="INSTALLFOLDER"
                       Icon="KestrelIcon" IconIndex="0" />
             <RemoveFolder Id="RemoveProgramMenuKestrelFolder" On="uninstall" />
             <RegistryValue Root="HKLM" Key="Software\mlbkumar9\Kestrel"
