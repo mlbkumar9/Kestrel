@@ -1,4 +1,5 @@
 use super::*;
+use chrono::{DateTime, Local, TimeZone, Utc};
 
 impl Kestrel {
     pub(super) fn refresh_queue(&mut self, cx: &mut Context<Self>) {
@@ -346,21 +347,26 @@ fn missing_tools(tools: &kestrel_core::tools::Toolchain) -> Vec<&'static str> {
     .collect()
 }
 fn log_lines(data: &StateData, filter: Option<u64>) -> Vec<String> {
+    log_lines_in_timezone(data, filter, &Local)
+}
+fn log_lines_in_timezone<Tz: TimeZone>(
+    data: &StateData,
+    filter: Option<u64>,
+    timezone: &Tz,
+) -> Vec<String>
+where
+    Tz::Offset: std::fmt::Display,
+{
     data.logs
         .iter()
         .filter(|line| filter.is_none() || line.job_id == filter)
         .map(|line| {
-            let seconds = line
-                .timestamp
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs()
-                % 86400;
+            let timestamp = DateTime::<Utc>::from(line.timestamp).with_timezone(timezone);
             let job = line
                 .job_id
                 .map(|id| format!(" [Job #{id}]"))
                 .unwrap_or_default();
-            format!("{} UTC{job}  {}", format_duration(seconds), line.text)
+            format!("{}{job}  {}", timestamp.format("%H:%M:%S %:z"), line.text)
         })
         .collect()
 }
@@ -375,7 +381,8 @@ mod tests {
         assert_eq!(progress_text(FileStatus::Pending, 0), "0%");
         assert_eq!(progress_text(FileStatus::Error, 25), "25%");
     }
-    use super::{engine_status, languages, log_lines, missing_tools};
+    use super::{engine_status, languages, log_lines, log_lines_in_timezone, missing_tools};
+    use chrono::FixedOffset;
     use kestrel_core::{
         settings::Preferences,
         tools::{Tool, Toolchain},
@@ -420,8 +427,12 @@ mod tests {
         );
         data.log(None, "Queue finished", SystemTime::UNIX_EPOCH);
         assert_eq!(
-            log_lines(&data, Some(1)),
-            vec!["00:00:00 UTC [Job #1]  ffmpeg -i 'a b.mkv' 'out.mkv'"]
+            log_lines_in_timezone(&data, Some(1), &FixedOffset::east_opt(19800).unwrap()),
+            vec!["05:30:00 +05:30 [Job #1]  ffmpeg -i 'a b.mkv' 'out.mkv'"]
+        );
+        assert_eq!(
+            log_lines_in_timezone(&data, Some(1), &FixedOffset::west_opt(28800).unwrap()),
+            vec!["16:00:00 -08:00 [Job #1]  ffmpeg -i 'a b.mkv' 'out.mkv'"]
         );
         assert_eq!(log_lines(&data, None).len(), 2);
         assert!(log_lines(&data, Some(99)).is_empty());

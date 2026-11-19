@@ -537,7 +537,13 @@ fn run_queue(
         &ctx,
         WorkerEvent::Log(format!(
             "{} batch started for {} job(s)",
-            if spec.dry_run { "Dry-run" } else { "Transcode" },
+            if spec.dry_run {
+                "Dry-run"
+            } else if spec.jobs.iter().all(|job| job.settings.is_remux_only()) {
+                "Remux"
+            } else {
+                "Transcode"
+            },
             spec.jobs.len()
         )),
     );
@@ -1532,6 +1538,50 @@ fn execution_spec(batch: &QueueSpec, job: &JobSpec) -> QueueSpec {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn queue_start_logs_distinguish_remux_transcode_and_dry_run() {
+        use super::*;
+        let remux = JobSpec {
+            id: 1,
+            input: "input.mkv".into(),
+            output: "output.mkv".into(),
+            metadata: Default::default(),
+            settings: Default::default(),
+            execution: None,
+        };
+        let mut transcode = remux.clone();
+        transcode.id = 2;
+        transcode.settings.video = VideoSettings::Encode(Default::default());
+        for (jobs, dry_run, expected) in [
+            (vec![], false, "Remux batch started for 0 job(s)"),
+            (
+                vec![remux.clone()],
+                false,
+                "Remux batch started for 1 job(s)",
+            ),
+            (
+                vec![transcode.clone()],
+                false,
+                "Transcode batch started for 1 job(s)",
+            ),
+            (
+                vec![remux.clone(), transcode],
+                false,
+                "Transcode batch started for 2 job(s)",
+            ),
+            (vec![remux], true, "Dry-run batch started for 1 job(s)"),
+        ] {
+            let events = run_queue_blocking(QueueSpec {
+                jobs,
+                tools: Default::default(),
+                encoders: Default::default(),
+                remux_engine: RemuxEngine::Ffmpeg,
+                existing: Default::default(),
+                dry_run,
+            });
+            assert!(matches!(events.first(),Some(WorkerEvent::Log(text)) if text==expected));
+        }
+    }
     #[test]
     fn stop_requested_before_child_registration_kills_only_that_job() {
         use super::*;
