@@ -1,74 +1,64 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
-mod ui;
-use kestrel_gpui::{state::AppState, widgets};
-use ui::Kestrel;
+mod actions;
+mod app;
+mod assets;
+mod ctl;
+mod pages;
+mod palette;
+mod shell;
+mod state;
+mod theme;
+mod widgets;
 
 use std::borrow::Cow;
+use std::path::PathBuf;
 
 use gpui::{
-    App, AppContext, Application, AssetSource, Bounds, SharedString, TitlebarOptions, WindowBounds,
-    WindowOptions, px, size,
+    App, Application, Bounds, TitlebarOptions, WindowBounds, WindowOptions, prelude::*, px, size,
 };
 
-struct Assets;
-
-impl AssetSource for Assets {
-    fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
-        Ok(match path {
-            "kestrel.png" => Some(Cow::Borrowed(include_bytes!(
-                "../../kestrel-app/assets/kestrel.png"
-            ))),
-            _ => None,
-        })
-    }
-
-    fn list(&self, path: &str) -> gpui::Result<Vec<SharedString>> {
-        Ok(if path.is_empty() {
-            vec!["kestrel.png".into()]
-        } else {
-            vec![]
-        })
-    }
-}
+use crate::app::{DebugOptions, Kestrel};
 
 fn main() {
-    Application::new().with_assets(Assets).run(|cx: &mut App| {
-        widgets::text_input::init(cx);
-        if let Err(error) = cx
-            .text_system()
-            .add_fonts(vec![Cow::Borrowed(include_bytes!(
-                "../../kestrel-app/assets/Inter-Regular.ttf"
-            ))])
-        {
-            eprintln!("Could not load the bundled Inter font; using system fonts: {error}");
-        }
-        let bounds = Bounds::centered(None, size(px(1200.0), px(760.0)), cx);
-        if let Err(error) = cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                window_min_size: Some(size(px(960.0), px(600.0))),
-                titlebar: Some(TitlebarOptions {
-                    title: Some("Kestrel".into()),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            },
-            |_, cx| {
-                let state = cx.new(AppState::new);
-                cx.new(|cx| Kestrel::new(state, cx))
-            },
-        ) {
-            eprintln!("Could not open the Kestrel window: {error}");
-            cx.quit();
-            return;
-        }
-        cx.on_window_closed(|cx| {
-            if cx.windows().is_empty() {
-                cx.quit();
+    // File paths given on the command line are added as sources at start.
+    let paths: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).collect();
+    let debug = DebugOptions::from_env();
+    Application::new()
+        .with_assets(assets::Assets)
+        .run(move |cx: &mut App| {
+            if let Err(error) = cx.text_system().add_fonts(vec![
+                Cow::Borrowed(assets::INTER),
+                Cow::Borrowed(assets::JETBRAINS_MONO),
+            ]) {
+                eprintln!("Could not load the bundled fonts; using system fonts: {error}");
             }
-        })
-        .detach();
-        cx.activate(true);
-    });
+            widgets::input::bind_keys(cx);
+            actions::bind_keys(cx);
+            let bounds = Bounds::centered(None, size(px(1360.0), px(860.0)), cx);
+            let opened = cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    window_min_size: Some(size(px(1040.0), px(640.0))),
+                    titlebar: Some(TitlebarOptions {
+                        title: Some("Kestrel".into()),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                move |window, cx| cx.new(|cx| Kestrel::new(window, cx, paths, debug)),
+            );
+            if let Err(error) = opened {
+                eprintln!("Could not open the Kestrel window: {error}");
+                cx.quit();
+                return;
+            }
+            cx.on_window_closed(|cx| {
+                if cx.windows().is_empty() {
+                    cx.quit();
+                }
+            })
+            .detach();
+            cx.activate(true);
+        });
 }

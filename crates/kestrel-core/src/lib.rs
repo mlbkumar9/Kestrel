@@ -28,6 +28,8 @@ pub mod legacy;
 pub mod mkv;
 /// Built-in and user-defined job presets.
 pub mod presets;
+/// Per-track remux edits and externally added subtitle/audio files.
+pub mod remux_edit;
 /// Persisted preferences, source state and migration.
 pub mod settings;
 /// Subtitle paths, conversion and burn-in preparation.

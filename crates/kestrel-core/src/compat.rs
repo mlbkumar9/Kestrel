@@ -55,6 +55,66 @@ pub fn audio_copy_plan(codec_id: &str, container: Container) -> StreamPlan {
     }
 }
 
+/// Reason a remux-only job cannot keep an audio track in `container`; `None` when it can.
+/// A remux never converts audio, so such a track is dropped.
+pub fn remux_audio_drop_reason(codec_id: &str, container: Container) -> Option<String> {
+    match audio_copy_plan(codec_id, container) {
+        StreamPlan::Convert(_) => Some(format!(
+            "{} audio cannot be stored in {}",
+            codec_id.trim().to_ascii_uppercase(),
+            container.label()
+        )),
+        StreamPlan::Copy | StreamPlan::Drop(_) => None,
+    }
+}
+
+/// Error for a remux-only job whose every audio track was dropped (`reasons` come from
+/// [`remux_audio_drop_reason`]).
+pub fn remux_audio_failure(reasons: &[String], container: Container) -> String {
+    let mut codecs: Vec<&str> = Vec::new();
+    for reason in reasons {
+        let codec = reason.split(" audio").next().unwrap_or(reason);
+        if !codecs.contains(&codec) {
+            codecs.push(codec);
+        }
+    }
+    format!(
+        "{} audio cannot be stored in {}; choose MKV or use Transcode",
+        codecs.join(", "),
+        container.label()
+    )
+}
+
+/// Selected audio tracks that a remux-only job drops, as `(number, reason)` warnings.
+pub fn remux_audio_warnings(metadata: &MediaMetadata, settings: &JobSettings) -> Vec<String> {
+    let Ok(tracks) = crate::transcode::audio::selected_audio_tracks(metadata, settings) else {
+        return Vec::new();
+    };
+    tracks
+        .into_iter()
+        .filter(|track| {
+            settings
+                .track_edits
+                .edit_for(track.id)
+                .is_none_or(|edit| edit.keep)
+        })
+        .filter_map(|track| {
+            let number = metadata
+                .audio_tracks
+                .iter()
+                .position(|candidate| std::ptr::eq(candidate, track))
+                .map_or(0, |position| position + 1);
+            let codec = if track.codec_id.is_empty() {
+                track.codec.as_str()
+            } else {
+                track.codec_id.as_str()
+            };
+            remux_audio_drop_reason(codec, settings.container)
+                .map(|reason| format!("Audio track {number} will be dropped: {reason}"))
+        })
+        .collect()
+}
+
 pub fn subtitle_plan(codec_id: &str, container: Container) -> StreamPlan {
     let codec = normalize(codec_id);
     if is_image_subtitle(&codec) {
@@ -107,31 +167,109 @@ pub fn job_warnings(metadata: &MediaMetadata, settings: &JobSettings) -> Vec<Str
         ));
     }
 
-    let selected_audio = mkv::matching_tracks(&metadata.audio_tracks, &settings.audio.languages);
-    let audio_tracks = if selected_audio.is_empty() && !metadata.audio_tracks.is_empty() {
-        metadata.audio_tracks.iter().collect::<Vec<_>>()
-    } else {
-        selected_audio
-    };
-    if !mkv::normalize_languages(&settings.audio.languages).is_empty()
+    if matches!(&settings.video, VideoSettings::Copy)
+        && (settings.subtitles.burn_in != crate::transcode::BurnIn::None
+            || settings
+                .subtitles
+                .external
+                .iter()
+                .any(|track| track.burn_in))
+    {
+        warnings.push("Subtitle burn-in needs the video to be re-encoded".to_owned());
+    }
+
+    if settings.audio.tracks.is_empty()
+        && !mkv::normalize_languages(&settings.audio.languages).is_empty()
         && !metadata.audio_tracks.is_empty()
+        && settings.audio.selection == crate::transcode::TrackSelection::AllMatching
         && mkv::matching_tracks(&metadata.audio_tracks, &settings.audio.languages).is_empty()
     {
         warnings.push("No matching audio languages found; keeping all audio tracks".to_owned());
     }
-    for track in audio_tracks {
-        if let StreamPlan::Drop(reason) = audio_copy_plan(&track.codec_id, settings.container) {
-            warnings.push(reason);
-        }
+    if let Err(error) = crate::transcode::audio::plan_audio(metadata, settings) {
+        warnings.push(error);
+    }
+    if settings.is_remux_only() {
+        warnings.extend(remux_audio_warnings(metadata, settings));
     }
 
     if settings.subtitles.include {
-        for track in mkv::matching_tracks(&metadata.subtitle_tracks, &settings.subtitles.languages)
-        {
+        for track in crate::transcode::soft_subtitle_tracks(metadata, settings) {
             if let StreamPlan::Drop(reason) = subtitle_plan(&track.codec_id, settings.container) {
                 warnings.push(reason);
             }
         }
+        for track in settings
+            .subtitles
+            .external
+            .iter()
+            .filter(|track| !track.burn_in)
+        {
+            match crate::transcode::subs::external_codec_id(&track.path) {
+                Ok(codec) => {
+                    if let StreamPlan::Drop(reason) = subtitle_plan(codec, settings.container) {
+                        warnings.push(format!("{}: {reason}", track.path.display()));
+                    }
+                }
+                Err(error) => warnings.push(error),
+            }
+        }
+        if let Err(error) = crate::transcode::subs::validate_external(&settings.subtitles.external)
+        {
+            warnings.push(error);
+        }
+    }
+
+    if let VideoSettings::Encode(encode) = &settings.video {
+        let name = crate::transcode::video_encoder_name_for_detection(&encode.encoder);
+        if encode.fast_decode && !encode.encoder.supports_fast_decode() {
+            warnings.push(format!("Fast decode is not available for {name}"));
+        }
+        if !encode.advanced_options.trim().is_empty() && !encode.encoder.supports_advanced_options()
+        {
+            warnings.push(format!("Advanced options are not available for {name}"));
+        }
+        if encode.passes >= 2 {
+            if !matches!(encode.rate, crate::transcode::RateControl::Bitrate(_)) {
+                warnings.push("Two-pass encoding only applies to average bitrate".to_owned());
+            } else if !encode.encoder.supports_multi_pass() {
+                warnings.push(format!("Two-pass encoding is not available for {name}"));
+            }
+        }
+        if encode.ten_bit == crate::transcode::TenBit::Twelve
+            && encode.encoder != crate::transcode::VideoEncoder::X265
+        {
+            warnings.push("12-bit output is only available with x265".to_owned());
+        }
+        if encode.tone_map_to_sdr
+            && encode.tone_map_operator == crate::transcode::ToneMapOperator::Bt2390
+        {
+            warnings.push(
+                "The BT.2390 tone-map operator needs FFmpeg's libplacebo filter and a Vulkan device"
+                    .to_owned(),
+            );
+        }
+        if !encode.tone_map_to_sdr
+            && encode.ten_bit == crate::transcode::TenBit::Off
+            && metadata.video.as_ref().is_some_and(|video| video.hdr)
+        {
+            warnings.push("8-bit output of HDR video will show banding".to_owned());
+        }
+    }
+    if settings.is_remux_only() {
+        warnings.extend(crate::remux_edit::external_warnings(
+            metadata,
+            &settings.audio.languages,
+            &settings.subtitles.languages,
+            settings.subtitles.include,
+            &settings.track_edits,
+            settings.container,
+        ));
+    } else if !settings.track_edits.is_empty() {
+        warnings.push(
+            "Track edits apply to remux (stream-copy) jobs only and are ignored for transcode jobs"
+                .to_owned(),
+        );
     }
     warnings
 }
@@ -181,6 +319,25 @@ mod tests {
     use crate::formats::Container;
     use crate::mkv::{MediaMetadata, TrackInfo, VideoInfo};
     use crate::transcode::{AudioSettings, JobSettings, SubtitleSettings, VideoSettings};
+
+    #[test]
+    fn track_edits_on_a_transcode_job_warn_that_they_apply_to_remux_only() {
+        let mut settings = JobSettings::default();
+        settings.track_edits.order = vec![1];
+        let metadata = MediaMetadata::default();
+        assert!(
+            !job_warnings(&metadata, &settings)
+                .iter()
+                .any(|warning| warning.contains("remux"))
+        );
+        settings.audio.codec = crate::transcode::AudioChoice::Aac;
+        assert!(!settings.is_remux_only());
+        assert!(
+            job_warnings(&metadata, &settings)
+                .iter()
+                .any(|warning| warning.contains("remux (stream-copy) jobs only"))
+        );
+    }
 
     #[test]
     fn plans_video_copy_per_container() {

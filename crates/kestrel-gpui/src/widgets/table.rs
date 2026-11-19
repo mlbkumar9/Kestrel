@@ -1,169 +1,93 @@
+//! Flex-based table rows with fixed and flexible columns.
+
+use gpui::{AnyElement, Div, ElementId, FontWeight, Stateful, div, prelude::*, px};
+
 use crate::theme::Theme;
-use gpui::{prelude::*, *};
-#[derive(Clone)]
-pub struct Column {
-    flexible: bool,
-    pub title: SharedString,
-    pub width: Pixels,
-}
-impl Column {
-    pub fn new(title: impl Into<SharedString>, width: f32) -> Self {
-        Self {
-            flexible: false,
-            title: title.into(),
-            width: px(width.max(0.)),
-        }
-    }
-    pub fn flexible(mut self) -> Self {
-        self.flexible = true;
-        self
-    }
-}
+
 #[derive(Clone, Copy, Debug)]
-pub struct RowSelected(pub usize);
-pub struct Table {
-    selected_rows: std::collections::BTreeSet<usize>,
-    progress_column: Option<usize>,
-    columns: Vec<Column>,
-    rows: Vec<Vec<SharedString>>,
-    selected: Option<usize>,
-    theme: Theme,
+pub struct Col {
+    pub width: Option<f32>,
+    pub grow: f32,
+    pub right: bool,
 }
-impl EventEmitter<RowSelected> for Table {}
-impl Table {
-    pub fn new(columns: Vec<Column>, rows: Vec<Vec<SharedString>>, theme: Theme) -> Self {
+
+impl Col {
+    pub const fn fixed(width: f32) -> Self {
         Self {
-            selected_rows: Default::default(),
-            progress_column: None,
-            columns,
-            rows,
-            selected: None,
-            theme,
+            width: Some(width),
+            grow: 0.0,
+            right: false,
         }
     }
-    pub fn selected(mut self, index: usize) -> Self {
-        self.selected = (index < self.rows.len()).then_some(index);
+
+    pub const fn grow(grow: f32) -> Self {
+        Self {
+            width: None,
+            grow,
+            right: false,
+        }
+    }
+
+    pub const fn right(mut self) -> Self {
+        self.right = true;
         self
-    }
-    pub fn selection(&self) -> Option<usize> {
-        self.selected
-    }
-    pub fn progress_column(mut self, index: usize) -> Self {
-        self.progress_column = Some(index);
-        self
-    }
-    pub fn set_selected_rows(
-        &mut self,
-        rows: std::collections::BTreeSet<usize>,
-        cx: &mut Context<Self>,
-    ) {
-        self.selected_rows = rows;
-        cx.notify();
-    }
-    pub fn set_rows(&mut self, rows: Vec<Vec<SharedString>>, cx: &mut Context<Self>) {
-        self.rows = rows;
-        self.selected = None;
-        cx.notify();
-    }
-    pub fn set_theme(&mut self, theme: Theme, cx: &mut Context<Self>) {
-        self.theme = theme;
-        cx.notify();
     }
 }
-impl Render for Table {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let t = self.theme;
-        div()
-            .id("table")
-            .flex()
-            .flex_col()
-            .size_full()
-            .min_h_0()
-            .text_color(t.text)
-            .child(
-                div()
-                    .flex()
-                    .flex_shrink_0()
-                    .h_8()
-                    .bg(t.card)
-                    .text_color(t.muted_text)
-                    .children(self.columns.iter().map(|c| {
-                        div()
-                            .when(c.flexible, |d| d.flex_1().min_w_0())
-                            .when(!c.flexible, |d| d.w(c.width).flex_shrink_0())
-                            .flex()
-                            .items_center()
-                            .h_full()
-                            .px_3()
-                            .py_2()
-                            .overflow_hidden()
-                            .child(c.title.clone())
-                    })),
-            )
-            .child(
-                uniform_list(
-                    "rows",
-                    self.rows.len(),
-                    cx.processor(|s, range: std::ops::Range<usize>, _, cx| {
-                        range
-                            .map(|i| {
-                                let t = s.theme;
-                                div()
-                                    .id(i)
-                                    .flex()
-                                    .w_full()
-                                    .h_8()
-                                    .cursor_pointer()
-                                    .border_b_1()
-                                    .border_color(t.border)
-                                    .bg(if s.selected_rows.contains(&i) || s.selected == Some(i) {
-                                        t.selected
-                                    } else {
-                                        t.background
-                                    })
-                                    .hover(move |d| d.bg(t.hover))
-                                    .children(s.columns.iter().enumerate().map(|(j, c)| {
-                                        let text = s.rows[i].get(j).cloned().unwrap_or_default();
-                                        div()
-                                            .when(c.flexible, |d| d.flex_1().min_w_0())
-                                            .when(!c.flexible, |d| d.w(c.width).flex_shrink_0())
-                                            .flex()
-                                            .items_center()
-                                            .h_full()
-                                            .px_3()
-                                            .py_0()
-                                            .overflow_hidden()
-                                            .when(s.progress_column != Some(j), |d| {
-                                                d.child(text.clone())
-                                            })
-                                            .when(s.progress_column == Some(j), |d| {
-                                                d.flex()
-                                                    .items_center()
-                                                    .gap_2()
-                                                    .child(text.clone())
-                                                    .child(
-                                                        super::progress::progress(
-                                                            text.trim_end_matches('%')
-                                                                .parse::<f32>()
-                                                                .unwrap_or(0.)
-                                                                / 100.,
-                                                            t,
-                                                        )
-                                                        .flex_1(),
-                                                    )
-                                            })
-                                    }))
-                                    .on_click(cx.listener(move |s, _, _, cx| {
-                                        s.selected = Some(i);
-                                        cx.emit(RowSelected(i));
-                                        cx.notify();
-                                    }))
-                            })
-                            .collect()
-                    }),
-                )
-                .flex_1()
-                .min_h_0(),
-            )
+
+fn cell(col: &Col, child: impl IntoElement) -> Div {
+    let mut cell = div()
+        .flex()
+        .items_center()
+        .min_w_0()
+        .px(px(12.0))
+        .when(col.right, |this| this.justify_end());
+    match col.width {
+        Some(width) => cell = cell.w(px(width)).flex_none(),
+        None => {
+            cell = cell.flex_basis(px(0.0));
+            cell.style().flex_grow = Some(col.grow);
+            cell.style().flex_shrink = Some(1.0);
+        }
     }
+    cell.child(child)
+}
+
+/// Horizontally scrollable table body that keeps `min_w` when the card is narrower.
+pub fn scroll_table(id: impl Into<ElementId>, min_w: f32, rows: Vec<AnyElement>) -> Stateful<Div> {
+    div()
+        .id(id)
+        .w_full()
+        .overflow_x_scroll()
+        .child(div().min_w(px(min_w)).w_full().children(rows))
+}
+
+pub fn header_row(t: &Theme, cols: &[Col], labels: &[&str]) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .w_full()
+        .h(px(34.0))
+        .border_b_1()
+        .border_color(t.line)
+        .text_size(px(11.0))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(t.faint)
+        .children(
+            cols.iter()
+                .zip(labels)
+                .map(|(col, text)| cell(col, text.to_uppercase()).whitespace_nowrap()),
+        )
+}
+
+pub fn body_row(t: &Theme, cols: &[Col], cells: Vec<AnyElement>, last: bool) -> Div {
+    let raised = t.raised;
+    div()
+        .flex()
+        .items_center()
+        .w_full()
+        .min_h(px(44.0))
+        .py(px(5.0))
+        .when(!last, |this| this.border_b_1().border_color(t.line))
+        .hover(move |s| s.bg(raised))
+        .children(cols.iter().zip(cells).map(|(col, child)| cell(col, child)))
 }
