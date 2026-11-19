@@ -931,13 +931,8 @@ fn mkvmerge_engine_eligible(
     if !settings.subtitles.include {
         return true;
     }
-    let languages = mkv::normalize_languages(&settings.subtitles.languages);
-    metadata
-        .subtitle_tracks
-        .iter()
-        .filter(|track| {
-            languages.is_empty() || languages.contains(&track.language.to_ascii_lowercase())
-        })
+    mkv::matching_tracks(&metadata.subtitle_tracks, &settings.subtitles.languages)
+        .into_iter()
         .all(|track| {
             matches!(
                 crate::compat::subtitle_plan(&track.codec_id, Container::Mkv),

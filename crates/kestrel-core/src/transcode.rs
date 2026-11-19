@@ -581,14 +581,7 @@ fn selected_audio_tracks<'a>(
     metadata: &'a MediaMetadata,
     settings: &JobSettings,
 ) -> Vec<&'a TrackInfo> {
-    let languages = mkv::normalize_languages(&settings.audio.languages);
-    let selected = metadata
-        .audio_tracks
-        .iter()
-        .filter(|track| {
-            languages.is_empty() || languages.contains(&track.language.to_ascii_lowercase())
-        })
-        .collect::<Vec<_>>();
+    let selected = mkv::matching_tracks(&metadata.audio_tracks, &settings.audio.languages);
     if selected.is_empty() && !metadata.audio_tracks.is_empty() {
         metadata.audio_tracks.iter().collect()
     } else {
@@ -600,14 +593,7 @@ fn selected_subtitle_tracks<'a>(
     metadata: &'a MediaMetadata,
     settings: &JobSettings,
 ) -> Vec<&'a TrackInfo> {
-    let languages = mkv::normalize_languages(&settings.subtitles.languages);
-    metadata
-        .subtitle_tracks
-        .iter()
-        .filter(|track| {
-            languages.is_empty() || languages.contains(&track.language.to_ascii_lowercase())
-        })
-        .collect()
+    mkv::matching_tracks(&metadata.subtitle_tracks, &settings.subtitles.languages)
 }
 
 pub fn selected_burn_in_subtitle<'a>(
