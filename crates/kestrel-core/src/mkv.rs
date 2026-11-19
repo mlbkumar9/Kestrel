@@ -142,7 +142,7 @@ pub fn partial_output_path(output: &Path, process_id: u32, attempt: u32) -> Path
         .unwrap_or_else(|| OsStr::new("mkv"))
         .to_string_lossy();
     name.push(format!(
-        ".langmux-partial-{process_id}-{attempt}.{extension}"
+        ".kestrel-partial-{process_id}-{attempt}.{extension}"
     ));
     output
         .parent()
@@ -1136,11 +1136,11 @@ mod tests {
     fn names_partial_outputs_in_the_output_directory() {
         assert_eq!(
             partial_output_path(Path::new("/videos/film.mkv"), 123, 4),
-            Path::new("/videos/film.langmux-partial-123-4.mkv")
+            Path::new("/videos/film.kestrel-partial-123-4.mkv")
         );
         assert_eq!(
             partial_output_path(Path::new("film.mkv"), 123, 4),
-            Path::new("./film.langmux-partial-123-4.mkv")
+            Path::new("./film.kestrel-partial-123-4.mkv")
         );
     }
 
@@ -1148,7 +1148,7 @@ mod tests {
     fn partial_output_path_preserves_the_target_extension() {
         assert_eq!(
             partial_output_path(Path::new("/videos/film.mp4"), 123, 4),
-            Path::new("/videos/film.langmux-partial-123-4.mp4")
+            Path::new("/videos/film.kestrel-partial-123-4.mp4")
         );
     }
 
@@ -1186,7 +1186,7 @@ mod tests {
             .expect("system clock should be after UNIX epoch")
             .as_nanos();
         std::env::temp_dir().join(format!(
-            "langmux-path-test-{}-{timestamp}",
+            "kestrel-path-test-{}-{timestamp}",
             std::process::id()
         ))
     }

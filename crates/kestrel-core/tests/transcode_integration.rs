@@ -236,7 +236,7 @@ fn built_in_software_presets_transcode_supported_fixture_containers() {
             fs::read_dir(parent).unwrap().flatten().all(|entry| !entry
                 .file_name()
                 .to_string_lossy()
-                .contains("langmux-partial")),
+                .contains("kestrel-partial")),
             "partial output leaked in {}",
             parent.display()
         );
