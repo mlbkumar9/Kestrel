@@ -16,6 +16,8 @@ pub mod branding;
 pub mod compat;
 /// Encoder discovery and capability checks.
 pub mod encoders;
+/// Subtitle and audio tracks added from separate files.
+pub mod external;
 /// Supported containers and source formats.
 pub mod formats;
 /// Source expansion and collision-free output planning.
