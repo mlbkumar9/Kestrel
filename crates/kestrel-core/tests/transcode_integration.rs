@@ -4,7 +4,7 @@ use kestrel_core::inputs::ExistingPolicy;
 use kestrel_core::mkv::{self, MediaMetadata};
 use kestrel_core::presets;
 use kestrel_core::tools::{self, Toolchain};
-use kestrel_core::transcode::{BurnIn, Crop, VideoEncoder};
+use kestrel_core::transcode::{BurnIn, Crop};
 use kestrel_core::worker::{self, FileStatus, JobSpec, QueueSpec, RemuxEngine, WorkerEvent};
 use std::collections::BTreeSet;
 use std::fs;
