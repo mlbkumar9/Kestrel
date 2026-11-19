@@ -56,7 +56,7 @@ impl Render for Modal {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = self.theme;
         div().when(self.open, |d| {
-            d.child(deferred(
+            d.absolute().inset_0().size_full().child(deferred(
                 div()
                     .id("modal-overlay")
                     .occlude()

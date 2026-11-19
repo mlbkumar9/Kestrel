@@ -96,14 +96,22 @@ pub enum WorkerEvent {
 
 #[derive(Clone)]
 pub struct WorkerControl {
+    jobs: Arc<Mutex<JobControl>>,
     paused: Arc<AtomicBool>,
     cancelled: Arc<AtomicBool>,
     active_child: Arc<Mutex<Option<Child>>>,
 }
 
+#[derive(Default)]
+struct JobControl {
+    active: Option<u64>,
+    cancelled: std::collections::HashSet<u64>,
+}
+
 impl Default for WorkerControl {
     fn default() -> Self {
         Self {
+            jobs: Default::default(),
             paused: Arc::new(AtomicBool::new(false)),
             cancelled: Arc::new(AtomicBool::new(false)),
             active_child: Arc::new(Mutex::new(None)),
@@ -113,6 +121,9 @@ impl Default for WorkerControl {
 
 impl WorkerControl {
     pub fn reset(&self) {
+        if let Ok(mut jobs) = self.jobs.lock() {
+            *jobs = JobControl::default();
+        }
         self.paused.store(false, Ordering::SeqCst);
         self.cancelled.store(false, Ordering::SeqCst);
     }
@@ -132,6 +143,22 @@ impl WorkerControl {
         {
             let _ = child.kill();
         }
+    }
+    pub fn stop_job(&self, id: u64) {
+        if let Ok(mut jobs) = self.jobs.lock() {
+            jobs.cancelled.insert(id);
+            if jobs.active == Some(id)
+                && let Ok(mut child) = self.active_child.lock()
+                && let Some(child) = child.as_mut()
+            {
+                let _ = child.kill();
+            }
+        }
+    }
+    fn job_stopped(&self, id: u64) -> bool {
+        self.jobs
+            .lock()
+            .is_ok_and(|jobs| jobs.cancelled.contains(&id))
     }
 }
 
@@ -535,6 +562,17 @@ fn run_queue(
         while control.paused.load(Ordering::SeqCst) && !control.is_cancelled() {
             std::thread::sleep(std::time::Duration::from_millis(80));
         }
+        if control.job_stopped(job.id) {
+            queue_update(
+                &sender,
+                &ctx,
+                job.id,
+                FileStatus::Cancelled,
+                0,
+                Some("Stopped by user".into()),
+            );
+            continue;
+        }
         let policy = execution_spec(&spec, job);
         let mut resolved_job = job.clone();
         resolved_job.settings =
@@ -592,7 +630,13 @@ fn run_queue(
                 WorkerEvent::Log(format!("{} — {warning}", job.input.display())),
             );
         }
+        if let Ok(mut jobs) = control.jobs.lock() {
+            jobs.active = Some(job.id);
+        }
         let result = process_queue_job(job, &output, &policy, &control, &sender, &ctx);
+        if let Ok(mut jobs) = control.jobs.lock() {
+            jobs.active = None;
+        }
         match result {
             Ok(outcome) => {
                 let detail = match &outcome {
@@ -654,6 +698,16 @@ fn run_queue(
                     );
                 }
                 break;
+            }
+            Err(_) if control.job_stopped(job.id) => {
+                queue_update(
+                    &sender,
+                    &ctx,
+                    job.id,
+                    FileStatus::Cancelled,
+                    0,
+                    Some("Stopped by user".into()),
+                );
             }
             Err(error) => {
                 queue_update(
@@ -795,7 +849,7 @@ fn process_queue_job(
     } else {
         queue_ffmpeg_arguments(job, engine_output, spec, text_burn_in_file)?
     };
-    if control.is_cancelled() {
+    if control.is_cancelled() || control.job_stopped(job.id) {
         return Err("Stopped by user".to_owned());
     }
     let command_text = tools::display_command(&executable, &arguments);
@@ -898,7 +952,7 @@ fn process_queue_job(
     let status = child
         .wait()
         .map_err(|error| format!("Could not wait for {}: {error}", engine.label()))?;
-    if control.is_cancelled() {
+    if control.is_cancelled() || control.job_stopped(job.id) {
         return Err("Stopped by user".to_owned());
     }
     let output_exists =
@@ -1041,6 +1095,7 @@ impl QueueProgress {
 }
 
 fn register_child(control: &WorkerControl, mut child: Child) -> Result<(), String> {
+    let jobs = control.jobs.lock().ok();
     let mut guard = match control.active_child.lock() {
         Ok(guard) => guard,
         Err(_) => {
@@ -1051,7 +1106,11 @@ fn register_child(control: &WorkerControl, mut child: Child) -> Result<(), Strin
             );
         }
     };
-    if control.is_cancelled() {
+    if control.is_cancelled()
+        || jobs
+            .as_ref()
+            .is_some_and(|jobs| jobs.active.is_some_and(|id| jobs.cancelled.contains(&id)))
+    {
         let _ = child.kill();
     }
     *guard = Some(child);
@@ -1473,6 +1532,80 @@ fn execution_spec(batch: &QueueSpec, job: &JobSpec) -> QueueSpec {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn stop_requested_before_child_registration_kills_only_that_job() {
+        use super::*;
+        if std::env::var_os("KESTREL_WORKER_CONTROL_CHILD").is_some() {
+            std::thread::sleep(std::time::Duration::from_secs(60));
+            return;
+        }
+        let control = WorkerControl::default();
+        control.jobs.lock().unwrap().active = Some(42);
+        control.stop_job(42);
+        let child = crate::tools::command(&std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "worker::tests::stop_requested_before_child_registration_kills_only_that_job",
+            ])
+            .env("KESTREL_WORKER_CONTROL_CHILD", "1")
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap();
+        register_child(&control, child).unwrap();
+        let mut child = control.active_child.lock().unwrap().take().unwrap();
+        assert!(!child.wait().unwrap().success());
+        assert!(control.job_stopped(42));
+        assert!(!control.is_cancelled());
+        assert!(!control.job_stopped(43));
+    }
+    #[test]
+    fn stopping_one_job_does_not_cancel_its_neighbors() {
+        use super::*;
+        let control = WorkerControl::default();
+        control.stop_job(2);
+        assert!(!control.is_cancelled());
+        assert!(!control.job_stopped(1));
+        assert!(control.job_stopped(2));
+        let jobs = (1..=3)
+            .map(|id| JobSpec {
+                id,
+                input: "input.mkv".into(),
+                output: "output.mkv".into(),
+                metadata: MediaMetadata {
+                    video_codec: Some("h264".into()),
+                    ..Default::default()
+                },
+                settings: Default::default(),
+                execution: None,
+            })
+            .collect();
+        let spec = QueueSpec {
+            jobs,
+            tools: Toolchain {
+                ffmpeg: Some(crate::tools::Tool {
+                    path: "unused tool".into(),
+                    version: None,
+                }),
+                ..Default::default()
+            },
+            encoders: Default::default(),
+            remux_engine: RemuxEngine::Ffmpeg,
+            existing: ExistingPolicy::Overwrite,
+            dry_run: true,
+        };
+        let (sender, receiver) = mpsc::channel();
+        run_queue(spec, control.clone(), sender, Arc::new(|| {}));
+        let events = receiver.into_iter().collect::<Vec<_>>();
+        for (id, expected) in [
+            (1, FileStatus::Success),
+            (2, FileStatus::Cancelled),
+            (3, FileStatus::Success),
+        ] {
+            assert!(events.iter().any(|event|matches!(event,WorkerEvent::JobUpdated{job_id,status,..} if *job_id==id&&*status==expected)));
+        }
+        control.reset();
+        assert!(!control.job_stopped(2));
+    }
     #[test]
     fn mixed_queue_honors_job_execution_snapshots() {
         use super::*;

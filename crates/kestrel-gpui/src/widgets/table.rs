@@ -2,15 +2,21 @@ use crate::theme::Theme;
 use gpui::{prelude::*, *};
 #[derive(Clone)]
 pub struct Column {
+    flexible: bool,
     pub title: SharedString,
     pub width: Pixels,
 }
 impl Column {
     pub fn new(title: impl Into<SharedString>, width: f32) -> Self {
         Self {
+            flexible: false,
             title: title.into(),
             width: px(width.max(0.)),
         }
+    }
+    pub fn flexible(mut self) -> Self {
+        self.flexible = true;
+        self
     }
 }
 #[derive(Clone, Copy, Debug)]
@@ -83,8 +89,11 @@ impl Render for Table {
                     .text_color(t.muted_text)
                     .children(self.columns.iter().map(|c| {
                         div()
-                            .w(c.width)
-                            .flex_shrink_0()
+                            .when(c.flexible, |d| d.flex_1().min_w_0())
+                            .when(!c.flexible, |d| d.w(c.width).flex_shrink_0())
+                            .flex()
+                            .items_center()
+                            .h_full()
                             .px_3()
                             .py_2()
                             .overflow_hidden()
@@ -102,6 +111,7 @@ impl Render for Table {
                                 div()
                                     .id(i)
                                     .flex()
+                                    .w_full()
                                     .h_8()
                                     .cursor_pointer()
                                     .border_b_1()
@@ -115,10 +125,13 @@ impl Render for Table {
                                     .children(s.columns.iter().enumerate().map(|(j, c)| {
                                         let text = s.rows[i].get(j).cloned().unwrap_or_default();
                                         div()
-                                            .w(c.width)
-                                            .flex_shrink_0()
+                                            .when(c.flexible, |d| d.flex_1().min_w_0())
+                                            .when(!c.flexible, |d| d.w(c.width).flex_shrink_0())
+                                            .flex()
+                                            .items_center()
+                                            .h_full()
                                             .px_3()
-                                            .py_2()
+                                            .py_0()
                                             .overflow_hidden()
                                             .when(s.progress_column != Some(j), |d| {
                                                 d.child(text.clone())

@@ -24,6 +24,10 @@ use std::{
 use storage::{FileStorage, SettingsPaths};
 
 enum Event {
+    LegacyFinished {
+        result: Result<(), String>,
+        found: Option<LegacyInstall>,
+    },
     Ready {
         tools: Toolchain,
         encoders: EncoderSet,
@@ -51,6 +55,7 @@ enum Event {
     },
 }
 pub struct AppState {
+    pub legacy_running: bool,
     data: StateData,
     storage: Option<FileStorage>,
     sender: Sender<Event>,
@@ -89,6 +94,7 @@ impl AppState {
         });
         discover(sender.clone());
         Self {
+            legacy_running: false,
             data,
             storage,
             sender,
@@ -374,6 +380,60 @@ impl AppState {
         }
         changed
     }
+    pub fn stop_job(&mut self, id: u64, cx: &mut Context<Self>) -> bool {
+        let Some(job) = self.data.queue.iter().find(|j| {
+            j.spec.id == id
+                && matches!(
+                    j.status,
+                    worker::FileStatus::Pending | worker::FileStatus::Processing
+                )
+        }) else {
+            return false;
+        };
+        let pending = job.status == worker::FileStatus::Pending;
+        self.control.stop_job(id);
+        if pending {
+            self.data.stop_pending(id);
+            self.data
+                .log(Some(id), "Stopped by user", SystemTime::now());
+        }
+        cx.notify();
+        true
+    }
+    pub fn remove_legacy_install(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.legacy_running {
+            return false;
+        }
+        let Some(install) = self.data.legacy_install.clone() else {
+            return false;
+        };
+        if debug_flag("KESTREL_DEBUG_LEGACY_BANNER") {
+            self.data.log(
+                None,
+                "Legacy banner preview: no installation was removed",
+                SystemTime::now(),
+            );
+            cx.notify();
+            return false;
+        }
+        self.legacy_running = true;
+        let sender = self.sender.clone();
+        std::thread::spawn(move || {
+            let result = kestrel_core::legacy::remove_legacy_install(&install);
+            let mut found = kestrel_core::legacy::find_legacy_install();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            while result.is_ok() && found.is_some() && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                found = kestrel_core::legacy::find_legacy_install();
+            }
+            if result.is_ok() && found.is_none() {
+                kestrel_core::legacy::remove_legacy_registry_leftovers();
+            }
+            let _ = sender.send_blocking(Event::LegacyFinished { result, found });
+        });
+        cx.notify();
+        true
+    }
     pub fn remove_job(&mut self, id: u64, cx: &mut Context<Self>) -> bool {
         let changed = self.data.remove(id);
         if changed {
@@ -395,6 +455,18 @@ impl AppState {
     fn receive(&mut self, event: Event, cx: &mut Context<Self>) {
         let now = SystemTime::now();
         match event {
+            Event::LegacyFinished { result, found } => {
+                self.legacy_running = false;
+                self.data.legacy_install = found;
+                self.data.log(
+                    None,
+                    match result {
+                        Ok(()) => "Removed the older per-user installation".into(),
+                        Err(error) => format!("Could not remove older installation: {error}"),
+                    },
+                    now,
+                );
+            }
             Event::Ready {
                 tools,
                 encoders,
@@ -474,7 +546,11 @@ impl Drop for AppState {
 
 fn discover(sender: Sender<Event>) {
     std::thread::spawn(move || {
-        let tools = Toolchain::discover();
+        let tools = if debug_flag("KESTREL_DEBUG_NO_TOOLS") {
+            Toolchain::default()
+        } else {
+            Toolchain::discover()
+        };
         let (encoders, error) = match tools
             .ffmpeg
             .as_ref()
@@ -488,6 +564,12 @@ fn discover(sender: Sender<Event>) {
         let legacy = kestrel_core::legacy::find_legacy_install();
         #[cfg(not(windows))]
         let legacy = None;
+        #[cfg(debug_assertions)]
+        let legacy = if debug_flag("KESTREL_DEBUG_LEGACY_BANNER") {
+            Some(kestrel_core::legacy::debug_sample())
+        } else {
+            legacy
+        };
         let _ = sender.send_blocking(Event::Ready {
             tools,
             encoders,
@@ -495,6 +577,10 @@ fn discover(sender: Sender<Event>) {
             error,
         });
     });
+}
+
+pub fn debug_flag(name: &str) -> bool {
+    cfg!(debug_assertions) && std::env::var(name).as_deref() == Ok("1")
 }
 fn scan(preferences: Preferences, tools: Toolchain, generation: u64, sender: Sender<Event>) {
     let target = inputs::default_output_target(

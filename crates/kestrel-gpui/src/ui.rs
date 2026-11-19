@@ -28,6 +28,9 @@ use std::{
     path::{Path, PathBuf},
     time::{Duration, SystemTime},
 };
+#[path = "pages.rs"]
+mod pages;
+use pages::engine_status;
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 enum Page {
@@ -73,6 +76,10 @@ pub struct Kestrel {
     container: Entity<Select>,
     collision: Entity<Select>,
     table: Entity<Table>,
+    queue_table: Entity<Table>,
+    selected_job: Option<u64>,
+    logs_selected_only: bool,
+    legacy_modal: Entity<widgets::modal::Modal>,
     toasts: Entity<Toasts>,
     visible_paths: Vec<PathBuf>,
     selected: BTreeSet<PathBuf>,
@@ -120,7 +127,7 @@ impl Kestrel {
         let table = cx.new(|_| {
             Table::new(
                 vec![
-                    Column::new("Name", 260.),
+                    Column::new("Name", 260.).flexible(),
                     Column::new("Size", 90.),
                     Column::new("Tracks", 275.),
                     Column::new("Status", 100.),
@@ -132,7 +139,49 @@ impl Kestrel {
             .progress_column(4)
         });
         let toasts = cx.new(|_| Toasts::new(theme));
+        let queue_table = cx.new(|_| {
+            Table::new(
+                vec![
+                    Column::new("Name", 260.).flexible(),
+                    Column::new("Status", 110.),
+                    Column::new("Progress", 180.),
+                    Column::new("Speed", 90.),
+                    Column::new("ETA", 95.),
+                ],
+                vec![],
+                theme,
+            )
+            .progress_column(2)
+        });
+        let legacy_modal=cx.new(|cx|widgets::modal::Modal::new("Remove older installation?","Remove the LangMux 1.0 setup.exe installation? Your Kestrel installation will not be removed.",theme,cx).actions(vec!["Cancel".into(),"Remove it".into()]));
         let subscriptions = vec![
+            cx.subscribe(&queue_table, |s, _, event: &RowSelected, cx| {
+                s.selected_job = s
+                    .state
+                    .read(cx)
+                    .data()
+                    .queue
+                    .get(event.0)
+                    .map(|j| j.spec.id);
+                s.refresh_queue(cx);
+            }),
+            cx.subscribe(
+                &legacy_modal,
+                |s, _, event: &widgets::modal::ModalAction, cx| {
+                    if event.0 == 1 {
+                        let started = s.state.update(cx, |s, cx| s.remove_legacy_install(cx));
+                        s.toast(
+                            if started {
+                                "Removing the older installation"
+                            } else {
+                                "Legacy preview: no installation was removed"
+                            },
+                            ToastKind::Info,
+                            cx,
+                        );
+                    }
+                },
+            ),
             cx.observe(&state, |s, _, cx| s.sync(cx)),
             cx.subscribe(&search, |s, _, _: &TextChanged, cx| s.refresh_rows(cx)),
             cx.subscribe(&table, |s, _, event: &RowSelected, cx| {
@@ -184,6 +233,10 @@ impl Kestrel {
             container,
             collision,
             table,
+            queue_table,
+            selected_job: None,
+            logs_selected_only: false,
+            legacy_modal,
             toasts,
             visible_paths: vec![],
             selected: BTreeSet::new(),
@@ -245,6 +298,8 @@ impl Kestrel {
                 select.update(cx, |s, cx| s.set_theme(theme, cx));
             }
             self.table.update(cx, |s, cx| s.set_theme(theme, cx));
+            self.queue_table.update(cx, |s, cx| s.set_theme(theme, cx));
+            self.legacy_modal.update(cx, |s, cx| s.set_theme(theme, cx));
             self.toasts.update(cx, |s, cx| s.set_theme(theme, cx));
         }
         if self.output.read(cx).value() == self.last_output {
@@ -257,6 +312,7 @@ impl Kestrel {
             self.toast(message, ToastKind::Error, cx);
         }
         self.refresh_rows(cx);
+        self.refresh_queue(cx);
         if active && !self.ticking {
             self.ticking = true;
             cx.spawn(async move |entity, cx| {
@@ -772,19 +828,11 @@ impl Kestrel {
         let t = self.theme;
         let data = self.state.read(cx).data();
         let prefs = &data.preferences;
-        let tool = if prefs.remux_engine == RemuxEngine::MkvToolNix {
-            &data.tools.mkvmerge
-        } else {
-            &data.tools.ffmpeg
-        };
-        let availability = tool
-            .as_ref()
-            .map(|tool| {
-                tool.version
-                    .clone()
-                    .unwrap_or_else(|| tool.path.display().to_string())
-            })
-            .unwrap_or_else(|| "Not found".into());
+        let availability = format!(
+            "{} · {}",
+            engine_status("FFmpeg", data.tools.ffmpeg.as_ref()),
+            engine_status("MKVToolNix", data.tools.mkvmerge.as_ref())
+        );
         let warnings = compatibility_warnings(data);
         let output_file = matches!(effective_target(data), OutputTarget::File(_));
         let ready = !data.scanning
@@ -1014,6 +1062,9 @@ impl Render for Kestrel {
         let page = match self.page {
             Page::Dashboard => self.dashboard(cx),
             Page::Remux => self.remux(cx),
+            Page::Queue => self.queue_page(cx),
+            Page::Logs => self.logs_page(cx),
+            Page::Settings => self.settings_page(cx),
             _ => div().p_6().child(
                 widgets::card(t)
                     .child(widgets::label(self.page.title(), t).text_lg())
@@ -1094,13 +1145,8 @@ impl Render for Kestrel {
                             .p_3()
                             .border_t_1()
                             .border_color(t.border)
-                            .when(!collapsed, |d| {
-                                d.child(widgets::muted(
-                                    if light { "Light theme" } else { "Dark theme" },
-                                    t,
-                                ))
-                            })
-                            .child(widgets::toggle::toggle("theme", light, t).on_click(
+                            .when(!collapsed, |d| d.child(widgets::muted("Dark theme", t)))
+                            .child(widgets::toggle::toggle("theme", !light, t).on_click(
                                 cx.listener(|s, _, _, cx| {
                                     s.preferences(|p| p.light_theme = !p.light_theme, cx)
                                 }),
@@ -1144,6 +1190,7 @@ impl Render for Kestrel {
                             .child(widgets::label(self.page.title(), t).text_2xl())
                             .child(widgets::muted("Drop files or folders anywhere", t)),
                     )
+                    .child(self.banners(cx))
                     .child(page),
             )
             .child(
@@ -1154,6 +1201,7 @@ impl Render for Kestrel {
                     .max_w(px(480.))
                     .child(self.toasts.clone()),
             )
+            .child(self.legacy_modal.clone())
     }
 }
 

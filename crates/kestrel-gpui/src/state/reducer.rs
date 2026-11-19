@@ -201,6 +201,18 @@ impl StateData {
         self.queue.retain(|j| j.spec.id != id);
         before != self.queue.len()
     }
+    pub fn stop_pending(&mut self, id: u64) -> bool {
+        let Some(job) = self
+            .queue
+            .iter_mut()
+            .find(|j| j.spec.id == id && j.status == FileStatus::Pending)
+        else {
+            return false;
+        };
+        job.status = FileStatus::Cancelled;
+        job.detail = Some("Stopped by user".into());
+        true
+    }
     pub fn clear_finished(&mut self) -> bool {
         if !self.controls().edit {
             return false;
@@ -454,6 +466,33 @@ mod tests {
         assert_eq!(d.queue[0].status, FileStatus::Pending);
         assert!(d.remove(id));
         assert!(d.queue.is_empty());
+    }
+    #[test]
+    fn stopping_a_pending_job_does_not_reassign_active_logs() {
+        let mut d = data();
+        let active = d.enqueue(job());
+        let pending = d.enqueue(job());
+        d.begin(NOW);
+        apply(
+            &mut d,
+            WorkerEvent::JobUpdated {
+                job_id: active,
+                status: FileStatus::Processing,
+                percent: 10,
+                detail: None,
+            },
+            NOW,
+        );
+        assert!(d.stop_pending(pending));
+        assert!(!d.stop_pending(pending));
+        assert!(!d.stop_pending(99));
+        apply(
+            &mut d,
+            WorkerEvent::Log("active job diagnostic".into()),
+            NOW,
+        );
+        assert_eq!(d.logs[0].job_id, Some(active));
+        assert_eq!(d.queue[1].status, FileStatus::Cancelled);
     }
     #[test]
     fn progress_commands_and_terminal_status_are_preserved() {

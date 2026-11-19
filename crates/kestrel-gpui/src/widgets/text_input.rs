@@ -584,7 +584,12 @@ impl Element for TextElement {
 
 impl Render for TextInput {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.theme;
         div()
+            .border_2()
+            .border_color(theme.border)
+            .rounded_md()
+            .focus(move |s| s.border_color(theme.accent))
             .flex()
             .key_context("TextInput")
             .track_focus(&self.focus_handle(cx))
@@ -606,17 +611,17 @@ impl Render for TextInput {
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
-            .bg(self.theme.card)
+            .bg(self.theme.background)
             .text_color(self.theme.text)
             .overflow_hidden()
             .line_height(px(30.))
             .text_size(px(14.))
             .child(
                 div()
-                    .h(px(30. + 4. * 2.))
+                    .h(px(34.))
                     .w_full()
-                    .p(px(4.))
-                    .bg(self.theme.card)
+                    .p(px(2.))
+                    .bg(self.theme.background)
                     .child(TextElement { input: cx.entity() }),
             )
     }
