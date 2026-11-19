@@ -1,25 +1,40 @@
-# Frequently Asked Questions (FAQ)
+# Frequently asked questions
 
-## Installation
-1. **How do I install the project?**  
-   Follow the installation instructions in the README file. Ensure you have all dependencies installed.
+## Do I need Python?
+No. The native Kestrel desktop app is a Rust application with an egui interface.
+The separate legacy Python entrypoints are not required.
 
-## Usage
-1. **How do I use the project?**  
-   Check the usage section in the README file for examples and command-line options.
+## Which tools do I need?
+MKVToolNix (`mkvmerge`) handles Matroska stream-copy remuxing. FFmpeg handles
+transcoding and other remux operations; FFprobe reads source metadata and is the
+fallback when MKVToolNix identification fails. Install FFmpeg/FFprobe for non-MKV
+sources and transcoding. Windows MSI and portable ZIP releases bundle these
+tools; the standalone EXE and Linux/macOS binaries use separately installed tools.
 
-## Troubleshooting
-1. **What should I do if I encounter errors?**  
-   Refer to the troubleshooting section in the documentation. Common errors and their solutions are listed there.
+## Does remuxing change quality?
+The Remux preset copies streams without re-encoding video. Container
+compatibility can require audio/subtitle conversion or subtitle removal.
+Review warnings before running. Encoding presets re-encode video and can change quality.
 
-## Performance
-1. **How can I improve performance?**  
-   Ensure that you are using the latest version, and refer to the performance tuning section for best practices.
+## What formats can I use?
+Inputs include MKV, WebM, MP4, MOV, AVI, MPEG and transport-stream files.
+Output containers are MKV, MP4, MOV and WebM. Not every codec fits every container;
+choose MKV to retain more track types, or encode to a compatible format.
 
-## Supported Formats
-1. **What formats does the project support?**  
-   The project supports various formats including JSON, XML, and CSV. Check the documentation for the complete list.
+## How are languages selected?
+Audio and subtitle selections are separate. Codes such as `eng`, `jpn` and
+`spa` come from the source tags; `und` means undefined. An empty selection
+keeps all tracks of that kind. If no requested audio language matches, all audio
+tracks are retained. Disable subtitles in Settings to omit them entirely.
 
-## Contribution Guidelines
-1. **How can I contribute to the project?**  
-   Contributions are welcome! Please read the contribution guidelines in the repository for more details.
+## Why is an encoder unavailable?
+FFmpeg builds differ, and hardware encoders also need a working device/driver.
+Kestrel detects encoders at startup. An unavailable video encoder falls back to
+an available encoder for the same codec, preferring software, or the job reports
+the missing encoder without starting the encode. AV1 supports SVT-AV1 and libaom.
+
+## Where should I look when a job fails?
+Open Logs and inspect the command and diagnostic. Check tool availability,
+output permissions, free space and container compatibility. Existing outputs can
+be skipped, overwritten or given a new name. Stop cancels the active process
+and removes its temporary output; completed outputs remain.
