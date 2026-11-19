@@ -587,18 +587,12 @@ pub fn selected_tracks(
     audio_languages: &[String],
     subtitle_languages: &[String],
 ) -> (Vec<u64>, Vec<u64>) {
-    let audio_languages = normalize_languages(audio_languages);
-    let subtitle_languages = normalize_languages(subtitle_languages);
-    let audio = metadata
-        .audio_tracks
+    let audio = matching_tracks(&metadata.audio_tracks, audio_languages)
         .iter()
-        .filter(|track| audio_languages.contains(&track.language.to_ascii_lowercase()))
         .map(|track| track.id)
         .collect();
-    let subtitles = metadata
-        .subtitle_tracks
+    let subtitles = matching_tracks(&metadata.subtitle_tracks, subtitle_languages)
         .iter()
-        .filter(|track| subtitle_languages.contains(&track.language.to_ascii_lowercase()))
         .map(|track| track.id)
         .collect();
     (audio, subtitles)
@@ -720,7 +714,8 @@ pub fn build_ffmpeg_arguments(
     Ok(Some(arguments))
 }
 
-fn matching_tracks<'a>(tracks: &'a [TrackInfo], languages: &[String]) -> Vec<&'a TrackInfo> {
+/// Selects tracks by normalized language codes; an empty selection includes all tracks.
+pub fn matching_tracks<'a>(tracks: &'a [TrackInfo], languages: &[String]) -> Vec<&'a TrackInfo> {
     let languages = normalize_languages(languages);
     if languages.is_empty() {
         return tracks.iter().collect();
@@ -788,6 +783,26 @@ mod tests {
         let metadata = fixture();
         assert_eq!(metadata.audio_tracks[2].language, "und");
         assert_eq!(selected_tracks(&metadata, &["UND".to_owned()], &[]).0, [5]);
+    }
+
+    #[test]
+    fn matching_uses_normalized_codes_and_empty_means_all() {
+        let metadata = fixture();
+        assert_eq!(
+            super::matching_tracks(&metadata.audio_tracks, &[]).len(),
+            metadata.audio_tracks.len()
+        );
+        let selected = super::matching_tracks(&metadata.audio_tracks, &[" ENG, jPn ".to_owned()]);
+        assert_eq!(
+            selected.iter().map(|track| track.id).collect::<Vec<_>>(),
+            [1, 2]
+        );
+        assert!(super::matching_tracks(&metadata.audio_tracks, &["zzz".to_owned()]).is_empty());
+        assert!(super::matching_tracks(&[], &[]).is_empty());
+        assert_eq!(
+            selected_tracks(&metadata, &[], &[]).0.len(),
+            metadata.audio_tracks.len()
+        );
     }
 
     #[test]
