@@ -206,7 +206,7 @@ fn reserve_sample_path(extension: &str) -> Result<SampleOutput, String> {
     for _ in 0..1000 {
         let id = NEXT_SAMPLE.fetch_add(1, Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
-            "langmux-size-{}-{id}.{extension}",
+            "kestrel-size-{}-{id}.{extension}",
             std::process::id()
         ));
         match std::fs::OpenOptions::new()

@@ -26,7 +26,7 @@ pub fn prepare_text_subtitle(
 ) -> Result<PreparedTextSubtitle, String> {
     let directory = std::env::temp_dir();
     for index in 0..1000 {
-        let filename = format!("langmux-sub-{}-{index}.ass", std::process::id());
+        let filename = format!("kestrel-sub-{}-{index}.ass", std::process::id());
         let path = directory.join(&filename);
         match std::fs::OpenOptions::new()
             .write(true)

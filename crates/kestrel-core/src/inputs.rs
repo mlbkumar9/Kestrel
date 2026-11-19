@@ -186,9 +186,8 @@ fn is_hidden_directory(path: &Path) -> bool {
 
 fn is_partial_path(path: &Path) -> bool {
     path.file_name().is_some_and(|name| {
-        name.to_string_lossy()
-            .to_ascii_lowercase()
-            .contains(".langmux-partial-")
+        let name = name.to_string_lossy().to_ascii_lowercase();
+        name.contains(".kestrel-partial-") || name.contains(".langmux-partial-")
     })
 }
 
@@ -418,7 +417,7 @@ mod tests {
 
     fn temp_dir() -> PathBuf {
         let id = NEXT_TEMP.fetch_add(1, AtomicOrdering::Relaxed);
-        let path = std::env::temp_dir().join(format!("langmux-inputs-{}-{id}", std::process::id()));
+        let path = std::env::temp_dir().join(format!("kestrel-inputs-{}-{id}", std::process::id()));
         std::fs::create_dir_all(&path).unwrap();
         path
     }
@@ -439,6 +438,7 @@ mod tests {
         touch(&root.join(".hidden").join("secret.mkv"));
         touch(&root.join("converted").join("previous.webm"));
         touch(&root.join("clip.langmux-partial-22-0.mkv"));
+        touch(&root.join("clip.kestrel-partial-22-0.mkv"));
 
         let input = InputItem::Folder {
             path: root.clone(),

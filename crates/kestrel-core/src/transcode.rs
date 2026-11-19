@@ -1139,12 +1139,12 @@ mod tests {
             &fixture_metadata(),
             &settings,
             &all_software_encoders(),
-            Some("langmux-sub-1-0.ass"),
+            Some("kestrel-sub-1-0.ass"),
         )
         .unwrap();
         let filter =
             arguments.windows(2).find(|pair| pair[0] == "-vf").unwrap()[1].to_string_lossy();
-        assert!(filter.contains("subtitles=filename=langmux-sub-1-0.ass"));
+        assert!(filter.contains("subtitles=filename=kestrel-sub-1-0.ass"));
         assert!(!filter.contains("/tmp/Bob's, [test]; x:y"));
     }
 

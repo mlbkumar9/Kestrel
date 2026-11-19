@@ -1423,7 +1423,7 @@ fn backup_output_path(output: &Path) -> Result<PathBuf, String> {
         .unwrap_or_else(|| Path::new("."));
     for index in 0..1000 {
         let mut candidate_name = file_name.to_os_string();
-        candidate_name.push(format!(".langmux-backup-{index}"));
+        candidate_name.push(format!(".kestrel-backup-{index}"));
         let candidate = parent.join(candidate_name);
         if !candidate.exists() {
             return Ok(candidate);
@@ -1561,7 +1561,7 @@ mod tests {
             .expect("system clock should be after UNIX epoch")
             .as_nanos();
         let directory = std::env::temp_dir().join(format!(
-            "langmux-worker-path-test-{}-{timestamp}",
+            "kestrel-worker-path-test-{}-{timestamp}",
             std::process::id()
         ));
         std::fs::create_dir_all(&directory).expect("test directory should be created");
@@ -1583,7 +1583,7 @@ mod tests {
             .expect("system clock should be after UNIX epoch")
             .as_nanos();
         let directory = std::env::temp_dir().join(format!(
-            "langmux-worker-temp-output-test-{}-{timestamp}",
+            "kestrel-worker-temp-output-test-{}-{timestamp}",
             std::process::id()
         ));
         std::fs::create_dir_all(&directory).expect("test directory should be created");
