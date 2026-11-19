@@ -127,6 +127,8 @@ pub struct Kestrel {
     pub collapsed: bool,
     pub tools: Toolchain,
     pub encoders: Option<EncoderSet>,
+    /// Why the last encoder detection failed, shown in Settings and on jobs that need an encoder.
+    pub encoder_error: Option<String>,
     pub presets: Vec<Preset>,
     pub library: Library,
     pub remux: RemuxState,
@@ -186,6 +188,7 @@ impl Kestrel {
             collapsed: false,
             tools,
             encoders: None,
+            encoder_error: None,
             presets: presets::builtins(&EncoderSet::default()),
             library: Library::default(),
             remux: RemuxState::default(),
@@ -405,14 +408,13 @@ impl Kestrel {
                             self.presets
                                 .insert(self.presets.iter().filter(|p| p.builtin).count(), preset);
                         }
+                        self.encoder_error = None;
                         self.encoders = Some(set);
                     }
                     Err(error) => {
-                        self.activity.push(
-                            Level::Warn,
-                            format!("Encoder detection failed: {error}"),
-                            None,
-                        );
+                        let message = format!("Encoder detection failed: {error}");
+                        self.activity.push(Level::Warn, message.clone(), None);
+                        self.encoder_error = Some(message);
                         self.encoders = Some(EncoderSet::default());
                     }
                 }
@@ -585,6 +587,7 @@ impl Kestrel {
             return;
         };
         self.encoders = None;
+        self.encoder_error = None;
         let sender = self.ui_tx.clone();
         self.inflight += 1;
         std::thread::spawn(move || {
@@ -924,7 +927,6 @@ impl Kestrel {
             self.form.video_summary(),
             self.form.container.label()
         );
-        let folder = PathBuf::from(self.form.folder.trim());
         let single = !self.form.apply_to_all;
         // The title field is seeded from the current source's file name. When applying to
         // several sources an untouched title follows each file instead of copying that name.
@@ -932,30 +934,22 @@ impl Kestrel {
             .library
             .current_source()
             .and_then(|source| source.path.file_stem())
-            .map(|stem| stem.to_string_lossy().into_owned());
+            .map(|stem| stem.to_string_lossy().trim().to_owned());
+        let paths: Vec<PathBuf> = targets.iter().map(|(path, _)| path.clone()).collect();
+        let name = (single && !self.form.save_as.trim().is_empty())
+            .then(|| self.form.save_as.trim().to_owned());
+        let outputs = plan_transcode_outputs(
+            &paths,
+            &self.form.folder,
+            self.form.container,
+            name.as_deref(),
+        );
         let mut count = 0;
-        for (path, meta) in targets {
-            let stem = path
-                .file_stem()
-                .map(|stem| stem.to_string_lossy().into_owned())
-                .unwrap_or_default();
+        for ((path, meta), output) in targets.into_iter().zip(outputs) {
             let mut settings = settings.clone();
-            if !single && settings.title == seeded_title {
-                settings.title = Some(stem.clone());
+            if !single && let Some(title) = per_file_title(&settings.title, &seeded_title, &path) {
+                settings.title = Some(title);
             }
-            let name = if single && !self.form.save_as.trim().is_empty() {
-                self.form.save_as.trim().to_owned()
-            } else {
-                format!("{stem}.{}", self.form.container.extension())
-            };
-            let output = if folder.as_os_str().is_empty() {
-                path.parent()
-                    .map(|parent| parent.join("converted"))
-                    .unwrap_or_default()
-                    .join(name)
-            } else {
-                folder.join(name)
-            };
             self.queue.add(
                 path,
                 output,
@@ -981,7 +975,7 @@ impl Kestrel {
             self.toast("The queue is already running", TagKind::Info, cx);
             return;
         }
-        let jobs: Vec<JobSpec> = self
+        let mut jobs: Vec<JobSpec> = self
             .queue
             .queued()
             .into_iter()
@@ -1013,6 +1007,24 @@ impl Kestrel {
             );
             return;
         };
+        // Without a detected encoder list every encode would fail as "unavailable". Say why.
+        if let Some(reason) = self.encoder_error.clone() {
+            for name in self.queue.fail_jobs_needing_encoder(&reason) {
+                self.activity.push(
+                    Level::Error,
+                    format!("{name}: {reason}"),
+                    Some(name.clone()),
+                );
+            }
+            let kept: std::collections::HashSet<u64> =
+                self.queue.queued().iter().map(|job| job.id).collect();
+            jobs.retain(|job| kept.contains(&job.id));
+            if jobs.is_empty() {
+                self.toast(reason, TagKind::Bad, cx);
+                cx.notify();
+                return;
+            }
+        }
         let spec = QueueSpec {
             jobs,
             tools: self.tools.clone(),
@@ -1257,6 +1269,70 @@ pub fn plan_outputs_for(
     inputs::plan_outputs(&sources, &OutputTarget::Folder(folder), container).unwrap_or_default()
 }
 
+/// The file's own stem when `title` is still the one seeded from the current source (compared
+/// without surrounding spaces), so an untouched title follows each file of a batch.
+fn per_file_title(title: &Option<String>, seeded: &Option<String>, path: &Path) -> Option<String> {
+    let current = title.as_deref()?.trim();
+    (Some(current) == seeded.as_deref().map(str::trim))
+        .then(|| {
+            path.file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+        })
+        .flatten()
+}
+
+/// Output path for each source of a Transcode batch. A single source may take the name typed
+/// in the form; every other output gets the same collision-free planning as the Remux page, so
+/// sources that share a file stem do not overwrite one another. With no folder set, outputs go
+/// to a `converted` folder next to their source.
+pub fn plan_transcode_outputs(
+    paths: &[PathBuf],
+    folder: &str,
+    container: Container,
+    name: Option<&str>,
+) -> Vec<PathBuf> {
+    let folder = folder.trim();
+    let converted = |path: &PathBuf| {
+        path.parent()
+            .map(|parent| parent.join("converted"))
+            .unwrap_or_default()
+    };
+    if let ([path], Some(name)) = (paths, name) {
+        let directory = if folder.is_empty() {
+            converted(path)
+        } else {
+            PathBuf::from(folder)
+        };
+        return vec![directory.join(name)];
+    }
+    if !folder.is_empty() {
+        return plan_outputs_for(paths, folder, container)
+            .into_iter()
+            .map(|planned| planned.output)
+            .collect();
+    }
+    // One plan per source folder, so each `converted` folder is planned on its own.
+    let mut outputs = vec![PathBuf::new(); paths.len()];
+    let mut groups: Vec<(PathBuf, Vec<usize>)> = Vec::new();
+    for (index, path) in paths.iter().enumerate() {
+        let parent = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        match groups.iter_mut().find(|(known, _)| *known == parent) {
+            Some((_, members)) => members.push(index),
+            None => groups.push((parent, vec![index])),
+        }
+    }
+    for (_, members) in groups {
+        let group: Vec<PathBuf> = members.iter().map(|index| paths[*index].clone()).collect();
+        for (index, planned) in members
+            .into_iter()
+            .zip(plan_outputs_for(&group, "", container))
+        {
+            outputs[index] = planned.output;
+        }
+    }
+    outputs
+}
+
 impl Render for Kestrel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = self.theme();
@@ -1361,3 +1437,66 @@ impl Focusable for Kestrel {
 }
 
 pub fn _unused(_: PaletteUp, _: PaletteDown) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn paths(names: &[&str]) -> Vec<PathBuf> {
+        names.iter().map(PathBuf::from).collect()
+    }
+
+    #[test]
+    fn transcode_outputs_do_not_collide_for_sources_sharing_a_stem() {
+        let sources = paths(&[
+            "/media/a/movie.mkv",
+            "/media/a/movie.mp4",
+            "/media/b/movie.mkv",
+        ]);
+        let outputs = plan_transcode_outputs(&sources, "/out", Container::Mkv, None);
+        assert_eq!(
+            outputs,
+            paths(&["/out/movie.mkv", "/out/movie (2).mkv", "/out/movie (3).mkv"])
+        );
+        // Without a folder each source folder gets its own `converted` folder, planned alone.
+        let outputs = plan_transcode_outputs(&sources, "  ", Container::Mp4, None);
+        assert_eq!(
+            outputs,
+            paths(&[
+                "/media/a/converted/movie.mp4",
+                "/media/a/converted/movie (2).mp4",
+                "/media/b/converted/movie.mp4",
+            ])
+        );
+    }
+
+    #[test]
+    fn a_single_source_takes_the_typed_name() {
+        let one = paths(&["/media/a/movie.mkv"]);
+        assert_eq!(
+            plan_transcode_outputs(&one, "/out", Container::Mkv, Some("Final.mkv")),
+            paths(&["/out/Final.mkv"])
+        );
+        assert_eq!(
+            plan_transcode_outputs(&one, "", Container::Mkv, Some("Final.mkv")),
+            paths(&["/media/a/converted/Final.mkv"])
+        );
+        assert_eq!(
+            plan_transcode_outputs(&one, "", Container::Mkv, None),
+            paths(&["/media/a/converted/movie.mkv"])
+        );
+    }
+
+    #[test]
+    fn an_untouched_title_follows_each_file_even_with_stray_spaces() {
+        let seeded = Some("Movie One ".to_owned());
+        let title = |text: &str| Some(text.to_owned());
+        let path = Path::new("/media/Second.mkv");
+        assert_eq!(
+            per_file_title(&title("Movie One"), &seeded, path),
+            Some("Second".to_owned())
+        );
+        assert_eq!(per_file_title(&title("My own title"), &seeded, path), None);
+        assert_eq!(per_file_title(&None, &seeded, path), None);
+    }
+}

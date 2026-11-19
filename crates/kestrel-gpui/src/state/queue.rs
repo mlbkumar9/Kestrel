@@ -129,6 +129,25 @@ impl QueueState {
             .collect()
     }
 
+    /// Fails the waiting jobs that re-encode video, with `reason`. Used when encoder detection
+    /// failed, so the user sees why instead of a misleading "encoder unavailable". Jobs that
+    /// copy the video do not need an encoder and stay queued. Returns the failed jobs' names.
+    pub fn fail_jobs_needing_encoder(&mut self, reason: &str) -> Vec<String> {
+        let mut failed = Vec::new();
+        for job in &mut self.jobs {
+            if job.status == JobStatus::Queued
+                && matches!(
+                    job.settings.video,
+                    kestrel_core::transcode::VideoSettings::Encode(_)
+                )
+            {
+                job.status = JobStatus::Failed(reason.to_owned());
+                failed.push(job.name.clone());
+            }
+        }
+        failed
+    }
+
     pub fn current(&self) -> Option<&QueueJob> {
         self.jobs
             .iter()
@@ -272,6 +291,19 @@ mod tests {
             );
         }
         queue
+    }
+
+    #[test]
+    fn detection_failure_fails_encode_jobs_but_not_copy_jobs() {
+        use kestrel_core::transcode::{VideoEncode, VideoSettings};
+        let mut queue = queue_with_jobs(2);
+        queue.jobs[0].settings.video = VideoSettings::Encode(VideoEncode::default());
+        let reason = "Encoder detection failed: timed out after 15 s";
+        let failed = queue.fail_jobs_needing_encoder(reason);
+        assert_eq!(failed, vec!["in0.mkv".to_owned()]);
+        assert_eq!(queue.jobs[0].status, JobStatus::Failed(reason.to_owned()));
+        assert_eq!(queue.jobs[1].status, JobStatus::Queued);
+        assert_eq!(queue.queued().len(), 1);
     }
 
     #[test]

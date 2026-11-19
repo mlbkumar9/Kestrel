@@ -144,8 +144,16 @@ impl Kestrel {
                 }
             }
         }
+        let detection_error = self.encoder_error.clone().map(|message| {
+            div()
+                .mt(px(12.0))
+                .text_size(px(12.0))
+                .text_color(t.bad)
+                .child(message)
+        });
         let hardware = section(&t, false)
             .child(section_title("Hardware encoders", &t))
+            .children(detection_error)
             .child(
                 div()
                     .mt(px(12.0))
