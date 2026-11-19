@@ -812,17 +812,7 @@ fn process_queue_job(
         .map_err(|error| format!("Failed to start {}: {error}", engine.label()))?;
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
-    let mut guard = control
-        .active_child
-        .lock()
-        .map_err(|_| "Could not register child process".to_owned())?;
-    *guard = Some(child);
-    if control.is_cancelled()
-        && let Some(child) = guard.as_mut()
-    {
-        let _ = child.kill();
-    }
-    drop(guard);
+    register_child(control, child)?;
 
     let warnings = Arc::new(Mutex::new(WarningSummary::default()));
     let output_reader = stdout.map(|stdout| {
@@ -1031,6 +1021,24 @@ impl QueueProgress {
     }
 }
 
+fn register_child(control: &WorkerControl, mut child: Child) -> Result<(), String> {
+    let mut guard = match control.active_child.lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(
+                "Could not register child process: process-control lock is poisoned".to_owned(),
+            );
+        }
+    };
+    if control.is_cancelled() {
+        let _ = child.kill();
+    }
+    *guard = Some(child);
+    Ok(())
+}
+
 fn validate_output_paths(input: &Path, output: &Path) -> Result<(), String> {
     if mkv::paths_resolve_to_same_file(input, output)? {
         return Err("Output path is the same as the input".to_owned());
@@ -1161,18 +1169,7 @@ fn process_file(
         .map_err(|error| format!("Failed to start {}: {error}", engine.label()))?;
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
-    if let Ok(mut guard) = control.active_child.lock() {
-        *guard = Some(child);
-        if control.is_cancelled()
-            && let Some(child) = guard.as_mut()
-        {
-            let _ = child.kill();
-        }
-    } else {
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err("Could not register mkvmerge process".to_owned());
-    }
+    register_child(control, child)?;
 
     let warning_summary = Arc::new(Mutex::new(WarningSummary::default()));
     let stdout_reader = stdout.map(|stdout| {
@@ -1448,6 +1445,66 @@ mod tests {
     use crate::transcode::{JobSettings, SubtitleSettings, VideoEncode, VideoSettings};
     use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn poisoned_process_control_cleans_up_the_spawned_child() {
+        let control = super::WorkerControl::default();
+        let poisoned = control.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = poisoned.active_child.lock().unwrap();
+            panic!("poison fixture");
+        })
+        .join();
+        let child = crate::tools::command(&std::env::current_exe().unwrap())
+            .arg("--list")
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let error = super::register_child(&control, child).unwrap_err();
+        assert_eq!(
+            error,
+            "Could not register child process: process-control lock is poisoned"
+        );
+    }
+
+    #[test]
+    fn unavailable_encoder_fails_before_processing_or_starting_a_tool() {
+        let job = super::JobSpec {
+            id: 42,
+            input: "missing-source.mkv".into(),
+            output: "missing-output.mkv".into(),
+            metadata: MediaMetadata::default(),
+            settings: JobSettings {
+                video: VideoSettings::Encode(VideoEncode {
+                    encoder: crate::transcode::VideoEncoder::SvtAv1,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        };
+        let events = super::run_queue_blocking(super::QueueSpec {
+            jobs: vec![job],
+            tools: Default::default(),
+            encoders: Default::default(),
+            remux_engine: RemuxEngine::Ffmpeg,
+            existing: Default::default(),
+            dry_run: false,
+        });
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, super::WorkerEvent::JobUpdated {
+            job_id: 42, status: super::FileStatus::Error, detail: Some(message), ..
+        } if message.contains("libsvtav1")))
+        );
+        assert!(!events.iter().any(|event| matches!(
+            event,
+            super::WorkerEvent::JobUpdated {
+                status: super::FileStatus::Processing,
+                ..
+            }
+        )));
+    }
 
     #[test]
     fn dry_run_does_not_skip_existing_outputs() {
