@@ -1,6 +1,9 @@
 //! Window chrome: sidebar, header, status footer, banners and toasts.
 
-use gpui::{AnyElement, Context, Div, FontWeight, Rgba, Stateful, Window, div, prelude::*, px};
+use gpui::{
+    AnyElement, Context, Div, FontWeight, Rgba, Stateful, Window, WindowControlArea, div,
+    prelude::*, px,
+};
 use kestrel_core::tools::Tool;
 use kestrel_core::transcode::{HwVendor, VideoEncoder};
 
@@ -13,6 +16,10 @@ use crate::widgets::{BtnKind, TagKind, button, card, dot, icon, kbd, label, tag}
 
 const SIDEBAR_WIDTH: f32 = 236.0;
 const SIDEBAR_COLLAPSED: f32 = 60.0;
+const HEADER_HEIGHT: f32 = 52.0;
+const CAPTION_BUTTON_WIDTH: f32 = 46.0;
+/// macOS keeps its native traffic lights, drawn over the left of the sidebar header.
+const MAC_TRAFFIC_LIGHTS: bool = cfg!(target_os = "macos");
 
 fn page_icon(page: Page) -> &'static str {
     match page {
@@ -134,15 +141,24 @@ impl Kestrel {
         .flex_none()
         .size(px(22.0))
         .object_fit(gpui::ObjectFit::Contain);
+        // Same height as the header row; its bottom line continues across the header.
         let logo_row =
             div()
+                .id("sidebar-logo")
+                .window_control_area(WindowControlArea::Drag)
                 .flex()
+                .flex_none()
                 .items_center()
                 .gap(px(10.0))
-                .px(px(8.0))
-                .pt(px(2.0))
-                .pb(px(14.0))
+                .h(px(HEADER_HEIGHT))
+                .mx(px(-10.0))
+                .px(px(18.0))
+                .mb(px(14.0))
+                .border_b_1()
+                .border_color(t.line)
+                .when(MAC_TRAFFIC_LIGHTS && !collapsed, |this| this.pl(px(78.0)))
                 .when(collapsed, |this| this.justify_center().px(px(0.0)))
+                .when(MAC_TRAFFIC_LIGHTS && collapsed, |this| this.opacity(0.0))
                 .child(mark)
                 .when(!collapsed, |this| {
                     this.child(
@@ -332,7 +348,6 @@ impl Kestrel {
             .border_r_1()
             .border_color(t.line)
             .px(px(10.0))
-            .pt(px(14.0))
             .pb(px(10.0))
             .child(logo_row)
             .child(search)
@@ -359,58 +374,126 @@ impl Kestrel {
             .into_any_element()
     }
 
-    pub fn render_header(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    /// Minimise, maximise/restore and close buttons for the client-drawn title bar.
+    /// On Windows the hit-test areas let the OS handle clicks and snap layouts; elsewhere
+    /// the buttons call the window methods directly.
+    fn caption_buttons(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let t = self.theme();
+        let maximized = window.is_maximized();
+        let button = |id: &'static str, area: WindowControlArea, glyph: &'static str| {
+            let close = area == WindowControlArea::Close;
+            let hover_bg = if close { hex(0xE81123) } else { t.hover };
+            let hover_fg = if close { hex(0xFFFFFF) } else { t.text };
+            div()
+                .id(id)
+                .window_control_area(area)
+                .flex()
+                .flex_none()
+                .items_center()
+                .justify_center()
+                .w(px(CAPTION_BUTTON_WIDTH))
+                .h(px(HEADER_HEIGHT))
+                .group(id)
+                .hover(move |s| s.bg(hover_bg))
+                .child(
+                    gpui::svg()
+                        .path(format!("icons/{glyph}.svg"))
+                        .size(px(10.0))
+                        .flex_none()
+                        .text_color(t.muted)
+                        .group_hover(id, move |s| s.text_color(hover_fg)),
+                )
+        };
+        let min = button("caption-min", WindowControlArea::Min, "win-min");
+        let max = button(
+            "caption-max",
+            WindowControlArea::Max,
+            if maximized { "win-restore" } else { "win-max" },
+        );
+        let close = button("caption-close", WindowControlArea::Close, "win-close");
+        let (min, max, close) = if cfg!(windows) {
+            (min, max, close)
+        } else {
+            (
+                min.on_click(cx.listener(|_, _, window, _| window.minimize_window())),
+                max.on_click(cx.listener(|_, _, window, _| window.zoom_window())),
+                close.on_click(cx.listener(|_, _, window, _| window.remove_window())),
+            )
+        };
         div()
             .flex()
             .flex_none()
+            .h_full()
+            .child(min)
+            .child(max)
+            .child(close)
+            .into_any_element()
+    }
+
+    pub fn render_header(&mut self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let t = self.theme();
+        let captions = (!MAC_TRAFFIC_LIGHTS).then(|| self.caption_buttons(window, cx));
+        // The breadcrumb is the drag area. Controls sit beside it, not inside, so the
+        // platform hit test finds each button rather than the drag region.
+        let drag = div()
+            .id("header-drag")
+            .window_control_area(WindowControlArea::Drag)
+            .flex()
+            .flex_1()
+            .min_w_0()
+            .h_full()
             .items_center()
             .gap(px(10.0))
-            .h(px(52.0))
-            .px(px(18.0))
-            .border_b_1()
-            .border_color(t.line)
+            .pl(px(18.0))
             .child(div().text_color(t.faint).child("Kestrel"))
             .child(div().text_color(t.faint).child("/"))
             .child(
                 div()
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(self.page.label()),
+            );
+        let actions = div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(px(8.0))
+            .px(px(10.0))
+            .child(
+                button("toggle-theme", &t, BtnKind::Ghost, true)
+                    .tooltip(tooltip("Toggle light and dark theme"))
+                    .child(icon(if t.light { "moon" } else { "sun" }, 14.0, t.muted))
+                    .child(if t.light { "Dark" } else { "Light" })
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_theme(cx))),
             )
             .child(
-                div()
-                    .flex_1()
-                    .flex()
-                    .justify_end()
-                    .flex()
-                    .items_center()
-                    .gap(px(8.0))
-                    .child(
-                        button("toggle-theme", &t, BtnKind::Ghost, true)
-                            .tooltip(tooltip("Toggle light and dark theme"))
-                            .child(icon(if t.light { "moon" } else { "sun" }, 14.0, t.muted))
-                            .child(if t.light { "Dark" } else { "Light" })
-                            .on_click(cx.listener(|this, _, _, cx| this.toggle_theme(cx))),
-                    )
-                    .child(
-                        button("add-media", &t, BtnKind::Default, true)
-                            .child(icon("plus", 13.0, t.text))
-                            .child("Add media")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.go(Page::Library, cx);
-                                this.pick(Pick::Files, cx);
-                            })),
-                    )
-                    .child(
-                        button("start-queue", &t, BtnKind::Primary, true)
-                            .child(icon("play", 12.0, t.on_accent))
-                            .child("Start queue")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.go(Page::Queue, cx);
-                                this.start_queue(cx);
-                            })),
-                    ),
+                button("add-media", &t, BtnKind::Default, true)
+                    .child(icon("plus", 13.0, t.text))
+                    .child("Add media")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.go(Page::Library, cx);
+                        this.pick(Pick::Files, cx);
+                    })),
             )
+            .child(
+                button("start-queue", &t, BtnKind::Primary, true)
+                    .child(icon("play", 12.0, t.on_accent))
+                    .child("Start queue")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.go(Page::Queue, cx);
+                        this.start_queue(cx);
+                    })),
+            );
+        div()
+            .flex()
+            .flex_none()
+            .items_center()
+            .h(px(HEADER_HEIGHT))
+            .bg(t.panel)
+            .border_b_1()
+            .border_color(t.line)
+            .child(drag)
+            .child(actions)
+            .children(captions)
             .into_any_element()
     }
 

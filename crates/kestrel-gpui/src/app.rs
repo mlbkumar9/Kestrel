@@ -1478,7 +1478,7 @@ impl Render for Kestrel {
             Page::Settings => self.render_settings(window, cx).into_any_element(),
         };
         let sidebar = self.render_sidebar(window, cx);
-        let header = self.render_header(cx);
+        let header = self.render_header(window, cx);
         let banners = self.render_banners(cx);
         let footer = self.render_footer();
         let palette = self.render_palette(window, cx);
@@ -1495,7 +1495,6 @@ impl Render for Kestrel {
             .bg(t.bg)
             .text_color(t.text)
             .key_context("Kestrel")
-            .track_focus(&self.focus)
             .on_action(
                 cx.listener(|this, _: &OpenPalette, window, cx| this.open_palette(window, cx)),
             )
@@ -1533,7 +1532,17 @@ impl Render for Kestrel {
                     .bg(t.bg)
                     .child(header)
                     .children(banners)
-                    .child(div().flex().flex_1().min_h_0().child(page))
+                    // The focus handle lives below the title bar: an ancestor that tracks focus calls
+                    // `prevent_default` on every mouse down, and the window then ignores clicks and
+                    // drags on the title bar buttons and drag regions.
+                    .child(
+                        div()
+                            .flex()
+                            .flex_1()
+                            .min_h_0()
+                            .track_focus(&self.focus)
+                            .child(page),
+                    )
                     .child(footer),
             )
             .children(palette)
