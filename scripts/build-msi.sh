@@ -47,7 +47,7 @@ if ! command -v wixl >/dev/null 2>&1; then
   exit 1
 fi
 
-temp_wxs="$(mktemp "$wxs_directory/langmux.XXXXXX")"
+temp_wxs="$(mktemp "$wxs_directory/kestrel.XXXXXX")"
 trap 'rm -f "$temp_wxs"' EXIT
 python3 - "$wxs_directory/kestrel.wxs" "$temp_wxs" "$stage_dir" <<'PY'
 from hashlib import sha256
