@@ -55,12 +55,17 @@ pub struct ActivityLog {
     pub lines: Vec<LogLine>,
     /// Job name the view is filtered to; `None` shows everything.
     pub filter: Option<String>,
+    /// Warnings and errors logged since Activity was last opened.
+    pub unread: usize,
 }
 
 const MAX_LINES: usize = 5000;
 
 impl ActivityLog {
     pub fn push(&mut self, level: Level, message: impl Into<String>, job: Option<String>) {
+        if matches!(level, Level::Warn | Level::Error) {
+            self.unread += 1;
+        }
         self.lines.push(LogLine {
             time: clock_time(),
             level,
@@ -70,6 +75,10 @@ impl ActivityLog {
         if self.lines.len() > MAX_LINES {
             self.lines.drain(..self.lines.len() - MAX_LINES);
         }
+    }
+
+    pub fn mark_read(&mut self) {
+        self.unread = 0;
     }
 
     pub fn push_classified(&mut self, message: impl Into<String>, job: Option<String>) {
@@ -159,6 +168,40 @@ pub fn clock_time() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_warnings_and_errors_count_as_unread() {
+        let mut log = ActivityLog::default();
+        log.push(Level::Info, "a", None);
+        log.push(Level::Cmd, "b", None);
+        log.push(Level::Done, "c", None);
+        assert_eq!(log.unread, 0);
+        log.push(Level::Warn, "d", None);
+        log.push(Level::Error, "e", None);
+        assert_eq!(log.unread, 2);
+        log.push_classified("x.mkv: encoder failed", None);
+        assert_eq!(log.unread, 3);
+    }
+
+    #[test]
+    fn marking_read_resets_the_counter_and_new_problems_count_again() {
+        let mut log = ActivityLog::default();
+        log.push(Level::Error, "a", None);
+        log.mark_read();
+        assert_eq!(log.unread, 0);
+        log.push(Level::Warn, "b", None);
+        assert_eq!(log.unread, 1);
+    }
+
+    #[test]
+    fn unread_survives_the_line_cap() {
+        let mut log = ActivityLog::default();
+        for _ in 0..(MAX_LINES + 10) {
+            log.push(Level::Warn, "w", None);
+        }
+        assert_eq!(log.lines.len(), MAX_LINES);
+        assert_eq!(log.unread, MAX_LINES + 10);
+    }
 
     #[test]
     fn levels_are_guessed_from_text() {

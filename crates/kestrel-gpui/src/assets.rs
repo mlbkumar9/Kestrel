@@ -85,6 +85,14 @@ const ICONS: &[(&str, &[u8])] = icons![
     "pause",
     "play",
     "stop",
+    "arrow-left",
+    "arrow-right",
+    "panel-left",
+    "bell",
+    "win-min",
+    "win-max",
+    "win-restore",
+    "win-close",
 ];
 
 pub const INTER: &[u8] = include_bytes!("../../kestrel-app/assets/Inter-Regular.ttf");

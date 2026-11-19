@@ -1,48 +1,57 @@
-# Kestrel Roadmap
+# Kestrel roadmap
 
-Kestrel is a fast, native media toolbox built on MKVToolNix and FFmpeg. The native Rust app (`crates/kestrel-app/`) is the primary app from v2.0.0 on.
+What shipped, what comes next. Back to the [README](../README.md).
 
-## v2.0 — Native app (current)
+## 4.0 (released 2026-11-19)
 
-- Native Rust (eframe/egui) desktop app with a refined dark interface.
-- Language-based remux of audio and subtitle tracks with MKVToolNix (`mkvmerge`).
-- FFmpeg integration: `ffprobe` reads metadata as a fallback, and FFmpeg can act as a stream-copy remux engine when MKVToolNix is not available.
-- The Windows release bundles `mkvmerge`, `ffmpeg` and `ffprobe`. macOS and Linux use the tools installed on the system.
-- CI builds Windows, macOS and Linux binaries for every tagged release.
+Kestrel 4.0 is released as [v4.0.0](https://github.com/mlbkumar9/Kestrel/releases/tag/v4.0.0). The 4.0 app is the GPUI desktop app in `crates/kestrel-gpui`, on top of a reworked `kestrel-core`.
 
-## v2.1 — Cross-platform parity
+- **New app.** A GPUI desktop app with a Library, Remux, Transcode, Queue, Activity, Metrics (placeholder) and Settings page, dark, light and system themes, a command palette (`Ctrl K`) and keyboard shortcuts.
+- **Remux track editor.** Per file: keep or drop each track, edit language, title, default and forced flags. Language chips for batches. Output to MKV, MP4, MOV or WebM with warnings before anything is dropped. MKVToolNix and FFmpeg engines. Dry run and collision policy (rename, skip, overwrite).
+- **Add tracks from files.** External SRT, ASS, SSA, VTT and SUP subtitles and external audio files muxed into a remux, with language guessed from the file name. Each added file has a timing offset and, for text subtitles, a character set. Source and added tracks can be reordered.
+- **HandBrake-level Transcode.** Eight tabs: Summary, Dimensions, Filters, Video, Audio, Subtitles, Chapters, Tags. Encoders: x264, x265 (8, 10, 12-bit), SVT-AV1, libaom, VP9, and NVENC, QSV, AMF, VideoToolbox and VAAPI where the FFmpeg build and the device allow. Constant quality or average bitrate with two-pass. Crop, scale, borders, rotation, deinterlace, detelecine, denoise, sharpen, deblock, colourspace, HDR10 keep or tone-map to SDR. Per-track audio with passthru rules. Subtitle import and burn-in. Chapter renaming. Tags.
+- **Queue, Activity and presets.** Job snapshots, retry, reveal output, a command log you can copy or export, five built-in presets plus a hardware preset, and user presets you can rename, duplicate, delete, import and export.
+- **Transcode preview.** A 15, 30 or 60 second segment encoded with the current settings, with size, bitrate, extrapolated full size, playback and source against encoded stills.
+- **Top bar.** Sidebar toggle, history buttons, search, queue pill, activity bell, theme toggle and the Add media and Start queue buttons.
+- **Settings that act.** Parallel jobs, process priority and keep source dates are applied.
+- **Release packaging.** Windows zip and MSI with bundled FFmpeg and mkvmerge, a standalone exe, macOS zips for Apple silicon and Intel, a Linux tar.gz, the legacy egui zip and `SHA256SUMS.txt`.
+- **Hardening.** 260 tests pass on Windows, including real FFmpeg integration tests for the transcode controls and remux edits.
 
-- Signed and notarized macOS `.dmg` (Apple Silicon and Intel) that bundles FFmpeg and MKVToolNix.
-- Linux AppImage plus `.deb` packages, with FFmpeg and MKVToolNix declared as dependencies or bundled.
-- Signed Windows installer (MSI/NSIS) as an alternative to the portable zip.
-- In-app update check against GitHub Releases.
-- Per-platform default tool paths, plus a Settings screen to override the paths to `mkvmerge`, `ffmpeg` and `ffprobe`.
+### Known gaps in 4.0
 
-## v2.2 — Track editor
+- macOS and Linux builds are untested. The macOS zips are ad-hoc signed, so Gatekeeper prompts on first launch.
+- Tool paths cannot be overridden in Settings.
+- The codec label in the Library can be truncated, and the Folder and Destination field can be clipped.
+- The egui app is still in the repository (removal was deferred).
 
-- Per-file track table: enable or disable individual tracks, reorder them, set the default and forced flags, and edit language and title tags.
-- Bulk rules such as "keep the first `eng` audio track and drop commentary" and "keep forced subtitles only".
-- Saved remux profiles.
+## 4.1: quality metrics
 
-## v3.0 — Transcoding
+The Metrics page becomes real. It measures an encode against its source with FFmpeg's filters. The 4.0 placeholder looks like this:
 
-The transcode UI provides a source, a preset, tabbed settings and a queue.
+![Metrics page placeholder](images/metrics-preview.png)
 
-- **Source and queue:** add files or folders; each queue item stores a snapshot of its settings. Start, pause and stop the queue; reorder and retry items.
-- **Presets:** built-in presets (Fast 1080p H.264, HQ 1080p H.265, 4K HEVC 10-bit, AV1 SVT, Web/Discord, Apple devices) plus user presets you can import and export as JSON.
-- **Summary tab:** container (MKV/MP4/WebM), web-optimized/faststart, and metadata passthrough.
-- **Dimensions tab:** resolution limit, anamorphic mode, cropping (automatic via `cropdetect` or custom), and rotation.
-- **Filters tab:** deinterlace (yadif/bwdif), denoise (hqdn3d/nlmeans), deblock, sharpen, grayscale, and color-space conversion.
-- **Video tab:** encoder (x264, x265, SVT-AV1, VP9, NVENC, QSV, AMF, VideoToolbox), constant quality (CRF/CQ) or average bitrate with 2-pass, encoder preset/tune/profile/level, frame rate (same as source, constant or peak), and extra encoder options.
-- **Audio tab:** track selection rules (reusing shared language rules), and per track: encoder (AAC, Opus, AC3, E-AC3, FLAC or passthrough), bitrate, mixdown, sample rate and DRC/gain.
-- **Subtitles tab:** language-based selection, burn-in, forced-only, default track, and import of external SRT/ASS files.
-- **Chapters tab:** keep chapters, and import or export chapter names.
-- **Preview:** short encode preview of a chosen segment, with before/after frames.
-- **Engine:** FFmpeg run as a child process with `-progress pipe:1` for per-file progress, an ETA and fps. Hardware encoders are detected at startup with `ffmpeg -encoders` and per-device test encodes.
-- **Activity log:** the full FFmpeg command line and output for each job, which you can copy and export.
+- Metrics: VMAF, PSNR, SSIM and XPSNR.
+- One reference compared with many encodes in one run.
+- Per-frame graphs you can zoom.
+- VMAF model chosen automatically from the resolution.
+- Analysis of a partial range of the video.
+- Export of the worst frames as PNG images.
+- CSV export, per frame and as a summary.
+- A command log for every analysis.
+
+Also planned for 4.1:
+
+- A type and font rework across the UI, designed in the canvas first.
+- An automated upgrade test from v4.0.0 to later versions.
+- Fix the truncated codec label in the Library and the clipped Folder and Destination field.
+- A light-theme top bar screenshot for the docs.
 
 ## Later
 
-- Watch folders (automatically process new files).
-- Command-line interface that shares the same core crate (`kestrel-media`) for scripting and servers.
-- Split the core logic into its own crate so the CLI, GUI and any future server share it.
+Candidates, not scheduled.
+
+- Tool path overrides.
+- Watch folders that process new files automatically.
+- Signed and notarised macOS builds, Linux packages, and a signed Windows installer.
+- Removal of the legacy egui app.
+- A command-line interface that shares `kestrel-core`.

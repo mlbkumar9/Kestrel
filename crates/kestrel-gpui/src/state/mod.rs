@@ -3,6 +3,7 @@
 pub mod activity;
 pub mod format;
 pub mod library;
+pub mod nav;
 pub mod persist;
 pub mod presets;
 pub mod preview;

@@ -690,7 +690,13 @@ impl Kestrel {
                                 .gap(px(8.0))
                                 .text_size(px(12.0))
                                 .child(tag(self.remux.container.label(), TagKind::Warn, &t))
-                                .child(div().flex_1().text_color(t.muted).child(warning.clone()))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .text_color(t.muted)
+                                        .child(warning.clone()),
+                                )
                                 .into_any_element()
                         })
                         .collect()

@@ -1,62 +1,108 @@
 # Installation
 
-Kestrel's working desktop application uses egui. The GPUI application in this
-repository is a shell under development, not a replacement for the media workflow yet.
+How to get Kestrel 4.0 running, and which tools it needs. Back to the [README](../README.md).
 
-## Windows x64
+## Kestrel 4.0
 
-Download a release from [GitHub Releases](https://github.com/mlbkumar9/Kestrel/releases):
+Download Kestrel 4.0 from the [v4.0.0 release](https://github.com/mlbkumar9/Kestrel/releases/tag/v4.0.0), or build it from source (below). Each tag publishes these files:
 
-- **MSI:** installs Kestrel and bundled FFmpeg/FFprobe and MKVToolNix for all users.
-  Installation may request administrator approval.
-- **Portable ZIP:** extract the entire archive, keeping the `tools` directory
-  next to `kestrel.exe`, then run the executable.
-- **Standalone EXE:** install FFmpeg/FFprobe and MKVToolNix separately and make
-  their executables discoverable on `PATH` or in the supported installation paths.
+| File | What it is |
+|---|---|
+| `Kestrel-v4.0.0-windows-x64.zip` | Unzip and run `Kestrel.exe`. Bundles FFmpeg and mkvmerge in `tools`. |
+| `Kestrel-v4.0.0-windows-x64.msi` | Installer with the same bundled tools. |
+| `Kestrel-v4.0.0-windows-x64.exe` | The program alone, without tools. |
+| `Kestrel-v4.0.0-macos-aarch64.zip`, `-macos-x86_64.zip` | Ad-hoc signed, so Gatekeeper prompts on first launch. FFmpeg and MKVToolNix come from the system. |
+| `Kestrel-v4.0.0-linux-x64.tar.gz` | FFmpeg and MKVToolNix come from the system. |
+| `Kestrel-v4.0.0-legacy-egui-windows-x64.zip` | The earlier egui app. |
+| `SHA256SUMS.txt` | Checksums for every file above. |
 
-## Linux and macOS
+The Windows zip and MSI need no separate FFmpeg or MKVToolNix install. The other downloads need them on `PATH`.
 
-Download and extract the binary for your platform and architecture, or build
-from source below. Install the external tools using your system package manager.
+## Tools
 
-Ubuntu/Debian:
+| Tool | Needed for |
+|---|---|
+| FFmpeg and FFprobe | Transcodes, MP4, MOV and WebM output, and probing every file that is not Matroska |
+| MKVToolNix (`mkvmerge`) | Optional engine for MKV to MKV remuxes |
+
+Install them with your package manager or from the project sites:
+
+- Windows: an FFmpeg build such as the ones on <https://www.gyan.dev/ffmpeg/builds/>, and MKVToolNix from <https://mkvtoolnix.download>.
+- macOS: `brew install ffmpeg mkvtoolnix`.
+- Ubuntu or Debian: `sudo apt install ffmpeg mkvtoolnix`.
+
+FFmpeg builds differ in which encoders they include. Use a full build if you want x265, SVT-AV1, libaom, VP9 or hardware encoders. See [Troubleshooting](guides/troubleshooting.md#an-encoder-is-missing-or-unavailable).
+
+### Where Kestrel looks
+
+For each of `ffmpeg`, `ffprobe` and `mkvmerge`:
+
+1. Next to the Kestrel executable, then in a `tools` folder beside it, then one and two folder levels below `tools`.
+2. Every folder on `PATH`.
+3. Platform defaults:
+   - Windows: `C:\Program Files\MKVToolNix` (mkvmerge only).
+   - macOS: `/Applications/MKVToolNix-*.app` (mkvmerge only), then `/opt/homebrew/bin` and `/usr/local/bin`.
+   - Linux: `/usr/bin` and `/usr/local/bin`.
+
+Settings shows what it found. Restart Kestrel, or press **Re-detect tools**, after you install something. Verify from a terminal:
+
 ```sh
-sudo apt install ffmpeg mkvtoolnix
+ffmpeg -version
+ffprobe -version
+mkvmerge --version
 ```
-
-macOS with Homebrew:
-```sh
-brew install ffmpeg mkvtoolnix
-```
-
-Launch `kestrel` from the extracted directory. On Linux you may need to mark it
-executable with `chmod +x kestrel`. A graphical desktop session is required.
 
 ## Build from source
 
-Install Rust with rustup (Rust 1.92 or newer), Git and your platform's native
-compiler/linker. Linux GUI development packages are listed in the CI workflow;
-the GPUI shell's additional requirements are documented in `AGENTS.md`.
+Requirements: Git, Rust 1.92 or newer (install with rustup), and the platform toolchain below.
+
+### Windows 11
+
+- The MSVC Rust toolchain (`stable-x86_64-pc-windows-msvc`).
+- Visual Studio C++ build tools and the Windows SDK. GPUI's build script needs the SDK's `fxc.exe` (release shaders) and `rc.exe` (the default Windows manifest).
 
 ```sh
 git clone https://github.com/mlbkumar9/Kestrel.git
 cd Kestrel
-cargo build --release -p kestrel-media
-cargo run --release -p kestrel-media
+cargo build --release -p kestrel-gpui
+target\release\kestrel-gpui.exe
 ```
 
-The binary is `target/release/kestrel` (`kestrel.exe` on Windows).
-Source builds do not bundle external media tools. Building the egui app does
-not require building the separate GPUI shell.
+### Linux
 
-## Verify tools
+Install `libxkbcommon-dev`, `libwayland-dev`, `libxkbcommon-x11-dev`, `libfontconfig1-dev` and `mesa-vulkan-drivers`. Run in a graphical session with a user-owned `XDG_RUNTIME_DIR` (mode 0700) and `DISPLAY` set. Without a GPU, set `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json`.
 
 ```sh
-mkvmerge --version
-ffmpeg -version
-ffprobe -version
+cargo run --release -p kestrel-gpui
 ```
 
-Kestrel searches executable-adjacent bundled tools, then `PATH`, then platform
-defaults. Restart the app after installing tools. FFmpeg builds need the
-encoders used by your jobs; see [FAQ](FAQ.md) for fallback behavior.
+You cannot cross-build the Windows GPUI binary from Linux: the build fails with a missing `shaders_bytes.rs`, because the shader compiler is a Windows tool. Kestrel uses upstream GPUI, not a fork. Linux builds are untested for 4.0.
+
+### macOS
+
+Building from source is untested for 4.0. Use the release zip.
+
+### Opening files from the command line
+
+```sh
+kestrel-gpui movie.mkv other.mp4
+```
+
+### Checks
+
+```sh
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+
+## Earlier releases (3.x)
+
+The v3.0.x releases on <https://github.com/mlbkumar9/Kestrel/releases> ship the egui app:
+
+- **Windows MSI**: installs Kestrel with bundled FFmpeg and MKVToolNix for all users. It may ask for administrator approval.
+- **Windows ZIP**: extract the whole archive and keep the `tools` folder beside `kestrel.exe`.
+- **Windows EXE**: install FFmpeg and MKVToolNix separately.
+- **macOS and Linux**: binaries that use tools installed on the system.
+
+See [Legacy tools](LEGACY.md) for the egui app, the Tauri app and the Python scripts.

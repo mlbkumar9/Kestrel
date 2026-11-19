@@ -73,6 +73,12 @@ pub struct LiveStats {
 /// What to do when the queue finishes.
 pub const WHEN_DONE: [&str; 3] = ["Nothing", "Notify", "Open output folder"];
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct QueueSummary {
+    pub done: usize,
+    pub failed: usize,
+}
+
 #[derive(Debug, Default)]
 pub struct QueueState {
     pub jobs: Vec<QueueJob>,
@@ -222,6 +228,22 @@ impl QueueState {
             speed: sum(|stats| stats.speed),
             eta_seconds: eta,
         };
+    }
+
+    /// Finished and failed jobs, for the top bar's status pill.
+    pub fn summary(&self) -> QueueSummary {
+        QueueSummary {
+            done: self
+                .jobs
+                .iter()
+                .filter(|job| job.status == JobStatus::Done)
+                .count(),
+            failed: self
+                .jobs
+                .iter()
+                .filter(|job| matches!(job.status, JobStatus::Failed(_)))
+                .count(),
+        }
     }
 
     pub fn elapsed_seconds(&self) -> f64 {

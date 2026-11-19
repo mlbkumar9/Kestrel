@@ -44,7 +44,8 @@ fn main() {
                     window_min_size: Some(size(px(1040.0), px(640.0))),
                     titlebar: Some(TitlebarOptions {
                         title: Some("Kestrel".into()),
-                        ..Default::default()
+                        appears_transparent: true,
+                        traffic_light_position: Some(gpui::point(px(16.0), px(19.0))),
                     }),
                     ..Default::default()
                 },
