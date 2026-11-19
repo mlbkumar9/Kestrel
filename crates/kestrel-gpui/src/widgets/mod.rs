@@ -1,3 +1,17 @@
+pub mod button;
+pub mod checkbox;
+pub mod chip;
+pub mod dropdown;
+pub mod modal;
+pub mod progress;
+pub mod slider;
+pub mod table;
+pub mod tabs;
+pub mod text_input;
+pub mod toast;
+pub mod toggle;
+pub mod tooltip;
+
 use gpui::{Div, SharedString, Stateful, div, prelude::*, px};
 
 use crate::theme::Theme;

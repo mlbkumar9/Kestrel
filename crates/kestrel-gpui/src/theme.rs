@@ -20,6 +20,7 @@ pub struct Theme {
     pub warning: Rgba,
     pub danger: Rgba,
     pub on_accent: Rgba,
+    pub overlay: Rgba,
 }
 
 impl Theme {
@@ -39,6 +40,7 @@ impl Theme {
             warning: hex(0xf59e0b),
             danger: hex(0xef4444),
             on_accent: hex(0xffffff),
+            overlay: gpui::rgba(0x00000099),
         }
     }
 
@@ -52,6 +54,7 @@ impl Theme {
             muted_text: hex(0x71717a),
             hover: hex(0xe4e4e7),
             selected: hex(0xdbeafe),
+            overlay: gpui::rgba(0x18181b66),
             ..Self::dark()
         }
     }

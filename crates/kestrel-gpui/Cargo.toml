@@ -6,3 +6,4 @@ rust-version = "1.92"
 
 [dependencies]
 gpui = "0.2.2"
+unicode-segmentation = "1.12"

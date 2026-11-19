@@ -1,7 +1,6 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
-mod theme;
-mod widgets;
+use kestrel_gpui::{theme, widgets};
 
 use std::borrow::Cow;
 
@@ -267,6 +266,7 @@ impl Render for Kestrel {
 
 fn main() {
     Application::new().with_assets(Assets).run(|cx: &mut App| {
+        widgets::text_input::init(cx);
         if let Err(error) = cx
             .text_system()
             .add_fonts(vec![Cow::Borrowed(include_bytes!(
