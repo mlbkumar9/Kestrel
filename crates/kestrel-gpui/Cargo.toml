@@ -7,3 +7,8 @@ rust-version = "1.92"
 [dependencies]
 gpui = "0.2.2"
 unicode-segmentation = "1.12"
+async-channel = "2"
+dirs = "5"
+kestrel-core = { path = "../kestrel-core" }
+ron = "0.12.3"
+tempfile = "3"

@@ -1,6 +1,6 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
-use kestrel_gpui::{theme, widgets};
+use kestrel_gpui::{state::AppState, theme, widgets};
 
 use std::borrow::Cow;
 
@@ -88,8 +88,8 @@ impl Page {
     }
 }
 
-#[derive(Default)]
 struct Kestrel {
+    _state: gpui::Entity<AppState>,
     page: Page,
     light: bool,
     collapsed: bool,
@@ -286,7 +286,15 @@ fn main() {
                 }),
                 ..Default::default()
             },
-            |_, cx| cx.new(|_| Kestrel::default()),
+            |_, cx| {
+                let state = cx.new(AppState::new);
+                cx.new(|_| Kestrel {
+                    _state: state,
+                    page: Page::default(),
+                    light: false,
+                    collapsed: false,
+                })
+            },
         ) {
             eprintln!("Could not open the Kestrel window: {error}");
             cx.quit();
