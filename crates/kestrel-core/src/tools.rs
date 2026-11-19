@@ -349,13 +349,22 @@ mod priority_tests {
     #[cfg(unix)]
     #[test]
     fn spawned_process_runs_at_the_requested_niceness() {
-        for (priority, expected) in [(Priority::BelowNormal, "5"), (Priority::Low, "15")] {
+        let niceness = |priority: Priority| -> i32 {
             let mut command = command_with_priority(Path::new("sh"), priority);
             command.args(["-c", "ps -o ni= -p $$"]);
             let output = command.output().expect("sh runs");
+            String::from_utf8_lossy(&output.stdout)
+                .trim()
+                .parse()
+                .unwrap_or_else(|_| panic!("no niceness for {priority:?}"))
+        };
+        // `nice -n` adds to the niceness the test process already has (CI runners are not at 0).
+        let base = niceness(Priority::Normal);
+        for priority in [Priority::BelowNormal, Priority::Low] {
+            let increment = i32::from(priority.nice_increment().unwrap());
             assert_eq!(
-                String::from_utf8_lossy(&output.stdout).trim(),
-                expected,
+                niceness(priority),
+                (base + increment).min(19),
                 "{priority:?}"
             );
         }
