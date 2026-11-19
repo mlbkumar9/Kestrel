@@ -11,13 +11,13 @@ use crate::app::{Kestrel, Pick};
 use crate::ctl::InputCfg;
 use crate::state::Page;
 use crate::state::format::tool_version;
-use crate::state::remux::{FileEdits, TrackKind, track_rows};
+use crate::state::remux::{CHARSETS, FileEdits, TrackKind, source_ids, track_rows};
 use crate::widgets::{
     BtnKind, Col, TagKind, body_row, button, card, chip, field, field_label, header_row, icon,
     mono, page_title, section, section_title, segmented, tag,
 };
 
-const COLS: [Col; 8] = [
+const COLS: [Col; 9] = [
     Col::fixed(64.0),
     Col::fixed(44.0),
     Col::fixed(96.0),
@@ -26,6 +26,7 @@ const COLS: [Col; 8] = [
     Col::grow(2.0),
     Col::fixed(76.0),
     Col::fixed(76.0),
+    Col::fixed(72.0),
 ];
 
 const CONTAINERS: [Container; 4] = [
@@ -50,6 +51,64 @@ impl Kestrel {
         };
         let path = source.path.clone();
         change(self.remux.edits_for(&path, &meta));
+    }
+
+    /// Like [`Self::with_remux_edits`], with the probed metadata of the file shown.
+    fn with_remux_edits_meta<R>(
+        &mut self,
+        change: impl FnOnce(&mut FileEdits, &kestrel_core::mkv::MediaMetadata) -> R,
+    ) -> Option<R> {
+        let source = self.library.sources.get(self.remux_file)?;
+        let meta = source.metadata().cloned()?;
+        let path = source.path.clone();
+        Some(change(self.remux.edits_for(&path, &meta), &meta))
+    }
+
+    /// Move up and down buttons for the Order column. `enabled` is (can move up, can move down);
+    /// `on_move` receives true to move earlier.
+    fn order_buttons(
+        &self,
+        cx: &mut Context<Self>,
+        key: &str,
+        enabled: (bool, bool),
+        on_move: impl Fn(&mut Kestrel, bool) + Clone + 'static,
+    ) -> AnyElement {
+        let t = self.theme();
+        let one = |cx: &mut Context<Self>, earlier: bool, on: bool| {
+            let on_move = on_move.clone();
+            button(
+                format!("{key}-{}", if earlier { "up" } else { "down" }),
+                &t,
+                BtnKind::Ghost,
+                true,
+            )
+            .tooltip(crate::widgets::overlay::tooltip(if earlier {
+                "Move earlier in the output"
+            } else {
+                "Move later in the output"
+            }))
+            .child(icon(
+                if earlier {
+                    "chevron-up"
+                } else {
+                    "chevron-down"
+                },
+                12.0,
+                if on { t.muted } else { t.line2 },
+            ))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if on {
+                    on_move(this, earlier);
+                    cx.notify();
+                }
+            }))
+        };
+        div()
+            .flex()
+            .gap(px(2.0))
+            .child(one(cx, true, enabled.0))
+            .child(one(cx, false, enabled.1))
+            .into_any_element()
     }
 
     /// What core says about the selected files (or the file shown) for the chosen container:
@@ -216,7 +275,15 @@ impl Kestrel {
             edit_count = edits.change_count(meta);
             let track_rows = track_rows(meta);
             let added_count = edits.added.len();
-            for (index, (row, edit)) in track_rows.iter().zip(&edits.tracks).enumerate() {
+            let ids = source_ids(meta);
+            let skip = track_rows.len() - ids.len();
+            let output_order = edits.source_order(&ids);
+            // The video row stays first; the other rows follow the output order.
+            let display: Vec<usize> = (0..skip)
+                .chain(output_order.iter().map(|source| source + skip))
+                .collect();
+            for (position, index) in display.iter().copied().enumerate() {
+                let (row, edit) = (&track_rows[index], &edits.tracks[index]);
                 let kind = match row.kind {
                     TrackKind::Video => TagKind::Info,
                     TrackKind::Audio => TagKind::Acc,
@@ -254,7 +321,7 @@ impl Kestrel {
                         },
                     )
                     .into_any_element(),
-                    mono(index.to_string())
+                    mono(position.to_string())
                         .text_color(t.faint)
                         .into_any_element(),
                     tag(row.kind.label(), kind, &t).into_any_element(),
@@ -279,13 +346,29 @@ impl Kestrel {
                         },
                     )
                     .into_any_element(),
+                    if index < skip {
+                        div().into_any_element()
+                    } else {
+                        let source = index - skip;
+                        let place = output_order.iter().position(|s| *s == source).unwrap_or(0);
+                        self.order_buttons(
+                            cx,
+                            &format!("rmx-order-{index}"),
+                            (place > 0, place + 1 < output_order.len()),
+                            move |this, earlier| {
+                                this.with_remux_edits_meta(|edits, meta| {
+                                    edits.move_source(&source_ids(meta), source, earlier)
+                                });
+                            },
+                        )
+                    },
                 ];
                 rows.push(
                     body_row(
                         &t,
                         &COLS,
                         cells,
-                        added_count == 0 && index + 1 == track_rows.len(),
+                        added_count == 0 && position + 1 == display.len(),
                     )
                     .into_any_element(),
                 );
@@ -381,9 +464,79 @@ impl Kestrel {
                         },
                     )
                     .into_any_element(),
+                    self.order_buttons(
+                        cx,
+                        &format!("rmx-add-order-{added_index}"),
+                        (added_index > 0, added_index + 1 < added_count),
+                        move |this, earlier| {
+                            this.with_remux_edits(|edits| {
+                                edits.move_added(added_index, earlier);
+                            });
+                        },
+                    ),
                 ];
+                rows.push(body_row(&t, &COLS, cells, false).into_any_element());
+                // Delay and, for text subtitles, the text encoding of the file.
+                let offset = self.field_number(
+                    cx,
+                    window,
+                    format!("rmx-add-offset-{added_index}"),
+                    i64::from(added.offset_ms),
+                    InputCfg::default().compact().mono().ph("0"),
+                    move |this, value, _| {
+                        let value = value.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
+                        this.with_remux_edits(|edits| {
+                            if let Some(file) = edits.added.get_mut(added_index) {
+                                file.offset_ms = value;
+                            }
+                        });
+                    },
+                );
+                let charset = added.is_text_subtitle().then(|| {
+                    self.select(
+                        cx,
+                        format!("rmx-add-charset-{added_index}"),
+                        CHARSETS,
+                        added.charset_index(),
+                        true,
+                        move |this, pick, _| {
+                            this.with_remux_edits(|edits| {
+                                if let Some(file) = edits.added.get_mut(added_index) {
+                                    file.charset = CHARSETS[pick].to_owned();
+                                }
+                            });
+                        },
+                    )
+                });
                 rows.push(
-                    body_row(&t, &COLS, cells, added_index + 1 == added_count).into_any_element(),
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(10.0))
+                        .pl(px(64.0))
+                        .pr(px(14.0))
+                        .pb(px(10.0))
+                        .text_size(px(12.0))
+                        .text_color(t.muted)
+                        .when(added_index + 1 < added_count, |this| {
+                            this.border_b_1().border_color(t.line)
+                        })
+                        .child(format!("{} offset (ms)", added.file_name()))
+                        .child(div().w(px(96.0)).child(offset))
+                        .child(
+                            div()
+                                .text_color(t.faint)
+                                .child("Positive delays, negative advances"),
+                        )
+                        .children(charset.map(|select| {
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(8.0))
+                                .child("Charset")
+                                .child(div().w(px(150.0)).child(select))
+                        }))
+                        .into_any_element(),
                 );
             }
         }
@@ -457,7 +610,7 @@ impl Kestrel {
                 &t,
                 &COLS,
                 &[
-                    "Keep", "#", "Type", "Codec", "Language", "Title", "Default", "Forced",
+                    "Keep", "#", "Type", "Codec", "Language", "Title", "Default", "Forced", "Order",
                 ],
             ))
             .children(rows)

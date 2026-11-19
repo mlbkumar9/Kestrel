@@ -219,6 +219,12 @@ impl Kestrel {
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.load_preset_and_open(index, cx);
                         }))
+                        .on_mouse_down(
+                            gpui::MouseButton::Right,
+                            cx.listener(move |this, event: &gpui::MouseDownEvent, _, cx| {
+                                this.open_preset_menu(index, event.position, cx);
+                            }),
+                        )
                 }));
 
         let tool_row = |name: &'static str, tool: &Option<Tool>| {

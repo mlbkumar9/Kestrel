@@ -1231,6 +1231,7 @@ impl TranscodeForm {
                     forced: row.forced_only,
                     offset_ms: i64::from(row.offset_ms),
                     charset: charset.clone(),
+                    codec: None,
                     burn_in: row.burn,
                 })
             })

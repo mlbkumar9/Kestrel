@@ -201,7 +201,10 @@ impl Kestrel {
                             PRIORITIES,
                             self.settings.priority,
                             false,
-                            |this, index, _| this.settings.priority = index,
+                            |this, index, _| {
+                                this.settings.priority = index;
+                                this.settings.apply_priority();
+                            },
                         ),
                     ))
                     .child(self.check(
