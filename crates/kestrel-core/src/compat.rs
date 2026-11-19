@@ -1,5 +1,5 @@
 use crate::formats::Container;
-use crate::mkv::{self, MediaMetadata, TrackInfo};
+use crate::mkv::{self, MediaMetadata};
 use crate::transcode::{JobSettings, VideoSettings};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -107,19 +107,15 @@ pub fn job_warnings(metadata: &MediaMetadata, settings: &JobSettings) -> Vec<Str
         ));
     }
 
-    let selected_audio = selected_tracks(&metadata.audio_tracks, &settings.audio.languages, true);
+    let selected_audio = mkv::matching_tracks(&metadata.audio_tracks, &settings.audio.languages);
     let audio_tracks = if selected_audio.is_empty() && !metadata.audio_tracks.is_empty() {
         metadata.audio_tracks.iter().collect::<Vec<_>>()
     } else {
         selected_audio
     };
-    let requested_languages = mkv::normalize_languages(&settings.audio.languages);
-    if !settings.audio.languages.is_empty()
+    if !mkv::normalize_languages(&settings.audio.languages).is_empty()
         && !metadata.audio_tracks.is_empty()
-        && metadata
-            .audio_tracks
-            .iter()
-            .all(|track| !requested_languages.contains(&track.language.to_ascii_lowercase()))
+        && mkv::matching_tracks(&metadata.audio_tracks, &settings.audio.languages).is_empty()
     {
         warnings.push("No matching audio languages found; keeping all audio tracks".to_owned());
     }
@@ -130,35 +126,14 @@ pub fn job_warnings(metadata: &MediaMetadata, settings: &JobSettings) -> Vec<Str
     }
 
     if settings.subtitles.include {
-        for track in selected_tracks(
-            &metadata.subtitle_tracks,
-            &settings.subtitles.languages,
-            true,
-        ) {
+        for track in mkv::matching_tracks(&metadata.subtitle_tracks, &settings.subtitles.languages)
+        {
             if let StreamPlan::Drop(reason) = subtitle_plan(&track.codec_id, settings.container) {
                 warnings.push(reason);
             }
         }
     }
     warnings
-}
-
-fn selected_tracks<'a>(
-    tracks: &'a [TrackInfo],
-    languages: &[String],
-    empty_means_all: bool,
-) -> Vec<&'a TrackInfo> {
-    if languages.is_empty() && empty_means_all {
-        return tracks.iter().collect();
-    }
-    tracks
-        .iter()
-        .filter(|track| {
-            languages
-                .iter()
-                .any(|language| language.trim().eq_ignore_ascii_case(&track.language))
-        })
-        .collect()
 }
 
 fn normalize(codec_id: &str) -> String {
