@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [4.0.1] - 2026-11-20
+
+### Fixed
+- The Windows installer (.msi) no longer fails with error 2229; the 4.0.0 installer was built with wixl 0.106, whose Upgrade table Windows Installer cannot load
+
+### Removed
+- The legacy Tauri + React app (`REMUX_Tauri/`); no release built it, and its dependencies carried most of the repository's open security alerts
+
 ## [4.0.0] - 2026-11-19
 
 Kestrel 4.0 is a new desktop app (`kestrel-gpui`, built with GPUI) on a reworked `kestrel-core`. The egui app, the Tauri app and the Python scripts stay in the repository as legacy entry points.
