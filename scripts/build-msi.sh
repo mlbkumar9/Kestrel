@@ -123,10 +123,18 @@ wixl -a x64 \
   -o "$output_msi" \
   "$temp_wxs"
 
+# wixl 0.106 (Ubuntu 26.04, Debian 13) writes an Upgrade table that Windows Installer
+# cannot load (error 2229 at launch). Re-importing the same rows through msibuild
+# rewrites the table in a form Windows accepts.
+upgrade_idt="$(mktemp --suffix=.idt)"
+trap 'rm -f "$temp_wxs" "$upgrade_idt"' EXIT
+msiinfo export "$output_msi" Upgrade > "$upgrade_idt"
+msibuild "$output_msi" -i "$upgrade_idt"
+
 # wixl does not understand <RemoveFile>, so add the rows that delete the shortcuts
 # the LangMux 1.0.0 MSI leaves behind when a major upgrade removes it.
 remove_file_idt="$(mktemp --suffix=.idt)"
-trap 'rm -f "$temp_wxs" "$remove_file_idt"' EXIT
+trap 'rm -f "$temp_wxs" "$upgrade_idt" "$remove_file_idt"' EXIT
 msiinfo export "$output_msi" RemoveFile > "$remove_file_idt"
 printf '%s\t%s\t%s\t%s\t%s\n' \
   RemoveLegacyUninstallShortcut LegacyLangMuxCleanup 'UNINST~1.LNK|Uninstall LangMux.lnk' LegacyLangMuxFolder 1 \
@@ -140,7 +148,7 @@ msibuild "$output_msi" -i "$remove_file_idt"
 # wixl also ignores <Condition> on components, so limit the cleanup to installs that
 # replace the LangMux 1.0.0 MSI (ProductCode {B8A9B972-...}); a stand-alone LangMux keeps its shortcuts.
 component_idt="$(mktemp --suffix=.idt)"
-trap 'rm -f "$temp_wxs" "$remove_file_idt" "$component_idt"' EXIT
+trap 'rm -f "$temp_wxs" "$upgrade_idt" "$remove_file_idt" "$component_idt"' EXIT
 msiinfo export "$output_msi" Component > "$component_idt"
 python3 - "$component_idt" <<'PYTHON'
 import sys
