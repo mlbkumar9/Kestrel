@@ -5,9 +5,8 @@
 - `crates/kestrel-app/` is the Kestrel desktop application: the eframe/egui UI and eframe storage adapter.
 - `crates/kestrel-core/` is the UI-independent engine, persisted settings, workers, unit tests and integration fixtures.
 - `crates/kestrel-gpui/` is the GPUI desktop shell with local widgets and themes.
-- `REMUX_Tauri/` is the existing Tauri + React desktop app.
 - `REMUX Python Scripts/` contains the Tkinter, CustomTkinter, CLI, and Flask entrypoints.
-- Keep changes to the native app isolated from the existing Tauri and Python applications unless a task explicitly asks otherwise.
+- Keep changes to the native app isolated from the existing Python applications unless a task explicitly asks otherwise.
 
 ## Native app commands
 

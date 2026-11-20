@@ -29,4 +29,4 @@ Kestrel drives FFmpeg and FFprobe for transcodes and for every file that is not 
 
 ## Older interfaces
 
-The egui app, the Tauri app and the Python scripts are described in [Legacy tools](LEGACY.md).
+The egui app and the Python scripts are described in [Legacy tools](LEGACY.md).

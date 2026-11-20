@@ -105,4 +105,4 @@ The v3.0.x releases on <https://github.com/mlbkumar9/Kestrel/releases> ship the 
 - **Windows EXE**: install FFmpeg and MKVToolNix separately.
 - **macOS and Linux**: binaries that use tools installed on the system.
 
-See [Legacy tools](LEGACY.md) for the egui app, the Tauri app and the Python scripts.
+See [Legacy tools](LEGACY.md) for the egui app and the Python scripts.

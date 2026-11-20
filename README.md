@@ -179,7 +179,6 @@ Kestrel/
     kestrel-gpui/    Kestrel 4.0 desktop app (GPUI)
     kestrel-app/     Earlier egui app (package kestrel-media), kept as a legacy entry point
   REMUX Python Scripts/   Tkinter, CustomTkinter, CLI and Flask tools (legacy)
-  REMUX_Tauri/            Tauri + React app (legacy)
   docs/                   Guides and reference pages
   scripts/                Release packaging helpers
   vendor/xattr/           Patched dependency for GPUI on Linux
@@ -187,7 +186,7 @@ Kestrel/
 
 ## Legacy tools
 
-The egui app (`cargo run -p kestrel-media --release`), the Tauri app and the Python scripts still live in the repository and still work as before. They are not part of 4.0. See [docs/LEGACY.md](docs/LEGACY.md).
+The egui app (`cargo run -p kestrel-media --release`) and the Python scripts still live in the repository and still work as before. They are not part of 4.0. See [docs/LEGACY.md](docs/LEGACY.md).
 
 ## Roadmap
 

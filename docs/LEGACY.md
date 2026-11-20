@@ -1,6 +1,8 @@
 # Legacy tools
 
-This page covers the entry points that predate Kestrel 4.0: the egui app, the Tauri app and the Python scripts. They remain in the repository and are not part of the 4.0 app. Back to the [README](../README.md).
+This page covers the entry points that predate Kestrel 4.0: the egui app and the Python scripts. They remain in the repository and are not part of the 4.0 app. Back to the [README](../README.md).
+
+The Tauri + React app (`REMUX_Tauri/`) was removed on 2026-11-20; its last version is in commit `3fe3cd5`.
 
 ## egui app (`kestrel-media`)
 
@@ -11,22 +13,6 @@ cargo run -p kestrel-media --release
 ```
 
 Build a release binary with `cargo build -p kestrel-media --release`. The binary is `target/release/kestrel` (`kestrel.exe` on Windows). The Windows release packages bundle FFmpeg and MKVToolNix; macOS and Linux use the tools on `PATH` or in the platform defaults.
-
-## Tauri app (`REMUX_Tauri/`)
-
-A React desktop app for batch remuxing with MKVToolNix. It needs Node.js 18 or newer, Rust and `mkvmerge`.
-
-```bash
-cd REMUX_Tauri
-npm install
-npm run tauri dev      # development (Vite on http://localhost:1420)
-npm run tauri build    # production installer
-```
-
-1. Choose an input folder (or drag and drop onto the window).
-2. Set the output folder (it defaults to `<input>/remuxed` when empty).
-3. Under Settings, set the audio and subtitle languages as comma-separated ISO codes.
-4. Click Start Batch (Space). Esc stops the batch and kills the current file's `mkvmerge` process.
 
 ## Python scripts (`REMUX Python Scripts/`)
 
@@ -64,9 +50,7 @@ These tools use three-letter ISO 639-2 codes: `eng`, `jpn`, `spa`, `fre`/`fra`, 
 
 | Problem | Fix |
 |---|---|
-| `mkvmerge not found` in Tauri or Python | Install MKVToolNix and add it to `PATH`, or use the default `C:\Program Files\MKVToolNix\` on Windows |
+| `mkvmerge not found` in Python | Install MKVToolNix and add it to `PATH`, or use the default `C:\Program Files\MKVToolNix\` on Windows |
 | No matching audio | Check that the language codes match the tags shown after scanning |
-| Tauri dev fails | Run `npm install` in `REMUX_Tauri` and confirm Node.js and Rust are installed |
-| Tauri blank window | Confirm Vite is on port 1420 (`npm run tauri dev` starts both) |
 | Empty output file | Check disk space and write permissions on the output folder |
 | Flask cancel seems stuck | Cancel sets a flag and kills the active `mkvmerge`; wait for the current file to finish aborting |
