@@ -128,28 +128,28 @@ version_one_code = "e110f64d-5c3d-5e2d-9b02-53217f2caea5"
 version_two_code = "bba02aaf-78ca-41e3-8586-b84b471755ed"
 if len(upgrade_rows) != 3:
     raise SystemExit(f"Expected three Upgrade rows; got {upgrade_rows}")
-if any(
-    row[0].strip("{}").casefold() != version_one_code
-    for row in upgrade_rows[:2]
-):
-    raise SystemExit(
-        "Upgrade rows 1 and 2 must use the v1.0.0 UpgradeCode; "
-        f"got {upgrade_rows[:2]}"
-    )
-version_two = upgrade_rows[2]
-if (
-    version_two[0].strip("{}").casefold() != version_two_code
-    or version_two[6] != "LEGACY_V2_FOUND"
-):
-    raise SystemExit(
-        "Upgrade row 3 must use the v2.0.0 UpgradeCode and LEGACY_V2_FOUND; "
-        f"got {version_two}"
-    )
-
+# Row order is not checked: build-msi.sh re-imports this table through msibuild
+# (wixl 0.106's own layout fails on Windows with error 2229), which reorders it.
 version_one_rows = [
     row for row in upgrade_rows
     if row[0].strip("{}").casefold() == version_one_code
 ]
+version_two_rows = [
+    row for row in upgrade_rows
+    if row[0].strip("{}").casefold() == version_two_code
+]
+if len(version_one_rows) != 2 or len(version_two_rows) != 1:
+    raise SystemExit(
+        "Upgrade table needs two v1.0.0 rows and one v2.0.0 row; "
+        f"got {upgrade_rows}"
+    )
+version_two = version_two_rows[0]
+if version_two[6] != "LEGACY_V2_FOUND":
+    raise SystemExit(
+        "The v2.0.0 Upgrade row must set LEGACY_V2_FOUND; "
+        f"got {version_two}"
+    )
+
 if {int(row[4]) for row in version_one_rows} != {1, 2}:
     raise SystemExit(
         "v1.0.0 Upgrade rows should have attributes 1 and 2; "
