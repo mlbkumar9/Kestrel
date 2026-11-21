@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [4.1.1] - 2026-11-21
 
 ### Changed
 - Documentation screenshots retaken for 4.1 at the display's native resolution, with close-ups of the Metrics results, the source chips, the track editor and the path fields
