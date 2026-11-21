@@ -16,21 +16,21 @@
 
 Kestrel 4.0 is a desktop app written in Rust with the GPUI toolkit. It drives FFmpeg and MKVToolNix on your machine. Files never leave your disk.
 
-Download Kestrel 4.0 from the [v4.0.2 release](https://github.com/mlbkumar9/Kestrel/releases/tag/v4.0.2), or [build it from source](#build-from-source). The [Download](#download) section says which file to pick.
+Download Kestrel 4.1 from the [v4.1.0 release](https://github.com/mlbkumar9/Kestrel/releases/tag/v4.1.0), or [build it from source](#build-from-source). The [Download](#download) section says which file to pick.
 
 ## Download
 
-Get the files from the [v4.0.2 release](https://github.com/mlbkumar9/Kestrel/releases/tag/v4.0.2). Pick one per system:
+Get the files from the [v4.1.0 release](https://github.com/mlbkumar9/Kestrel/releases/tag/v4.1.0). Pick one per system:
 
 | System | File | Notes |
 |---|---|---|
-| Windows 11 | `Kestrel-v4.0.2-windows-x64.zip` | Unzip and run `Kestrel.exe`. FFmpeg and mkvmerge are bundled in the `tools` folder. |
-| Windows 11 | `Kestrel-v4.0.2-windows-x64.msi` | Installer with the same bundled tools. |
-| Windows 11 | `Kestrel-v4.0.2-windows-x64.exe` | The program alone. Install FFmpeg and MKVToolNix yourself. |
-| macOS, Apple silicon | `Kestrel-v4.0.2-macos-aarch64.zip` | Ad-hoc signed, so Gatekeeper asks before the first launch. Uses FFmpeg and MKVToolNix from the system. |
-| macOS, Intel | `Kestrel-v4.0.2-macos-x86_64.zip` | Same as above. |
-| Linux | `Kestrel-v4.0.2-linux-x64.tar.gz` | Uses FFmpeg and MKVToolNix from the system. |
-| Windows 11, earlier app | `Kestrel-v4.0.2-legacy-egui-windows-x64.zip` | The egui app, kept for reference. |
+| Windows 11 | `Kestrel-v4.1.0-windows-x64.zip` | Unzip and run `Kestrel.exe`. FFmpeg and mkvmerge are bundled in the `tools` folder. |
+| Windows 11 | `Kestrel-v4.1.0-windows-x64.msi` | Installer with the same bundled tools. |
+| Windows 11 | `Kestrel-v4.1.0-windows-x64.exe` | The program alone. Install FFmpeg and MKVToolNix yourself. |
+| macOS, Apple silicon | `Kestrel-v4.1.0-macos-aarch64.zip` | Ad-hoc signed, so Gatekeeper asks before the first launch. Uses FFmpeg and MKVToolNix from the system. |
+| macOS, Intel | `Kestrel-v4.1.0-macos-x86_64.zip` | Same as above. |
+| Linux | `Kestrel-v4.1.0-linux-x64.tar.gz` | Uses FFmpeg and MKVToolNix from the system. |
+| Windows 11, earlier app | `Kestrel-v4.1.0-legacy-egui-windows-x64.zip` | The egui app, kept for reference. |
 
 `SHA256SUMS.txt` lists the checksum of every file. Compare it with `Get-FileHash <file>` on Windows or `sha256sum <file>` elsewhere.
 
