@@ -31,22 +31,25 @@ The Metrics page becomes real. It measures an encode against its source with FFm
 
 - Metrics: VMAF, PSNR, SSIM and XPSNR.
 - One reference compared with many encodes in one run.
-- Per-frame graphs you can zoom (not in the first 4.1 build; the per-frame numbers are available as CSV).
 - VMAF model chosen automatically from the resolution.
 - Analysis of a partial range of the video.
 - Export of the worst frames as PNG images.
 - CSV export, per frame and as a summary.
 - A command log for every analysis.
 
-Also planned for 4.1:
+Also in 4.1:
 
-- A type and font rework across the UI, designed in the canvas first.
-- A light-theme top bar screenshot for the docs.
+- Inter is bundled with the app; numbers use tabular figures and monospace is kept for commands and logs.
+- An automated upgrade test from v4.0.0 in CI.
+- The Library codec label and the Destination and Folder fields are no longer cut off.
 
 ## Later
 
 Candidates, not scheduled.
 
+- Per-frame metric graphs you can zoom (4.1 exports the per-frame numbers as CSV).
+- A type refresh with Geist and Geist Mono.
+- A light-theme top bar screenshot for the docs.
 - Tool path overrides.
 - Watch folders that process new files automatically.
 - Signed and notarised macOS builds, Linux packages, and a signed Windows installer.
