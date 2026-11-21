@@ -15,6 +15,7 @@ Kestrel 4.1 adds video quality metrics, bundles the Inter typeface and tests upg
 - The Metrics page and its sidebar entry no longer say "coming in 4.1"
 
 ### Fixed
+- Upgrading with the Windows installer no longer leaves Kestrel without `Kestrel.exe` and its bundled tools. The 4.0 installers recorded no file versions, so an upgrade kept the old files while planning and then deleted them with the old version. If a 4.0.x upgrade left Kestrel broken, run the 4.1.0 installer again or reinstall.
 - The video codec column in the Library keeps enough width for labels such as `HEVC 10b 3840x2160 HDR` and shows the full label in a tooltip
 - The Destination field (Remux) and Folder field (Transcode) show a long path as `start...end` while they are not focused, with the full path in a tooltip
 

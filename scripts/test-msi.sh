@@ -161,6 +161,14 @@ if int(version_two[4]) != 256:
         f"got {version_two}"
     )
 
+# wixl leaves File.Version empty; without REINSTALLMODE "a" a major upgrade keeps the
+# installed exe during costing and RemoveExistingProducts then deletes it.
+properties = {row[0]: row[1] for row in exported_rows("Property")}
+if properties.get("REINSTALLMODE") != "amus":
+    raise SystemExit(
+        f"REINSTALLMODE must be amus; got {properties.get('REINSTALLMODE')!r}"
+    )
+
 print(
     "PASS: MSI contains 10 standard files, libfixture.dll, and LIBUPPER.DLL "
     "(12 files total)."

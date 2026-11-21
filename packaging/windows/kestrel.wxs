@@ -11,6 +11,9 @@
     <MajorUpgrade DowngradeErrorMessage="A newer version of Kestrel is already installed." />
     <Media Id="1" Cabinet="Kestrel.cab" EmbedCab="yes" />
     <Icon Id="KestrelIcon" SourceFile="$(var.StageDir)/kestrel.ico" />
+    <!-- wixl leaves File.Version empty, so a major upgrade would keep the old versioned exe during costing and
+         then delete it when RemoveExistingProducts runs. "a" reinstalls every file regardless of version. -->
+    <Property Id="REINSTALLMODE" Value="amus" />
     <Property Id="ARPPRODUCTICON" Value="KestrelIcon" />
 
     <Feature Id="ProductFeature" Title="Kestrel" Level="1">
