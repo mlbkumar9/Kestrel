@@ -62,3 +62,5 @@ The sidebar logo is `assets/kestrel-mark.svg` when that file exists at build tim
 | `KESTREL_DEBUG_PALETTE` | `1` opens the command palette |
 | `KESTREL_DEBUG_QUEUE` | `1` queues the loaded files once probed, `run` also starts the queue |
 | `KESTREL_DEBUG_LEGACY_BANNER` | `1` shows the legacy-install banner |
+| `KESTREL_DEBUG_METRICS` | `reference\|encode1\|encode2...` pre-fills the Metrics page |
+| `KESTREL_DEBUG_METRICS_RUN` | `1` starts the Metrics run once the files are set |

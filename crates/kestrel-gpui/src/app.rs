@@ -110,6 +110,10 @@ pub struct DebugOptions {
     /// Retitles the second audio track of each source and makes it the default one, so the
     /// queued remux carries a track edit.
     pub edit: bool,
+    /// Reference and encodes the Metrics page starts with.
+    pub metrics: Option<(PathBuf, Vec<PathBuf>)>,
+    /// Starts the Metrics run as soon as the files are set.
+    pub metrics_run: bool,
 }
 
 impl DebugOptions {
@@ -121,6 +125,7 @@ impl DebugOptions {
             || self.palette
             || self.queue > 0
             || self.edit
+            || self.metrics.is_some()
     }
 
     pub fn from_env() -> Self {
@@ -144,6 +149,9 @@ impl DebugOptions {
                 _ => 0,
             },
             edit: var("KESTREL_DEBUG_EDIT").as_deref() == Some("1"),
+            metrics: var("KESTREL_DEBUG_METRICS")
+                .and_then(|list| crate::state::metrics::parse_debug_files(&list)),
+            metrics_run: var("KESTREL_DEBUG_METRICS_RUN").as_deref() == Some("1"),
         }
     }
 }
@@ -303,6 +311,13 @@ impl Kestrel {
         app.detect_legacy();
         if !paths.is_empty() {
             app.add_paths(paths, cx);
+        }
+        if let Some((reference, encodes)) = debug.metrics {
+            app.metrics.set_reference(reference);
+            app.metrics.add_distorted(encodes);
+            if debug.metrics_run {
+                app.start_metrics(cx);
+            }
         }
         if debug.palette {
             app.open_palette(window, cx);

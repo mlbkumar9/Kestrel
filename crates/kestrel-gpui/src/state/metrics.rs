@@ -119,6 +119,18 @@ impl ResultRow {
     }
 }
 
+/// Debug hook `KESTREL_DEBUG_METRICS`: `reference|encode1|encode2...`. Empty parts are skipped;
+/// without a reference there is nothing to set.
+pub fn parse_debug_files(list: &str) -> Option<(PathBuf, Vec<PathBuf>)> {
+    let mut parts = list
+        .split('|')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .map(PathBuf::from);
+    let reference = parts.next()?;
+    Some((reference, parts.collect()))
+}
+
 /// Range from the two text fields, in seconds. Both empty (or 0 and empty) means the whole clip.
 pub fn parse_range(start: &str, duration: &str) -> Result<Option<MetricRange>, String> {
     let seconds = |text: &str, what: &str| -> Result<Option<f64>, String> {
@@ -394,6 +406,23 @@ mod tests {
             files,
             commands: vec!["ffmpeg a".to_owned()],
         }
+    }
+
+    #[test]
+    fn debug_file_list_splits_on_bars() {
+        assert_eq!(parse_debug_files(""), None);
+        assert_eq!(parse_debug_files(" | "), None);
+        assert_eq!(
+            parse_debug_files("ref.mkv"),
+            Some((PathBuf::from("ref.mkv"), Vec::new()))
+        );
+        assert_eq!(
+            parse_debug_files("ref.mkv| a.mkv ||b.mp4"),
+            Some((
+                PathBuf::from("ref.mkv"),
+                vec![PathBuf::from("a.mkv"), PathBuf::from("b.mp4")]
+            ))
+        );
     }
 
     #[test]
