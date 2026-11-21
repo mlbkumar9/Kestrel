@@ -93,6 +93,11 @@ jobs:
           name: gpui-windows-release
           path: target/release/kestrel-gpui.exe
           if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gpui-windows-package
+          path: dist/Kestrel-ci-windows-x64.zip
+          if-no-files-found: error
 
   gpui-unix:
     name: GPUI ${{ matrix.name }}
@@ -170,6 +175,7 @@ jobs:
   msi:
     name: Windows MSI packaging
     runs-on: ubuntu-latest
+    needs: gpui-windows
     steps:
       - uses: actions/checkout@v4
       - name: Install MSI tooling
@@ -178,3 +184,57 @@ jobs:
           sudo apt-get install -y msitools wixl
       - name: Test MSI packaging
         run: scripts/test-msi.sh
+      # Real MSI from the CI-built exe and bundled tools, for the upgrade test below.
+      - uses: actions/download-artifact@v4
+        with:
+          name: gpui-windows-package
+          path: package
+      - name: Build MSI from the CI package
+        run: |
+          set -euo pipefail
+          version="$(grep -m1 '^version' crates/kestrel-gpui/Cargo.toml | cut -d'"' -f2)"
+          mkdir -p stage dist
+          unzip -q package/Kestrel-ci-windows-x64.zip -d stage
+          ./scripts/build-msi.sh stage "$version" "dist/Kestrel-ci-windows-x64.msi"
+          echo "$version" > dist/version.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ci-windows-msi
+          path: |
+            dist/Kestrel-ci-windows-x64.msi
+            dist/version.txt
+          if-no-files-found: error
+
+  msi-upgrade:
+    name: Windows MSI upgrade from 4.0.0
+    runs-on: windows-latest
+    needs: msi
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ci-windows-msi
+          path: new
+      - name: Download the published 4.0.0 MSI
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download v4.0.0 -R ${{ github.repository }} -p "Kestrel-v4.0.0-windows-x64.msi" --dir old
+          if ($LASTEXITCODE -ne 0) { throw "gh release download failed" }
+      - name: Upgrade from 4.0.0
+        shell: pwsh
+        run: |
+          $version = (Get-Content new/version.txt -Raw).Trim()
+          ./scripts/test-msi-upgrade.ps1 `
+            -OldMsi "old/Kestrel-v4.0.0-windows-x64.msi" `
+            -NewMsi "new/Kestrel-ci-windows-x64.msi" `
+            -ExpectedVersion $version `
+            -LogDirectory "msi-upgrade-logs"
+      - name: Upload msiexec logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: msi-upgrade-logs
+          path: msi-upgrade-logs
+          if-no-files-found: warn

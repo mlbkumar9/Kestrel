@@ -71,6 +71,11 @@ pub struct TextInput {
     pub mono: bool,
     pub numeric: bool,
     pub disabled: bool,
+    /// Shows a path-like value as `start...end` while the field is not focused and the
+    /// text is wider than the box. Focusing the field shows and edits the full text.
+    pub middle_ellipsis: bool,
+    /// Whether the last paint showed the shortened text.
+    ellipsized: bool,
     /// Draws no box, for inputs embedded in another container such as the palette.
     pub bare: bool,
     pub height: f32,
@@ -95,6 +100,8 @@ impl TextInput {
             mono: false,
             numeric: false,
             disabled: false,
+            middle_ellipsis: false,
+            ellipsized: false,
             bare: false,
             height: 32.0,
             font_size: 13.0,
@@ -253,6 +260,10 @@ impl TextInput {
         };
         if self.content.is_empty() {
             return 0;
+        }
+        if self.ellipsized {
+            // The shortened text is on screen; a click lands the caret at the end.
+            return self.content.len();
         }
         line.closest_index_for_x(position.x - bounds.left() + self.scroll_x)
     }
@@ -446,6 +457,8 @@ struct TextElement {
 
 struct Prepaint {
     line: Option<ShapedLine>,
+    /// Shortened line painted instead of `line` when the field shows `start...end`.
+    shown: Option<ShapedLine>,
     cursor: Option<PaintQuad>,
     selection: Option<PaintQuad>,
     scroll_x: Pixels,
@@ -457,6 +470,41 @@ impl IntoElement for TextElement {
     fn into_element(self) -> Self::Element {
         self
     }
+}
+
+const ELLIPSIS: char = '\u{2026}';
+
+/// `text` cut to `keep` characters around an ellipsis. A third of them stay at the start and
+/// the rest at the end, so a path keeps its root and its last folder or file name.
+pub fn middle_ellipsis(text: &str, keep: usize) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if keep >= chars.len() {
+        return text.to_owned();
+    }
+    let head = keep / 3;
+    let tail = keep - head;
+    let mut out: String = chars[..head].iter().collect();
+    out.push(ELLIPSIS);
+    out.extend(&chars[chars.len() - tail..]);
+    out
+}
+
+/// The longest [`middle_ellipsis`] of `text` that `fits`; the lone ellipsis if none does.
+/// `text` itself is returned when it already fits.
+pub fn fit_middle_ellipsis(text: &str, fits: impl Fn(&str) -> bool) -> String {
+    if fits(text) {
+        return text.to_owned();
+    }
+    let (mut low, mut high) = (0, text.chars().count());
+    while low < high {
+        let mid = (low + high).div_ceil(2);
+        if fits(&middle_ellipsis(text, mid)) {
+            low = mid;
+        } else {
+            high = mid - 1;
+        }
+    }
+    middle_ellipsis(text, low)
 }
 
 impl Element for TextElement {
@@ -496,6 +544,8 @@ impl Element for TextElement {
         let theme = *cx.global::<Theme>();
         let input = self.input.read(cx);
         let content = input.content.clone();
+        let content_is_empty = content.is_empty();
+        let full_text = content.to_string();
         let selected = input.selected.clone();
         let cursor = input.cursor();
         let style = window.text_style();
@@ -519,6 +569,31 @@ impl Element for TextElement {
             .text_system()
             .shape_line(display, font_size, &[run], None);
 
+        let shorten = input.middle_ellipsis
+            && !input.disabled
+            && !content_is_empty
+            && !input.focus_handle.is_focused(window)
+            && line.width > bounds.size.width;
+        let shown = shorten.then(|| {
+            let shape = |text: &str| {
+                let run = TextRun {
+                    len: text.len(),
+                    font: style.font(),
+                    color: color.into(),
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                };
+                window
+                    .text_system()
+                    .shape_line(text.to_owned().into(), font_size, &[run], None)
+            };
+            let text = fit_middle_ellipsis(&full_text, |candidate| {
+                shape(candidate).width <= bounds.size.width
+            });
+            shape(&text)
+        });
+
         let mut scroll_x = input.scroll_x;
         let cursor_x = line.x_for_index(cursor);
         let width = bounds.size.width;
@@ -528,11 +603,13 @@ impl Element for TextElement {
         if cursor_x < scroll_x {
             scroll_x = cursor_x;
         }
-        if line.width <= width {
+        if line.width <= width || shown.is_some() {
             scroll_x = px(0.0);
         }
         let origin_x = bounds.left() - scroll_x;
-        let (selection, cursor_quad) = if selected.is_empty() {
+        let (selection, cursor_quad) = if shown.is_some() {
+            (None, None)
+        } else if selected.is_empty() {
             (
                 None,
                 Some(fill(
@@ -557,6 +634,7 @@ impl Element for TextElement {
         };
         Prepaint {
             line: Some(line),
+            shown,
             cursor: cursor_quad,
             selection,
             scroll_x,
@@ -582,12 +660,14 @@ impl Element for TextElement {
             );
         }
         let line = prepaint.line.take();
+        let shown = prepaint.shown.take();
         let selection = prepaint.selection.take();
         let cursor = prepaint.cursor.take();
         let scroll_x = prepaint.scroll_x;
         let line_height = window.line_height();
         let focused = focus_handle.is_focused(window);
-        let painted = line.clone();
+        let ellipsized = shown.is_some();
+        let painted = shown.or_else(|| line.clone());
         window.with_content_mask(Some(ContentMask { bounds }), |window| {
             if let Some(selection) = selection {
                 window.paint_quad(selection);
@@ -607,6 +687,7 @@ impl Element for TextElement {
         });
         self.input.update(cx, |input, _| {
             input.last_layout = line;
+            input.ellipsized = ellipsized;
             input.last_bounds = Some(bounds);
             input.scroll_x = scroll_x;
         });
@@ -672,5 +753,40 @@ impl Render for TextInput {
                     .items_center()
                     .child(TextElement { input: cx.entity() }),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn middle_ellipsis_keeps_the_start_and_the_end() {
+        let path = "D:/Media/Movies/Some Long Folder/Season 01/Episode.mkv";
+        assert_eq!(middle_ellipsis(path, 12), "D:/M\u{2026}sode.mkv");
+    }
+
+    #[test]
+    fn middle_ellipsis_leaves_short_text_alone_and_cuts_on_characters() {
+        assert_eq!(middle_ellipsis("abc", 3), "abc");
+        assert_eq!(middle_ellipsis("abc", 9), "abc");
+        assert_eq!(middle_ellipsis("", 0), "");
+        let text = "\u{e9}".repeat(9);
+        assert_eq!(
+            middle_ellipsis(&text, 6),
+            format!("\u{e9}\u{e9}\u{2026}{}", "\u{e9}".repeat(4))
+        );
+    }
+
+    #[test]
+    fn fit_picks_the_longest_candidate_that_fits() {
+        let path = "C:/Users/Someone/Videos/Output/Season 02";
+        let fits = |text: &str| text.chars().count() <= 20;
+        let shown = fit_middle_ellipsis(path, fits);
+        assert_eq!(shown.chars().count(), 20);
+        assert!(shown.starts_with("C:/Use"));
+        assert!(shown.ends_with("Season 02"));
+        assert_eq!(fit_middle_ellipsis("short", fits), "short");
+        assert_eq!(fit_middle_ellipsis(path, |_| false), "\u{2026}");
     }
 }

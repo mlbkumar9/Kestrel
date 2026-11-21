@@ -650,7 +650,10 @@ impl Kestrel {
             window,
             "rmx-dest",
             &self.remux.destination.clone(),
-            InputCfg::default().mono().ph("Next to the source"),
+            InputCfg::default()
+                .mono()
+                .middle_ellipsis()
+                .ph("Next to the source"),
             |this, text, _, _| this.remux.destination = text.to_owned(),
         );
         let collision_index = POLICIES
@@ -743,7 +746,18 @@ impl Kestrel {
                         div()
                             .flex()
                             .gap(px(8.0))
-                            .child(div().flex_1().min_w_0().child(destination))
+                            .child(
+                                div()
+                                    .id("rmx-dest-tip")
+                                    .flex_1()
+                                    .min_w_0()
+                                    .when(!self.remux.destination.is_empty(), |this| {
+                                        this.tooltip(crate::widgets::overlay::tooltip(
+                                            self.remux.destination.clone(),
+                                        ))
+                                    })
+                                    .child(destination),
+                            )
                             .child(
                                 button("rmx-browse", &t, BtnKind::Default, true)
                                     .h(px(32.0))

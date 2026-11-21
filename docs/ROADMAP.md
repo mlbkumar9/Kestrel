@@ -21,7 +21,6 @@ Kestrel 4.0 is released as [v4.0.0](https://github.com/mlbkumar9/Kestrel/release
 
 - macOS and Linux builds are untested. The macOS zips are ad-hoc signed, so Gatekeeper prompts on first launch.
 - Tool paths cannot be overridden in Settings.
-- The codec label in the Library can be truncated, and the Folder and Destination field can be clipped.
 - The egui app is still in the repository (removal was deferred).
 
 ## 4.1: quality metrics
@@ -42,8 +41,6 @@ The Metrics page becomes real. It measures an encode against its source with FFm
 Also planned for 4.1:
 
 - A type and font rework across the UI, designed in the canvas first.
-- An automated upgrade test from v4.0.0 to later versions.
-- Fix the truncated codec label in the Library and the clipped Folder and Destination field.
 - A light-theme top bar screenshot for the docs.
 
 ## Later

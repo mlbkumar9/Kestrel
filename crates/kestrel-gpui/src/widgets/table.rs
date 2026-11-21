@@ -9,6 +9,8 @@ pub struct Col {
     pub width: Option<f32>,
     pub grow: f32,
     pub right: bool,
+    /// Width a flexible column keeps while the others shrink.
+    pub min: f32,
 }
 
 impl Col {
@@ -17,6 +19,7 @@ impl Col {
             width: Some(width),
             grow: 0.0,
             right: false,
+            min: 0.0,
         }
     }
 
@@ -25,11 +28,17 @@ impl Col {
             width: None,
             grow,
             right: false,
+            min: 0.0,
         }
     }
 
     pub const fn right(mut self) -> Self {
         self.right = true;
+        self
+    }
+
+    pub const fn min(mut self, min: f32) -> Self {
+        self.min = min;
         self
     }
 }
@@ -44,7 +53,7 @@ fn cell(col: &Col, child: impl IntoElement) -> Div {
     match col.width {
         Some(width) => cell = cell.w(px(width)).flex_none(),
         None => {
-            cell = cell.flex_basis(px(0.0));
+            cell = cell.flex_basis(px(0.0)).min_w(px(col.min));
             cell.style().flex_grow = Some(col.grow);
             cell.style().flex_shrink = Some(1.0);
         }

@@ -16,7 +16,8 @@ const COLS: [Col; 8] = [
     Col::fixed(44.0),
     Col::grow(2.2),
     Col::fixed(84.0),
-    Col::grow(1.6),
+    // Wide enough for "HEVC 10b 3840x2160 HDR" in the 12 px mono face.
+    Col::grow(1.6).min(232.0),
     Col::grow(1.9),
     Col::grow(1.4),
     Col::fixed(96.0).right(),
@@ -218,10 +219,15 @@ impl Kestrel {
                         )
                         .into_any_element(),
                     tag(source.ext.clone(), TagKind::Plain, &t).into_any_element(),
-                    mono(source.video_label())
-                        .text_color(t.muted)
-                        .truncate()
-                        .into_any_element(),
+                    {
+                        let label = source.video_label();
+                        div()
+                            .id(("lib-video", index))
+                            .min_w_0()
+                            .tooltip(crate::widgets::overlay::tooltip(label.clone()))
+                            .child(mono(label).text_color(t.muted).truncate())
+                            .into_any_element()
+                    },
                     mono(source.audio_label())
                         .text_color(t.muted)
                         .truncate()

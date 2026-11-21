@@ -2069,7 +2069,7 @@ impl Kestrel {
             window,
             "tr-folder",
             &form.folder,
-            InputCfg::default().mono(),
+            InputCfg::default().mono().middle_ellipsis(),
             |this, text, _, _| this.form.folder = text.to_owned(),
         );
         let folder = field(
@@ -2078,7 +2078,16 @@ impl Kestrel {
             div()
                 .flex()
                 .gap(px(8.0))
-                .child(div().flex_1().min_w_0().child(folder_input))
+                .child(
+                    div()
+                        .id("tr-folder-tip")
+                        .flex_1()
+                        .min_w_0()
+                        .when(!form.folder.is_empty(), |this| {
+                            this.tooltip(crate::widgets::overlay::tooltip(form.folder.clone()))
+                        })
+                        .child(folder_input),
+                )
                 .child(
                     button("tr-browse", &t, BtnKind::Default, true)
                         .h(px(32.0))

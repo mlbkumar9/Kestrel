@@ -96,6 +96,18 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
+## Installer upgrade test
+
+The `msi-upgrade` job in `.github/workflows/ci.yml` runs `scripts/test-msi-upgrade.ps1` on a `windows-latest` runner. It installs the published v4.0.0 MSI, writes a settings file and a user preset to `%APPDATA%\kestrel\gpui.ron`, installs the MSI built from the current commit over it, and checks that:
+
+- Programs and Features lists exactly one Kestrel, at the new version;
+- `Kestrel.exe` has the new file and product version;
+- the Start menu shortcut targets the installed `Kestrel.exe`;
+- the settings and preset are unchanged;
+- `ffmpeg.exe` and `mkvmerge.exe` are installed.
+
+The script installs and upgrades Kestrel for real, so run it only on a throwaway machine. The MSI UpgradeCode stays `{E110F64D-5C3D-5E2D-9B02-53217F2CAEA5}`.
+
 ## Earlier releases (3.x)
 
 The v3.0.x releases on <https://github.com/mlbkumar9/Kestrel/releases> ship the egui app:

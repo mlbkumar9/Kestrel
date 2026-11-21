@@ -21,6 +21,7 @@ pub struct InputCfg {
     pub height: f32,
     pub font_size: f32,
     pub pill: bool,
+    pub middle_ellipsis: bool,
 }
 
 impl Default for InputCfg {
@@ -33,6 +34,7 @@ impl Default for InputCfg {
             height: 32.0,
             font_size: 13.0,
             pill: false,
+            middle_ellipsis: false,
         }
     }
 }
@@ -55,6 +57,12 @@ impl InputCfg {
 
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
+        self
+    }
+
+    /// Shows a long path as `start...end` while the field is not focused.
+    pub fn middle_ellipsis(mut self) -> Self {
+        self.middle_ellipsis = true;
         self
     }
 
@@ -109,6 +117,7 @@ impl Kestrel {
             input.mono = cfg.mono;
             input.numeric = cfg.numeric;
             input.disabled = cfg.disabled;
+            input.middle_ellipsis = cfg.middle_ellipsis;
             input.height = cfg.height;
             input.font_size = cfg.font_size;
             input.radius = if cfg.pill { 12.0 } else { RADIUS_CONTROL };
