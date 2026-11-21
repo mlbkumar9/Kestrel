@@ -630,7 +630,11 @@ impl Kestrel {
                     .text_size(px(14.0))
                     .child("Kestrel"),
             )
-            .child(tag("4.0", TagKind::Plain, &t))
+            .child(tag(
+                short_version(env!("CARGO_PKG_VERSION")),
+                TagKind::Plain,
+                &t,
+            ))
             .child(div().text_color(t.faint).child("/"))
             .child(
                 div()
@@ -985,4 +989,25 @@ fn banner(
 
 pub fn _card_radius() -> f32 {
     RADIUS_CARD
+}
+
+/// `major.minor` of a version string: everything before the second dot.
+fn short_version(full: &str) -> &str {
+    match full.match_indices('.').nth(1) {
+        Some((index, _)) => &full[..index],
+        None => full,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::short_version;
+
+    #[test]
+    fn short_version_keeps_major_and_minor() {
+        assert_eq!(short_version("4.1.0"), "4.1");
+        assert_eq!(short_version("10.2.3"), "10.2");
+        assert_eq!(short_version("4.1"), "4.1");
+        assert_eq!(short_version("4"), "4");
+    }
 }

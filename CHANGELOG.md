@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- The top bar shows the running version instead of a fixed 4.0
+
 ## [4.1.0] - 2026-11-21
 
 Kestrel 4.1 adds video quality metrics, bundles the Inter typeface and tests upgrades from 4.0.0 in CI.
