@@ -31,7 +31,7 @@ The Metrics page becomes real. It measures an encode against its source with FFm
 
 - Metrics: VMAF, PSNR, SSIM and XPSNR.
 - One reference compared with many encodes in one run.
-- Per-frame graphs you can zoom.
+- Per-frame graphs you can zoom (not in the first 4.1 build; the per-frame numbers are available as CSV).
 - VMAF model chosen automatically from the resolution.
 - Analysis of a partial range of the video.
 - Export of the worst frames as PNG images.

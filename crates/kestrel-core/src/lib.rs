@@ -24,6 +24,8 @@ pub mod formats;
 pub mod inputs;
 /// Detection and removal of legacy installations.
 pub mod legacy;
+/// Quality metrics (VMAF, PSNR, SSIM, XPSNR) of encodes against a reference.
+pub mod metrics;
 /// Source probing, track selection and remux arguments.
 pub mod mkv;
 /// Built-in and user-defined job presets.

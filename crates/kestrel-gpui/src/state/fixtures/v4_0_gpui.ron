@@ -1,0 +1,4 @@
+{
+    "kestrel.preferences.v3": "(light_theme:false,output_directory:\"D:/Out\",audio_languages:\"eng\",subtitle_languages:\"eng\",remux_engine:Ffmpeg,selected_preset_id:\"smaller\",current_settings:(container:mkv),user_presets:[],existing:overwrite,output_target:None,legacy_banner_dismissed:false,output_target_explicit:false)",
+    "kestrel.gpui.v4": "(appearance:\"System\",parallel_jobs:2,priority:1,notify_when_done:false,keep_source_dates:true,transcode_preset:\"My preset\",transcode:None)",
+}

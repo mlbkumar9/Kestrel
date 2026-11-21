@@ -27,6 +27,7 @@ use crate::actions::{
 use crate::palette::{Command, PaletteState};
 use crate::state::activity::{ActivityLog, Level};
 use crate::state::library::{Library, Probe};
+use crate::state::metrics::MetricsState;
 use crate::state::nav::NavHistory;
 use crate::state::persist::{Persistence, RemuxPrefs, Restored, View};
 use crate::state::probe::{chapter_names_from_csv, read_chapters};
@@ -52,6 +53,8 @@ pub enum Pick {
     TranscodeFolder,
     Chapters,
     ImportPresets,
+    MetricsReference,
+    MetricsDistorted,
 }
 
 pub enum UiEvent {
@@ -72,6 +75,8 @@ pub enum UiEvent {
     Estimate(Result<u64, String>),
     /// Progress or the end of a Transcode preview encode.
     Preview(Box<crate::preview_ui::PreviewEvent>),
+    /// Progress, the end or an export of a Metrics run.
+    Metrics(Box<crate::pages::MetricsEvent>),
     /// An added subtitle or audio file was probed for its real codec.
     AddedProbed {
         path: PathBuf,
@@ -166,6 +171,7 @@ pub struct Kestrel {
     pub show_command: bool,
     pub measured: Option<u64>,
     pub preview: crate::state::preview::PreviewState,
+    pub metrics: MetricsState,
     pub queue: QueueState,
     pub activity: ActivityLog,
     pub settings: AppSettings,
@@ -241,6 +247,7 @@ impl Kestrel {
             show_command: false,
             measured: None,
             preview: crate::state::preview::PreviewState::default(),
+            metrics: MetricsState::default(),
             queue: QueueState::default(),
             activity: ActivityLog::default(),
             settings: AppSettings::default(),
@@ -272,6 +279,7 @@ impl Kestrel {
         };
         app._quit_subscription = Some(cx.on_app_quit(|this, cx| {
             this.preview.clear();
+            this.metrics.cancel();
             kestrel_core::preview::remove_preview_directory();
             this.flush_settings(cx);
             async {}
@@ -320,6 +328,9 @@ impl Kestrel {
         if let Some(remux) = restored.remux {
             remux.apply(&mut self.remux);
         }
+        if let Some(metrics) = restored.metrics {
+            self.metrics.prefs = metrics.sanitized();
+        }
         if let Some((name, settings)) = restored.form {
             self.form.apply_job_settings(&name, &settings);
         }
@@ -352,6 +363,7 @@ impl Kestrel {
                 .map(|preset| preset.id.clone())
                 .unwrap_or_default(),
             legacy_dismissed: self.legacy_dismissed,
+            metrics: self.metrics.prefs.clone(),
         }
     }
 
@@ -664,6 +676,12 @@ impl Kestrel {
                 }
                 self.on_preview_event(*event, cx);
             }
+            UiEvent::Metrics(event) => {
+                if event.ends_work() {
+                    self.inflight = self.inflight.saturating_sub(1);
+                }
+                self.on_metrics_event(*event, cx);
+            }
             UiEvent::Notice { text, error } => {
                 self.inflight = self.inflight.saturating_sub(1);
                 if !text.is_empty() {
@@ -963,6 +981,17 @@ impl Kestrel {
                     .pick_file()
                     .into_iter()
                     .collect(),
+                Pick::MetricsReference => dialog
+                    .set_title("Choose the reference (source) file")
+                    .add_filter("Media", INPUT_EXTENSIONS)
+                    .pick_file()
+                    .into_iter()
+                    .collect(),
+                Pick::MetricsDistorted => dialog
+                    .set_title("Add encoded files to measure")
+                    .add_filter("Media", INPUT_EXTENSIONS)
+                    .pick_files()
+                    .unwrap_or_default(),
             };
             if purpose == Pick::ImportPresets
                 && let Some(path) = paths.first()
@@ -1041,6 +1070,12 @@ impl Kestrel {
                         offset_ms: 0,
                         external: Some(path),
                     });
+                }
+            }
+            Pick::MetricsReference => self.metrics.set_reference(paths[0].clone()),
+            Pick::MetricsDistorted => {
+                if self.metrics.add_distorted(paths) == 0 {
+                    self.toast("Those files are already listed", TagKind::Info, cx);
                 }
             }
             Pick::Chapters | Pick::ImportPresets => {}

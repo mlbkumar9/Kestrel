@@ -3,12 +3,14 @@
 ## [Unreleased]
 
 ### Added
+- Metrics page: VMAF, PSNR, SSIM and XPSNR of one or more encodes against a reference, measured with FFmpeg's `libvmaf`, `psnr`, `ssim` and `xpsnr` filters. Choose the reference and the encodes, switch metrics on or off, pick the VMAF model (Auto uses the 4K model for a 2160p reference) and measure only a part of the clips by start and length. The results table shows VMAF mean, minimum and 1% low, PSNR, SSIM and XPSNR per file. Export a per-frame CSV for each file, one summary CSV, and the lowest-scoring frames as PNG images. Every FFmpeg command is kept in a collapsible log and in Activity. The metric choices, the model and the worst-frame count are remembered between runs; 4.0 settings files load unchanged.
 - CI installs the published 4.0.0 MSI, writes settings and a user preset, upgrades it with the MSI built from the current commit, and checks the result (`scripts/test-msi-upgrade.ps1`)
 
 ### Changed
 - Inter 4.1 is now bundled (Regular, Medium, SemiBold, Bold), so weights render from real faces instead of synthesized ones
 - Metadata chips and numbers use Inter with tabular figures, so digits line up
 - Monospace (JetBrains Mono) is used only for command lines and logs
+- The Metrics page and its sidebar entry no longer say "coming in 4.1"
 
 ### Fixed
 - The video codec column in the Library keeps enough width for labels such as `HEVC 10b 3840x2160 HDR` and shows the full label in a tooltip

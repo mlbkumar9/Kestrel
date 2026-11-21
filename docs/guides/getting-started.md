@@ -17,7 +17,7 @@ The sidebar lists seven pages.
 | Transcode | `Ctrl 3` | Re-encode video and audio |
 | Queue | `Ctrl 4` | Run and watch jobs |
 | Activity | `Ctrl 5` | Read commands, warnings and errors |
-| Metrics | `Ctrl 6` | Placeholder for 4.1 |
+| Metrics | `Ctrl 6` | Score encodes against their source (VMAF, PSNR, SSIM, XPSNR) |
 | Settings | none | Check tools, hardware encoders and appearance |
 
 `Ctrl K` opens the command palette. It lists actions (add files, add a folder, start or pause the queue, toggle light and dark), every page, and every preset.

@@ -28,6 +28,7 @@ use kestrel_core::worker::RemuxEngine;
 use serde::{Deserialize, Serialize};
 
 use super::AppSettings;
+use super::metrics::MetricsPrefs;
 use super::remux::RemuxState;
 use super::storage::{FileStorage, SettingsPaths};
 use super::transcode::TranscodeForm;
@@ -50,6 +51,9 @@ pub struct GpuiExtras {
     /// Transcode form as of the last save, without source-bound rows (tracks, imported files,
     /// chapter names, title).
     pub transcode: Option<JobSettings>,
+    /// Metrics page: metric toggles, VMAF model and worst-frame count. Absent in 4.0 files.
+    #[serde(default)]
+    pub metrics: MetricsPrefs,
 }
 
 impl Default for GpuiExtras {
@@ -63,6 +67,7 @@ impl Default for GpuiExtras {
             keep_source_dates: app.keep_source_dates,
             transcode_preset: String::new(),
             transcode: None,
+            metrics: MetricsPrefs::default(),
         }
     }
 }
@@ -139,6 +144,7 @@ pub struct View {
     pub presets: Vec<Preset>,
     pub selected_preset_id: String,
     pub legacy_dismissed: bool,
+    pub metrics: MetricsPrefs,
 }
 
 /// What a loaded file says to apply to the view. `None` or empty means "leave the default".
@@ -151,6 +157,7 @@ pub struct Restored {
     pub form: Option<(String, JobSettings)>,
     pub presets: Vec<Preset>,
     pub legacy_dismissed: bool,
+    pub metrics: Option<MetricsPrefs>,
 }
 
 /// Stored settings as found on disk.
@@ -244,6 +251,7 @@ impl Loaded {
                 .cloned()
                 .collect(),
             legacy_dismissed: prefs.legacy_banner_dismissed,
+            metrics: extras.map(|extras| extras.metrics.clone()),
         }
     }
 }
@@ -401,6 +409,7 @@ impl Persistence {
             keep_source_dates: view.app.keep_source_dates,
             transcode_preset: view.form.preset.clone(),
             transcode: Some(transcode),
+            metrics: view.metrics.clone(),
         };
         let preferences_text = ron::ser::to_string(&preferences).map_err(io::Error::other)?;
         let extras_text = ron::ser::to_string(&extras).map_err(io::Error::other)?;
@@ -431,6 +440,7 @@ mod tests {
             presets: Vec::new(),
             selected_preset_id: "smaller".to_owned(),
             legacy_dismissed: false,
+            metrics: MetricsPrefs::default(),
         }
     }
 
@@ -570,6 +580,57 @@ mod tests {
         let mut form = TranscodeForm::default();
         form.apply_job_settings(&name, &settings);
         assert!(form.copy_video && form.preset == "My preset");
+    }
+
+    #[test]
+    fn a_4_0_settings_file_without_the_metrics_fields_still_loads() {
+        let root = tempfile::tempdir().unwrap();
+        let paths = paths(root.path());
+        fs::create_dir_all(paths.gpui.parent().unwrap()).unwrap();
+        fs::write(&paths.gpui, include_str!("fixtures/v4_0_gpui.ron")).unwrap();
+        let (_, loaded, error) = Persistence::open(Ok(paths));
+        assert!(error.is_none(), "{error:?}");
+        let restored = loaded.restore();
+        // The 4.0 extras are read in full ...
+        assert_eq!(restored.appearance.as_deref(), Some("System"));
+        let app = restored.app.expect("the 4.0 extras load");
+        assert_eq!((app.parallel_jobs, app.priority), (2, 1));
+        assert!(!app.notify_when_done);
+        // ... and the Metrics page falls back to its defaults.
+        assert_eq!(restored.metrics, Some(MetricsPrefs::default()));
+        // The same text parses straight into the extras record.
+        let extras: GpuiExtras = ron::from_str(
+            r#"(appearance:"Dark",parallel_jobs:0,priority:0,notify_when_done:true,keep_source_dates:true,transcode_preset:"",transcode:None)"#,
+        )
+        .unwrap();
+        assert_eq!(extras.metrics, MetricsPrefs::default());
+        // A partial metrics record keeps the defaults of the fields it lacks.
+        let partial: GpuiExtras =
+            ron::from_str(r#"(metrics:(ssim:false,worst_frames:9))"#).unwrap();
+        assert!(partial.metrics.vmaf && partial.metrics.psnr && partial.metrics.xpsnr);
+        assert!(!partial.metrics.ssim);
+        assert_eq!(partial.metrics.worst_frames, 9);
+    }
+
+    #[test]
+    fn metrics_choices_round_trip_through_the_file() {
+        let root = tempfile::tempdir().unwrap();
+        let paths = paths(root.path());
+        let (mut persistence, _, _) = Persistence::open(Ok(paths.clone()));
+        assert!(!persistence.observe(view()));
+        let mut changed = view();
+        changed.metrics = MetricsPrefs {
+            vmaf: true,
+            psnr: false,
+            ssim: true,
+            xpsnr: false,
+            model: 2,
+            worst_frames: 8,
+        };
+        assert!(persistence.observe(changed.clone()));
+        assert!(persistence.flush().unwrap());
+        let (_, loaded, _) = Persistence::open(Ok(paths));
+        assert_eq!(loaded.restore().metrics, Some(changed.metrics));
     }
 
     #[test]

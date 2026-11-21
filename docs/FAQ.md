@@ -36,7 +36,7 @@ FFmpeg builds differ, and hardware encoders also need a working device and drive
 For x264 and x265, CRF 18 to 24 covers most HD sources, and the default is 22. For AV1 and VP9, 25 to 34. See [Choosing a quality value](guides/transcode.md#choosing-a-quality-value).
 
 ## Can Kestrel measure VMAF, PSNR or SSIM?
-Not in 4.0. The Metrics page is a placeholder. Quality metrics are the main feature of 4.1. See the [roadmap](ROADMAP.md).
+Yes, since 4.1. The Metrics page (`Ctrl 6`) measures VMAF, PSNR, SSIM and XPSNR of one or more encodes against a reference, with CSV and worst-frame PNG export. It needs an FFmpeg build with the `libvmaf`, `psnr`, `ssim` and `xpsnr` filters; the Windows build Kestrel bundles has them. See [Usage](USAGE.md#metrics).
 
 ## What do Parallel jobs and Process priority in Settings do?
 Parallel jobs sets how many queue jobs run at once, from 1 to 4. Process priority sets the scheduling priority of every FFmpeg, FFprobe and mkvmerge process Kestrel starts (Normal, Below normal or Low). Both are applied. See [Settings](guides/settings.md#behaviour).
