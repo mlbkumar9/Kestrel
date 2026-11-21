@@ -134,7 +134,7 @@ Reference pages: [Installation](docs/INSTALLATION.md), [Usage](docs/USAGE.md), [
 | `Ctrl 3` | Transcode |
 | `Ctrl 4` | Queue |
 | `Ctrl 5` | Activity |
-| `Ctrl 6` | Metrics (placeholder until 4.1) |
+| `Ctrl 6` | Metrics |
 | `Up`, `Down` | Move in the palette list |
 
 Settings has no shortcut. Open it from the sidebar or the palette.
@@ -190,7 +190,7 @@ The egui app (`cargo run -p kestrel-media --release`) and the Python scripts sti
 
 ## Roadmap
 
-Kestrel 4.1 adds quality metrics: VMAF, PSNR, SSIM and XPSNR for an encode against its source. The 4.0 app shows the Metrics page as a placeholder. See [docs/ROADMAP.md](docs/ROADMAP.md).
+Kestrel 4.1 adds quality metrics: VMAF, PSNR, SSIM and XPSNR for an encode against its source, on the Metrics page. See [docs/USAGE.md](docs/USAGE.md#metrics) and [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Credits
 

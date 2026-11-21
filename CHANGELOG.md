@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Added
+- Metrics page: VMAF, PSNR, SSIM and XPSNR of one or more encodes against a reference, measured with FFmpeg's `libvmaf`, `psnr`, `ssim` and `xpsnr` filters. Choose the reference and the encodes, switch metrics on or off, pick the VMAF model (Auto uses the 4K model for a 2160p reference) and measure only a part of the clips by start and length. The results table shows VMAF mean, minimum and 1% low, PSNR, SSIM and XPSNR per file. Export a per-frame CSV for each file, one summary CSV, and the lowest-scoring frames as PNG images. Every FFmpeg command is kept in a collapsible log and in Activity. The metric choices, the model and the worst-frame count are remembered between runs; 4.0 settings files load unchanged.
+
+### Changed
+- The Metrics page and its sidebar entry no longer say "coming in 4.1"
+
 ## [4.0.2] - 2026-11-21
 
 ### Changed

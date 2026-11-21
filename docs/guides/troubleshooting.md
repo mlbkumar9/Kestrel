@@ -93,9 +93,9 @@ On Remux, **If the output exists** chooses between Rename (adds `(2)`), Skip and
 
 The preview is a short encode, so it needs the same things a transcode needs: a working FFmpeg and an available encoder. Read the error under the **Encode preview** button, then check Settings. If the source is shorter than the chosen length, Kestrel shortens the segment. See [Transcode](transcode.md#preview).
 
-## Metrics does nothing
+## Metrics fails or shows no scores
 
-The Metrics page is a placeholder in 4.0. Quality metrics are planned for 4.1. See the [roadmap](../ROADMAP.md).
+Read the message on the page, then open **FFmpeg commands** or Activity for the exact command. "This FFmpeg build has no libvmaf filter" means the FFmpeg Kestrel found lacks that filter: use the bundled build or a full build. A file that is not video, or an encode with no video stream, fails on its own row while the others still run. A very low score for a good encode usually means the two files are not the same cut or frame rate. See [Usage](../USAGE.md#metrics).
 
 ## Settings or window do not behave
 

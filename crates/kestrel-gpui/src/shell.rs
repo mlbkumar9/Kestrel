@@ -150,7 +150,7 @@ impl Kestrel {
                 (queue_badge > 0).then(|| (queue_badge.to_string(), true)),
             ))
             .child(self.nav_item(cx, Page::Activity, None))
-            .child(self.nav_item(cx, Page::Metrics, Some(("4.1".to_owned(), false))));
+            .child(self.nav_item(cx, Page::Metrics, None));
 
         let presets =
             div()

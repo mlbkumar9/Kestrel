@@ -8,6 +8,8 @@ mod remux;
 mod settings;
 mod transcode;
 
+pub use metrics::MetricsEvent;
+
 use gpui::{Div, Stateful, div, prelude::*, px};
 
 use crate::theme::Theme;

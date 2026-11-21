@@ -36,7 +36,7 @@ The app follows the approved prototype `plan/design/Main.dc.html`.
 - `src/state/`: view models (`TranscodeForm`, `RemuxTrackEdit`, library, queue, activity).
   Core mappings: `state/transcode.rs` (form to `JobSettings` and back) and `state/remux.rs`
   (track edits and added files to `JobSettings.track_edits`).
-- `src/pages/`: Library, Remux, Transcode, Queue, Activity, Metrics (disabled 4.1 placeholder), Settings.
+- `src/pages/`: Library, Remux, Transcode, Queue, Activity, Metrics, Settings.
 - `src/widgets/`: own widgets (buttons, selects, text input, sliders, tabs, tables, overlays).
 - `assets/icons/*.svg`: embedded icon set loaded through the `AssetSource` in `src/assets.rs`.
 
