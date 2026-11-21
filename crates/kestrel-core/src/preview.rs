@@ -323,7 +323,7 @@ fn encode(
 
 /// Seconds encoded so far from an FFmpeg `-progress` line (`out_time_us`/`out_time_ms` are both
 /// microseconds).
-fn progress_seconds(line: &str) -> Option<f64> {
+pub(crate) fn progress_seconds(line: &str) -> Option<f64> {
     let value = line
         .strip_prefix("out_time_us=")
         .or_else(|| line.strip_prefix("out_time_ms="))?;
