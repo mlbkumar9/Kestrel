@@ -3,7 +3,7 @@
 Answers about Kestrel 4.0. Back to the [README](../README.md).
 
 ## Is there a 4.0 download?
-Yes. Download it from the [v4.0.1 release](https://github.com/mlbkumar9/Kestrel/releases/tag/v4.0.1). The README says [which file to pick](../README.md#download). You can also build from source: see [Installation](INSTALLATION.md).
+Yes. Download it from the [v4.0.2 release](https://github.com/mlbkumar9/Kestrel/releases/tag/v4.0.2). The README says [which file to pick](../README.md#download). You can also build from source: see [Installation](INSTALLATION.md).
 
 ## Do I need Python?
 No. Kestrel 4.0 is a Rust app. The Python scripts are legacy tools.

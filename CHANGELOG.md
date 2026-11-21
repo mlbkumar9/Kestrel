@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [4.0.2] - 2026-11-21
+
+### Changed
+- The Windows zip and installer bundle FFmpeg 9.1 (gyan.dev full build) instead of FFmpeg 9.0.2 (BtbN), and MKVToolNix 103.0 instead of 99.0
+- Windows packaging checks the SHA-256 of both tool downloads before bundling them
+- The Windows zip and installer are about 50 MB larger, because the gyan.dev build of FFmpeg includes more libraries
+
 ## [4.0.1] - 2026-11-20
 
 ### Fixed

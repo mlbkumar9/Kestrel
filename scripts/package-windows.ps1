@@ -29,22 +29,50 @@ if ($ArchiveName -notmatch '^[A-Za-z0-9._-]+\.zip$') {
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $binary = (Resolve-Path -LiteralPath $BinaryPath).Path
 $output = [System.IO.Path]::GetFullPath($OutputDirectory)
-$ffmpegVersion = "n9.0.2-39-g7adfbe40dc"
-$ffmpegUrl = "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-10-31-12-59/ffmpeg-n9.0.2-39-g7adfbe40dc-win64-gpl-9.0.zip"
-$mkvtoolnixVersion = "99.0"
-$mkvtoolnixUrl = "https://mkvtoolnix.download/windows/releases/99.0/mkvtoolnix-64-bit-99.0.7z"
+$ffmpegVersion = "9.1-full_build-www.gyan.dev"
+$ffmpegUrl = "https://github.com/GyanD/codexffmpeg/releases/download/9.1/ffmpeg-9.1-full_build.7z"
+$ffmpegSha256 = "1a86f2c8b51b4990ae9a0b0f8bd4f345f5c79389d293ac3fda128a58ec507b16"
+$mkvtoolnixVersion = "103.0"
+$mkvtoolnixUrl = "https://mkvtoolnix.download/windows/releases/103.0/mkvtoolnix-64-bit-103.0.7z"
+$mkvtoolnixSha256 = "01d76dbfdbd5615d9e02f69b0710d1429a902d47a98c8eee33bd884c4fcb3cbf"
 $work = Join-Path ([System.IO.Path]::GetTempPath()) "kestrel-package-$([guid]::NewGuid().ToString('N'))"
 $stage = Join-Path $work "stage"
 $ffmpegExtract = Join-Path $work "ffmpeg"
 $mkvtoolnixExtract = Join-Path $work "mkvtoolnix"
-$ffmpegArchive = Join-Path $work "ffmpeg.zip"
+$ffmpegArchive = Join-Path $work "ffmpeg.7z"
+
+function Assert-Sha256([string]$Path, [string]$Expected, [string]$Label) {
+    $actual = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actual -ne $Expected) {
+        throw "$Label download has SHA-256 $actual; expected $Expected."
+    }
+}
 $mkvtoolnixArchive = Join-Path $work "mkvtoolnix.7z"
 
 try {
     New-Item -ItemType Directory -Path $stage, $ffmpegExtract, $mkvtoolnixExtract, $output -Force | Out-Null
 
+    $sevenZipCommand = Get-Command -Name @("7z.exe", "7z", "7zz") `
+        -CommandType Application -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    $sevenZip = $sevenZipCommand.Source
+    if (-not $sevenZip) {
+        $programFilesPaths = @($env:ProgramFiles, ${env:ProgramFiles(x86)}) |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+        $sevenZipCandidates = $programFilesPaths |
+            ForEach-Object { Join-Path $_ "7-Zip/7z.exe" }
+        $sevenZip = $sevenZipCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+    }
+    if (-not $sevenZip) {
+        throw "7-Zip is required to extract the FFmpeg and MKVToolNix archives."
+    }
+
     Invoke-WebRequest -Uri $ffmpegUrl -OutFile $ffmpegArchive
-    Expand-Archive -LiteralPath $ffmpegArchive -DestinationPath $ffmpegExtract -Force
+    Assert-Sha256 $ffmpegArchive $ffmpegSha256 "FFmpeg $ffmpegVersion"
+    & $sevenZip x $ffmpegArchive "-o$ffmpegExtract" -y | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "7-Zip failed to extract FFmpeg $ffmpegVersion."
+    }
     $ffmpegExe = Get-ChildItem -LiteralPath $ffmpegExtract -Filter "ffmpeg.exe" -File -Recurse | Select-Object -First 1
     $ffprobeExe = Get-ChildItem -LiteralPath $ffmpegExtract -Filter "ffprobe.exe" -File -Recurse | Select-Object -First 1
     if (-not $ffmpegExe -or -not $ffprobeExe) {
@@ -59,22 +87,8 @@ try {
         throw "FFmpeg $ffmpegVersion archive does not contain a license file."
     }
 
-    $sevenZipCommand = Get-Command -Name @("7z.exe", "7z", "7zz") `
-        -CommandType Application -ErrorAction SilentlyContinue |
-        Select-Object -First 1
-    $sevenZip = $sevenZipCommand.Source
-    if (-not $sevenZip) {
-        $programFilesPaths = @($env:ProgramFiles, ${env:ProgramFiles(x86)}) |
-            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-        $sevenZipCandidates = $programFilesPaths |
-            ForEach-Object { Join-Path $_ "7-Zip/7z.exe" }
-        $sevenZip = $sevenZipCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
-    }
-    if (-not $sevenZip) {
-        throw "7-Zip is required to extract the MKVToolNix portable archive."
-    }
-
     Invoke-WebRequest -Uri $mkvtoolnixUrl -OutFile $mkvtoolnixArchive
+    Assert-Sha256 $mkvtoolnixArchive $mkvtoolnixSha256 "MKVToolNix $mkvtoolnixVersion"
     & $sevenZip x $mkvtoolnixArchive "-o$mkvtoolnixExtract" -y | Out-Null
     if ($LASTEXITCODE -ne 0) {
         throw "7-Zip failed to extract MKVToolNix $mkvtoolnixVersion."
