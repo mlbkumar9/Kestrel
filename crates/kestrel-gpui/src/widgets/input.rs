@@ -69,6 +69,7 @@ pub struct TextInput {
     scroll_x: Pixels,
     selecting: bool,
     pub mono: bool,
+    pub code: bool,
     pub numeric: bool,
     pub disabled: bool,
     /// Draws no box, for inputs embedded in another container such as the palette.
@@ -93,6 +94,7 @@ impl TextInput {
             scroll_x: px(0.0),
             selecting: false,
             mono: false,
+            code: false,
             numeric: false,
             disabled: false,
             bare: false,
@@ -630,7 +632,10 @@ impl Render for TextInput {
             .h(px(self.height))
             .px(px(if self.bare { 0.0 } else { 10.0 }))
             .text_size(px(self.font_size))
-            .when(self.mono, |this| this.font_family("JetBrains Mono"))
+            .when(self.code, |this| this.font_family(super::MONO))
+            .when(self.mono && !self.code, |this| {
+                this.font(super::tabular_font(gpui::FontWeight::NORMAL))
+            })
             .key_context(CONTEXT)
             .track_focus(&self.focus_handle)
             .cursor(if self.disabled {

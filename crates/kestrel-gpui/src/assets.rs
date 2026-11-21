@@ -95,7 +95,13 @@ const ICONS: &[(&str, &[u8])] = icons![
     "win-close",
 ];
 
-pub const INTER: &[u8] = include_bytes!("../../kestrel-app/assets/Inter-Regular.ttf");
+/// Inter 4.1 static faces: Regular, Medium, SemiBold, Bold.
+pub const INTER: [&[u8]; 4] = [
+    include_bytes!("../assets/Inter-Regular.ttf"),
+    include_bytes!("../assets/Inter-Medium.ttf"),
+    include_bytes!("../assets/Inter-SemiBold.ttf"),
+    include_bytes!("../assets/Inter-Bold.ttf"),
+];
 pub const JETBRAINS_MONO: &[u8] = include_bytes!("../assets/JetBrainsMono-Regular.ttf");
 
 pub struct Assets;

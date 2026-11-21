@@ -16,6 +16,7 @@ use crate::widgets::{checkbox, icon};
 pub struct InputCfg {
     pub placeholder: &'static str,
     pub mono: bool,
+    pub code: bool,
     pub numeric: bool,
     pub disabled: bool,
     pub height: f32,
@@ -28,6 +29,7 @@ impl Default for InputCfg {
         Self {
             placeholder: "",
             mono: false,
+            code: false,
             numeric: false,
             disabled: false,
             height: 32.0,
@@ -43,8 +45,16 @@ impl InputCfg {
         self
     }
 
+    /// Inter with tabular figures, for paths, codes and numbers. (The name predates Inter;
+    /// the face is no longer monospaced.)
     pub fn mono(mut self) -> Self {
         self.mono = true;
+        self
+    }
+
+    /// JetBrains Mono, for command and argument text only.
+    pub fn code(mut self) -> Self {
+        self.code = true;
         self
     }
 
@@ -107,6 +117,7 @@ impl Kestrel {
         };
         entity.update(cx, |input, _| {
             input.mono = cfg.mono;
+            input.code = cfg.code;
             input.numeric = cfg.numeric;
             input.disabled = cfg.disabled;
             input.height = cfg.height;

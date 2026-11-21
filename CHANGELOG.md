@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Changed
+- Inter 4.1 is now bundled (Regular, Medium, SemiBold, Bold), so weights render from real faces instead of synthesized ones
+- Metadata chips and numbers use Inter with tabular figures, so digits line up
+- Monospace (JetBrains Mono) is used only for command lines and logs
+
 ## [4.0.2] - 2026-11-21
 
 ### Changed

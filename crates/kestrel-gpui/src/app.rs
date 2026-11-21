@@ -1646,7 +1646,7 @@ impl Render for Kestrel {
             .flex_col()
             .size_full()
             .overflow_hidden()
-            .font_family("Inter")
+            .font_family(crate::widgets::UI)
             .text_size(px(13.0))
             .line_height(gpui::relative(1.45))
             .bg(t.bg)

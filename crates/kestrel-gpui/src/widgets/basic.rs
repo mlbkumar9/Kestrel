@@ -1,10 +1,30 @@
 //! Stateless building blocks: icons, buttons, tags, cards, labels, kbd hints, status dots.
 
-use gpui::{Div, FontWeight, Rgba, SharedString, Stateful, Svg, div, prelude::*, px, svg};
+use std::sync::Arc;
+
+use gpui::{
+    Div, Font, FontFeatures, FontStyle, FontWeight, Rgba, SharedString, Stateful, Svg, div,
+    prelude::*, px, svg,
+};
 
 use crate::theme::{RADIUS_CARD, RADIUS_CONTROL, Theme};
 
+/// JetBrains Mono. Reserved for command lines and logs.
 pub const MONO: &str = "JetBrains Mono";
+/// The UI face.
+pub const UI: &str = "Inter";
+
+/// Inter at `weight` with OpenType tabular figures (`tnum`), so digits line up in chips and
+/// numeric columns.
+pub fn tabular_font(weight: FontWeight) -> Font {
+    Font {
+        family: UI.into(),
+        features: FontFeatures(Arc::new(vec![("tnum".into(), 1)])),
+        fallbacks: None,
+        weight,
+        style: FontStyle::Normal,
+    }
+}
 
 pub fn icon(name: &str, size: f32, color: Rgba) -> Svg {
     svg()
@@ -107,9 +127,8 @@ pub fn tag(text: impl Into<SharedString>, kind: TagKind, t: &Theme) -> Div {
         .border_color(border)
         .bg(bg)
         .text_color(fg)
-        .text_size(px(11.0))
-        .font_family(MONO)
-        .font_weight(FontWeight::SEMIBOLD)
+        .text_size(px(12.0))
+        .font(tabular_font(FontWeight::MEDIUM))
         .whitespace_nowrap()
         .child(text.into())
 }
@@ -128,7 +147,7 @@ pub fn kbd(text: impl Into<SharedString>, t: &Theme) -> Div {
         .bg(t.panel)
         .text_color(t.faint)
         .text_size(px(11.0))
-        .font_family(MONO)
+        .font(tabular_font(FontWeight::MEDIUM))
         .whitespace_nowrap()
         .child(text.into())
 }
@@ -176,9 +195,11 @@ pub fn field(label_text: impl Into<SharedString>, t: &Theme, control: impl IntoE
         .child(control)
 }
 
+/// Metadata text: Inter Medium 12 px with tabular figures. (Named `mono` before Inter was
+/// adopted; the face is no longer monospaced.)
 pub fn mono(text: impl Into<SharedString>) -> Div {
     div()
-        .font_family(MONO)
+        .font(tabular_font(FontWeight::MEDIUM))
         .text_size(px(12.0))
         .child(text.into())
 }
@@ -198,7 +219,7 @@ pub fn stat_card(label_text: &str, value: impl IntoElement, t: &Theme) -> Div {
 pub fn stat_value(text: impl Into<SharedString>, t: &Theme) -> Div {
     div()
         .text_size(px(22.0))
-        .font_weight(FontWeight::SEMIBOLD)
+        .font(tabular_font(FontWeight::SEMIBOLD))
         .text_color(t.text)
         .child(text.into())
 }

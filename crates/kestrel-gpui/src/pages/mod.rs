@@ -66,7 +66,7 @@ pub fn summary_row(label: &str, value: String, t: &Theme) -> Div {
                 .text_right()
                 .min_w_0()
                 .truncate()
-                .font_family(crate::widgets::MONO)
+                .font(crate::widgets::tabular_font(gpui::FontWeight::NORMAL))
                 .child(value),
         )
 }
