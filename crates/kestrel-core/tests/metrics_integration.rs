@@ -226,6 +226,37 @@ fn a_range_measures_only_that_part_and_two_files_run_in_turn() {
 }
 
 #[test]
+fn clips_of_different_length_stop_at_the_shorter_one() {
+    let Some(env) = env("lengths") else { return };
+    let (reference, _) = clips(&env);
+    ffmpeg(
+        &env,
+        &[
+            "-i",
+            "ref.mp4",
+            "-t",
+            "1",
+            "-c:v",
+            "libx264",
+            "-crf",
+            "30",
+            "-pix_fmt",
+            "yuv420p",
+            "short.mp4",
+        ],
+    );
+    let short = env.directory.join("short.mp4");
+    let shorter_encode = MetricsSettings::new(reference.clone(), vec![short.clone()]);
+    let shorter_reference = MetricsSettings::new(short, vec![reference]);
+    for settings in [shorter_encode, shorter_reference] {
+        let outcome = run(&env, &settings);
+        let file = outcome.files[0].outcome.as_ref().expect("measured");
+        assert_eq!(file.summary.frames, 24, "1 s at 24 fps, no frozen frames");
+        assert_eq!(file.rows.len(), 24);
+    }
+}
+
+#[test]
 fn a_file_that_is_not_video_fails_alone() {
     let Some(env) = env("broken") else { return };
     let (reference, distorted) = clips(&env);

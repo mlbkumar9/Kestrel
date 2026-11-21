@@ -110,8 +110,8 @@ Assert-That ($entries[0].Version -eq $ExpectedVersion) "Programs and Features sh
 $exe = Join-Path $installDirectory 'Kestrel.exe'
 Assert-That (Test-Path -LiteralPath $exe) 'Kestrel.exe is installed'
 $info = (Get-Item -LiteralPath $exe).VersionInfo
-$fileVersion = ($info.FileVersion -replace '(\.0)+$', '')
-$productVersion = ($info.ProductVersion -replace '(\.0)+$', '')
+$fileVersion = ($info.FileVersion -replace '^(\d+\.\d+\.\d+)\.0$', '$1')
+$productVersion = ($info.ProductVersion -replace '^(\d+\.\d+\.\d+)\.0$', '$1')
 Assert-That ($fileVersion -eq $ExpectedVersion) "Kestrel.exe FileVersion is $ExpectedVersion (found $($info.FileVersion))"
 Assert-That ($productVersion -eq $ExpectedVersion) "Kestrel.exe ProductVersion is $ExpectedVersion (found $($info.ProductVersion))"
 

@@ -120,9 +120,9 @@ impl MetricsSettings {
             }
             if range
                 .duration_seconds
-                .is_some_and(|duration| !duration.is_finite() || duration <= 0.0)
+                .is_some_and(|duration| !duration.is_finite() || duration < 0.001)
             {
-                return Err("The range duration must be more than 0 seconds".to_owned());
+                return Err("The range duration must be at least 0.001 seconds".to_owned());
             }
         }
         if let VmafModel::Named(name) = &self.model
@@ -238,12 +238,12 @@ pub fn build_arguments(
         };
         let options = match *name {
             "libvmaf" => format!(
-                "libvmaf=model=version={model}:log_fmt=json:log_path={VMAF_LOG}:n_threads={}",
+                "libvmaf=model=version={model}:log_fmt=json:log_path={VMAF_LOG}:n_threads={}:shortest=1",
                 settings.threads.max(1)
             ),
-            "psnr" => format!("psnr=stats_file={PSNR_LOG}"),
-            "ssim" => format!("ssim=stats_file={SSIM_LOG}"),
-            _ => format!("xpsnr=stats_file={XPSNR_LOG}"),
+            "psnr" => format!("psnr=stats_file={PSNR_LOG}:shortest=1"),
+            "ssim" => format!("ssim=stats_file={SSIM_LOG}:shortest=1"),
+            _ => format!("xpsnr=stats_file={XPSNR_LOG}:shortest=1"),
         };
         graph.push(format!("[{dis}][{reference}]{options}[o{index}]"));
     }
@@ -1219,10 +1219,10 @@ XPSNR average, 48 frames  y: 29.3112  u: 30.3065  v: 29.9415  (minimum: 29.3112)
         let graph = "[0:v:0]scale=1920:1080:flags=bicubic,format=yuv420p,setpts=PTS-STARTPTS[dis];\
              [1:v:0]format=yuv420p,setpts=PTS-STARTPTS[ref];\
              [dis]split=4[d0][d1][d2][d3];[ref]split=4[r0][r1][r2][r3];\
-             [d0][r0]libvmaf=model=version=vmaf_v0.6.1:log_fmt=json:log_path=vmaf.json:n_threads=6[o0];\
-             [d1][r1]psnr=stats_file=psnr.log[o1];\
-             [d2][r2]ssim=stats_file=ssim.log[o2];\
-             [d3][r3]xpsnr=stats_file=xpsnr.log[o3];\
+             [d0][r0]libvmaf=model=version=vmaf_v0.6.1:log_fmt=json:log_path=vmaf.json:n_threads=6:shortest=1[o0];\
+             [d1][r1]psnr=stats_file=psnr.log:shortest=1[o1];\
+             [d2][r2]ssim=stats_file=ssim.log:shortest=1[o2];\
+             [d3][r3]xpsnr=stats_file=xpsnr.log:shortest=1[o3];\
              [o0]nullsink;[o1]nullsink;[o2]nullsink";
         let expected = [
             "-hide_banner",
@@ -1268,7 +1268,7 @@ XPSNR average, 48 frames  y: 29.3112  u: 30.3065  v: 29.9415  (minimum: 29.3112)
             "{graph}"
         );
         assert!(
-            graph.ends_with("[dis][ref]psnr=stats_file=psnr.log[o0]"),
+            graph.ends_with("[dis][ref]psnr=stats_file=psnr.log:shortest=1[o0]"),
             "{graph}"
         );
         assert!(args.contains(&"[o0]".to_owned()));
