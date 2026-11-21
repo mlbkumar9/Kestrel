@@ -15,6 +15,8 @@ A short map of Kestrel 4.0. Each section links to the guide with the details. Ba
 
 The Metrics page measures how close an encode is to its source, frame by frame, with FFmpeg's `libvmaf`, `psnr`, `ssim` and `xpsnr` filters. It needs an FFmpeg build that has those filters; the build Kestrel bundles on Windows does.
 
+![Metrics page after a run: a reference, three x265 encodes, the results table and the open FFmpeg command log](images/metrics.png)
+
 1. Choose the **Reference (source)** with **Browse...**, then **Add files...** for one or more encodes. Both sides can have a different size: Kestrel scales each encode to the reference with bicubic scaling before measuring.
 2. Tick the metrics to run (VMAF, PSNR, SSIM, XPSNR; all on by default) and pick the **VMAF model**. **Auto** uses `vmaf_4k_v0.6.1` when the reference is 2160p or 3840 wide or more, and `vmaf_v0.6.1` otherwise.
 3. To measure only part of the clips, enter **Range start (s)** and **Range length (s)**. Leave them empty for the whole clip.
@@ -22,6 +24,10 @@ The Metrics page measures how close an encode is to its source, frame by frame, 
 5. The table lists VMAF (mean, minimum and 1% low), PSNR, SSIM and XPSNR per file. PSNR and XPSNR are in dB, with identical frames held at 100 dB. XPSNR combines the Y, U and V planes as (4Y + U + V) / 6 in the error domain, because FFmpeg logs the planes separately.
 6. **Export per-frame CSV** writes one file per encode into a folder you choose, **Export summary CSV** one row per encode, and **Export worst frames (PNG)** the lowest-VMAF frames (lowest PSNR when VMAF is off) as `<name>_frame<N>.png`. **Worst frames** sets how many. Frame numbers start at 0 and count from the start of the range.
 7. **FFmpeg commands** shows every command that ran. The same lines go to Activity.
+
+The results table, enlarged:
+
+![Close-up of the results table with VMAF, PSNR, SSIM and XPSNR for three encodes](images/zoom-metrics-results.png)
 
 Reference and encode should have the same frame rate and cover the same part of the video. Kestrel resets both timelines to start at zero and lines up frames by timestamp, so an encode with extra leading frames or a different cut scores low.
 

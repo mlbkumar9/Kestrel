@@ -12,7 +12,7 @@
 
 </div>
 
-![Kestrel Library page in the dark theme](docs/images/hero-library-dark.png)
+![Kestrel Library page in the dark theme, with a folder of films loaded and two rows selected](docs/images/hero-framed.png)
 
 Kestrel 4.0 is a desktop app written in Rust with the GPUI toolkit. It drives FFmpeg and MKVToolNix on your machine. Files never leave your disk.
 
@@ -41,8 +41,19 @@ Get the files from the [v4.1.0 release](https://github.com/mlbkumar9/Kestrel/rel
 - **Change containers.** Write MKV, MP4, MOV or WebM. Kestrel checks every track against the target container and tells you what will be dropped before you start.
 - **Transcode with HandBrake-level controls.** Eight tabs (Summary, Dimensions, Filters, Video, Audio, Subtitles, Chapters, Tags) cover encoders, quality, crop, scaling, filters, HDR, per-track audio, burned-in subtitles and chapter names. FFmpeg does the work.
 - **Queue and presets.** Add jobs to a queue, start, pause or stop it, and read every command in the Activity log. Five built-in presets plus your own, which you can rename, duplicate, delete, import and export.
+- **Measure quality.** Score one or more encodes against their source with VMAF, PSNR, SSIM and XPSNR, and export the numbers and the worst frames.
 - **Preview before you commit.** Encode a 15, 30 or 60 second segment with the current settings, read its size and extrapolated full size, and play it.
 - **Batch.** Add files or whole folders. Folder inputs keep their subfolder layout in the output.
+
+## Quality metrics
+
+The Metrics page scores an encode against its source frame by frame with FFmpeg's `libvmaf`, `psnr`, `ssim` and `xpsnr` filters. Pick one reference and as many encodes as you like, press **Run**, and read VMAF (mean, minimum and 1% low), PSNR, SSIM and XPSNR for each file. Every FFmpeg command is kept in a log. The steps are in [docs/USAGE.md](docs/USAGE.md#metrics).
+
+![Metrics page after a run: one reference and three x265 encodes at CRF 18, 24 and 30, with the FFmpeg command log open](docs/images/metrics.png)
+
+The results table from that run, enlarged:
+
+![Close-up of the Metrics results table: VMAF 88.06, 84.98 and 80.90 for CRF 18, 24 and 30, with PSNR, SSIM and XPSNR](docs/images/zoom-metrics-results.png)
 
 ## A closer look
 
@@ -50,8 +61,14 @@ Get the files from the [v4.1.0 release](https://github.com/mlbkumar9/Kestrel/rel
 |---|---|
 | ![Library in the light theme](docs/images/library-light.png) | ![Remux track editor](docs/images/remux-tracks.png) |
 | **Library.** Drop files or folders, see containers, codecs, languages, duration and size at a glance. | **Remux.** Edit tracks in a table: keep, language, title, default, forced. |
-| ![Transcode Video tab](docs/images/transcode-video.png) | |
-| **Transcode.** Encoder, quality slider, speed preset, tune, profile and level. | |
+| ![Transcode Video tab](docs/images/transcode-video.png) | ![Metrics page with a results table](docs/images/metrics.png) |
+| **Transcode.** Encoder, quality slider, speed preset, tune, profile and level. | **Metrics.** One reference, several encodes, four scores per file. |
+| ![Close-up of the source header chips](docs/images/zoom-source-chips.png) | ![Close-up of a long destination path shortened with an ellipsis](docs/images/zoom-destination-ellipsis.png) |
+| **Source chips.** Container, size, codec, frame rate, HDR flag, duration and file size of the selected file. | **Long paths.** A folder field shows the start and the end of the path and the full path in a tooltip. |
+
+The track table of the Remux page, enlarged. Here the German audio track is dropped, the English subtitle is the default and the forced English track keeps its flag:
+
+![Close-up of the Remux track table with language, title, default and forced controls](docs/images/zoom-track-editor.png)
 
 Every page is covered in the [guides](#guides).
 
@@ -141,7 +158,9 @@ Settings has no shortcut. Open it from the sidebar or the palette.
 
 The [top bar](docs/guides/getting-started.md#the-top-bar) holds the sidebar toggle, history buttons, search, queue status, activity bell, theme toggle, and the Add media and Start queue buttons.
 
-![Kestrel top bar](docs/images/top-bar.png)
+![Kestrel top bar in the dark theme, with the queue pill](docs/images/top-bar.png)
+
+![Kestrel top bar in the light theme, with the queue pill](docs/images/top-bar-light.png)
 
 ## Build from source
 

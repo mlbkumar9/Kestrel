@@ -37,6 +37,8 @@ Pick a file in the menu above the table (it lists the files in your Library). Th
 
 The header shows how many edits differ from the source file. Kestrel records only the fields you changed, so untouched tracks keep their source values.
 
+![Close-up of the track table: keep, language, title, default and forced controls](../images/zoom-track-editor.png)
+
 Rules that apply to the whole file:
 
 - **One default per type.** If you set Default on a track, every other track of that type loses the flag. If you set it on several, the last one in output order wins. If you set none, the first source default stays and later ones are cleared. If you drop the default track, Kestrel does not promote another one.
@@ -77,7 +79,9 @@ If you choose MKVToolNix for a job it cannot do, Kestrel quietly uses FFmpeg for
 
 ## Destination and name collisions
 
-- **Destination** empty means a `converted` folder next to each source. Use **Browse** to pick a folder. Folder inputs mirror their subfolders inside it.
+- **Destination** empty means a `converted` folder next to each source. Use **Browse** to pick a folder. Folder inputs mirror their subfolders inside it. A long path is shown as `start...end` while the field is not focused, and the tooltip holds the full path.
+
+![Close-up of the Destination field with a shortened path](../images/zoom-destination-ellipsis.png)
 - **If the output exists**:
   - **Rename** writes `name (2).mkv`, `name (3).mkv` and so on.
   - **Skip** leaves the existing file and reports the job as skipped.

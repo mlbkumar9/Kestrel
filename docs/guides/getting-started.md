@@ -26,7 +26,9 @@ The sidebar lists seven pages.
 
 ## The top bar
 
-![Top bar](../images/top-bar.png)
+![Top bar in the dark theme](../images/top-bar.png)
+
+![Top bar in the light theme](../images/top-bar-light.png)
 
 The bar above every page holds, from left to right:
 
@@ -71,6 +73,10 @@ Details, including the track editor, are in the [Remux guide](remux.md).
 4. Press **Start encode**. The job runs from the Queue.
 
 Press **Add to queue** (or `Ctrl Enter`) instead if you want to queue several jobs and start them together. Details for every tab are in the [Transcode guide](transcode.md).
+
+The chips under the file name give the container, size, video codec, frame rate, HDR flag, duration and file size of the selected source:
+
+![Close-up of the source header chips](../images/zoom-source-chips.png)
 
 ## 4. Watch it run
 

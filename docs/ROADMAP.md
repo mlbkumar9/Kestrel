@@ -25,9 +25,7 @@ Kestrel 4.0 is released as [v4.0.0](https://github.com/mlbkumar9/Kestrel/release
 
 ## 4.1: quality metrics
 
-The Metrics page becomes real. It measures an encode against its source with FFmpeg's filters. The 4.0 placeholder looks like this:
-
-![Metrics page placeholder](images/metrics-preview.png)
+The Metrics page becomes real. It measures an encode against its source with FFmpeg's filters.
 
 - Metrics: VMAF, PSNR, SSIM and XPSNR.
 - One reference compared with many encodes in one run.
