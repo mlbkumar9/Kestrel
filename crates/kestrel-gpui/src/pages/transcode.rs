@@ -837,7 +837,7 @@ impl Kestrel {
                             .py(px(6.0))
                             .text_size(px(12.0))
                             .text_color(t.muted)
-                            .font_family(crate::widgets::MONO)
+                            .font(crate::widgets::tabular_font(FontWeight::NORMAL))
                             .child(form.final_dimensions(dims)),
                     )
                     .col_span(4),
@@ -1150,7 +1150,7 @@ impl Kestrel {
             "Advanced options",
             &form.advanced,
             InputCfg::default()
-                .mono()
+                .code()
                 .ph(if supports_advanced {
                     "key=value:key=value"
                 } else {

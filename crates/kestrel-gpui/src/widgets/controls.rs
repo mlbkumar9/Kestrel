@@ -8,7 +8,7 @@ use gpui::{
     point, prelude::*, px,
 };
 
-use super::basic::{MONO, icon};
+use super::basic::{icon, tabular_font};
 use crate::theme::Theme;
 
 pub fn checkbox<V: 'static>(
@@ -136,7 +136,7 @@ pub fn chip(
         .child(text.into())
         .children(count.map(|count| {
             div()
-                .font_family(MONO)
+                .font(tabular_font(FontWeight::MEDIUM))
                 .text_size(px(11.0))
                 .opacity(0.8)
                 .child(count.to_string())

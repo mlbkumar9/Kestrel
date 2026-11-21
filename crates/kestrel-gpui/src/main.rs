@@ -29,11 +29,34 @@ fn main() {
     Application::new()
         .with_assets(assets::Assets)
         .run(move |cx: &mut App| {
-            if let Err(error) = cx.text_system().add_fonts(vec![
-                Cow::Borrowed(assets::INTER),
-                Cow::Borrowed(assets::JETBRAINS_MONO),
-            ]) {
+            let fonts = assets::INTER
+                .iter()
+                .copied()
+                .chain([assets::JETBRAINS_MONO])
+                .map(Cow::Borrowed)
+                .collect();
+            if let Err(error) = cx.text_system().add_fonts(fonts) {
                 eprintln!("Could not load the bundled fonts; using system fonts: {error}");
+            }
+            let names = cx.text_system().all_font_names();
+            for family in [widgets::UI, widgets::MONO] {
+                if !names.iter().any(|name| name == family) {
+                    eprintln!("Bundled font {family} did not register; falling back to system fonts");
+                }
+            }
+            if std::env::var_os("KESTREL_FONT_DEBUG").is_some() {
+                let resolved = |weight| {
+                    cx.text_system()
+                        .resolve_font(&widgets::tabular_font(weight))
+                };
+                eprintln!(
+                    "fonts: Inter registered={} JetBrains Mono registered={} ids regular={:?} medium={:?} semibold={:?}",
+                    names.iter().any(|name| name == widgets::UI),
+                    names.iter().any(|name| name == widgets::MONO),
+                    resolved(gpui::FontWeight::NORMAL),
+                    resolved(gpui::FontWeight::MEDIUM),
+                    resolved(gpui::FontWeight::SEMIBOLD),
+                );
             }
             widgets::input::bind_keys(cx);
             actions::bind_keys(cx);

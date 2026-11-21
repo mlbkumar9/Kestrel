@@ -17,3 +17,10 @@ The Windows release bundle includes the following third-party command-line tools
 - License: GPL-2.0; see `tools/mkvtoolnix/COPYING.txt` in the Windows package.
 
 Kestrel does not modify these tools. The bundled copies are redistributed with their accompanying license texts and the source URLs above.
+
+## Inter (bundled font)
+
+- Version: `4.1` (static Regular, Medium, SemiBold and Bold faces from `extras/ttf/`), embedded in the Kestrel binary
+- Source project: <https://rsms.me/inter/>; release: <https://github.com/rsms/inter/releases/tag/v4.1>
+- Release archive: <https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip> (SHA-256 `9883fdd4a49d4fb66bd8177ba6625ef9a64aa45899767dde3d36aa425756b11e`)
+- License: SIL Open Font License 1.1; the text is in `crates/kestrel-gpui/assets/Inter-LICENSE.txt`.

@@ -212,7 +212,7 @@ impl Kestrel {
                         .flex_1()
                         .flex()
                         .justify_end()
-                        .font_family(crate::widgets::MONO)
+                        .font(crate::widgets::tabular_font(FontWeight::MEDIUM))
                         .text_color(t.faint)
                         .child(text),
                 )
@@ -242,7 +242,7 @@ impl Kestrel {
                             .flex_1()
                             .flex()
                             .justify_end()
-                            .font_family(crate::widgets::MONO)
+                            .font(crate::widgets::tabular_font(FontWeight::MEDIUM))
                             .text_color(t.faint)
                             .child(gpu_text),
                     ),
@@ -441,7 +441,7 @@ impl Kestrel {
         let mono = |text: String, color: Rgba| {
             div()
                 .flex_none()
-                .font_family(crate::widgets::MONO)
+                .font(crate::widgets::tabular_font(FontWeight::MEDIUM))
                 .text_size(px(11.0))
                 .text_color(color)
                 .child(text)
@@ -835,7 +835,7 @@ impl Kestrel {
             .border_t_1()
             .border_color(t.line)
             .bg(t.panel)
-            .font_family(crate::widgets::MONO)
+            .font(crate::widgets::tabular_font(FontWeight::MEDIUM))
             .text_size(px(11.0))
             .text_color(t.faint)
             .children(left)

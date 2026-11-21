@@ -5,6 +5,11 @@
 ### Added
 - CI installs the published 4.0.0 MSI, writes settings and a user preset, upgrades it with the MSI built from the current commit, and checks the result (`scripts/test-msi-upgrade.ps1`)
 
+### Changed
+- Inter 4.1 is now bundled (Regular, Medium, SemiBold, Bold), so weights render from real faces instead of synthesized ones
+- Metadata chips and numbers use Inter with tabular figures, so digits line up
+- Monospace (JetBrains Mono) is used only for command lines and logs
+
 ### Fixed
 - The video codec column in the Library keeps enough width for labels such as `HEVC 10b 3840x2160 HDR` and shows the full label in a tooltip
 - The Destination field (Remux) and Folder field (Transcode) show a long path as `start...end` while they are not focused, with the full path in a tooltip
